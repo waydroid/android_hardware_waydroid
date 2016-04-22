@@ -92,22 +92,18 @@ static uint32_t get_gbm_format(int format)
 	return fmt;
 }
 
-static unsigned get_pipe_bind(int usage)
+static unsigned int get_pipe_bind(int usage)
 {
-	unsigned bind = 0;
-#if 0
-	if (usage & GRALLOC_USAGE_SW_READ_MASK)
-		bind |= PIPE_BIND_TRANSFER_READ;
-	if (usage & GRALLOC_USAGE_SW_WRITE_MASK)
-		bind |= PIPE_BIND_TRANSFER_WRITE;
-	if (usage & GRALLOC_USAGE_HW_TEXTURE)
-		bind |= PIPE_BIND_SAMPLER_VIEW;
-#endif
-	if (usage & GRALLOC_USAGE_HW_RENDER)
+	unsigned int bind = 0;
+
+	if (usage & (GRALLOC_USAGE_SW_READ_OFTEN | GRALLOC_USAGE_SW_WRITE_OFTEN))
+		bind |= GBM_BO_USE_LINEAR;
+	if (usage & GRALLOC_USAGE_CURSOR)
+		;//bind |= GBM_BO_USE_CURSOR;
+	if (usage & (GRALLOC_USAGE_HW_RENDER | GRALLOC_USAGE_HW_TEXTURE))
 		bind |= GBM_BO_USE_RENDERING;
-	if (usage & GRALLOC_USAGE_HW_FB) {
+	if (usage & GRALLOC_USAGE_HW_FB)
 		bind |= GBM_BO_USE_SCANOUT;
-	}
 
 	return bind;
 }
@@ -149,6 +145,7 @@ static struct gralloc_gbm_bo_t *gbm_alloc(struct gbm_device *gbm,
 	struct gralloc_gbm_bo_t *buf;
 	int format = get_gbm_format(handle->format);
 	int usage = get_pipe_bind(handle->usage);
+	int width, height;
 
 	buf = new struct gralloc_gbm_bo_t();
 	if (!buf) {
@@ -156,8 +153,21 @@ static struct gralloc_gbm_bo_t *gbm_alloc(struct gbm_device *gbm,
 		return NULL;
 	}
 
-	buf->bo = gbm_bo_create(gbm, handle->width, handle->height, format, usage);
+	width = handle->width;
+	height = handle->height;
+	if (usage & GBM_BO_USE_CURSOR) {
+		if (handle->width < 64)
+			width = 64;
+		if (handle->height < 64)
+			height = 64;
+	}
+
+	ALOGD("create BO, size=%dx%d, fmt=%d, usage=%x",
+	      handle->width, handle->height, handle->format, usage);
+	buf->bo = gbm_bo_create(gbm, width, height, format, usage);
 	if (!buf->bo) {
+		ALOGE("failed to create BO, size=%dx%d, fmt=%d, usage=%x",
+		      handle->width, handle->height, handle->format, usage);
 		delete buf;
 		return NULL;
 	}
