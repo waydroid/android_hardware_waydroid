@@ -32,6 +32,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <assert.h>
 
 #include <hardware/gralloc.h>
 #include <system/graphics.h>
@@ -193,14 +194,21 @@ static int gbm_map(struct gralloc_gbm_bo_t *bo, int x, int y, int w, int h,
 		int enable_write, void **addr)
 {
 	int err = 0;
+	int flags = GBM_BO_TRANSFER_READ;
+	uint32_t stride;
 
 	if (bo->map_data)
 		return -EINVAL;
 
-	*addr = gbm_bo_map(bo->bo, x, y, w, h, 0, &bo->map_data);
+	if (enable_write)
+		flags |= GBM_BO_TRANSFER_WRITE;
+
+	*addr = gbm_bo_map(bo->bo, x, y, w, h, flags, &stride, &bo->map_data);
 	ALOGE("mapped bo %p at %p", bo, *addr);
 	if (*addr == NULL)
-		err = -ENOMEM;
+		return -ENOMEM;
+
+	assert(stride == gbm_bo_get_stride(bo));
 
 	return err;
 }
