@@ -45,9 +45,6 @@ void gralloc_gbm_bo_decref(struct gralloc_gbm_bo_t *bo);
 struct gralloc_gbm_bo_t *gralloc_gbm_bo_from_handle(buffer_handle_t handle);
 buffer_handle_t gralloc_gbm_bo_get_handle(struct gralloc_gbm_bo_t *bo);
 int gralloc_gbm_get_gem_handle(buffer_handle_t handle);
-void gralloc_gbm_resolve_format(buffer_handle_t _handle, uint32_t *pitches, uint32_t *offsets, uint32_t *handles);
-//unsigned int planes_for_format(struct gralloc_gbm_t *gbm, int hal_format);
-
 struct gbm_bo *gralloc_gbm_bo_to_gbm_bo(struct gralloc_gbm_bo_t *_bo);
 
 int gralloc_gbm_bo_lock(struct gralloc_gbm_bo_t *bo, int x, int y, int w, int h, int enable_write, void **addr);

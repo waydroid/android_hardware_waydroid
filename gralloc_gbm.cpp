@@ -115,7 +115,6 @@ static struct gralloc_gbm_bo_t *gbm_import(struct gbm_device *gbm,
 	struct gralloc_gbm_bo_t *buf;
 	struct gbm_import_fd_data data;
 	int format = get_gbm_format(handle->format);
-	int usage = get_pipe_bind(handle->usage);
 
 	if (handle->prime_fd < 0)
 		return NULL;
@@ -433,13 +432,6 @@ struct gbm_bo *gralloc_gbm_bo_to_gbm_bo(struct gralloc_gbm_bo_t *_bo)
 {
 	return _bo->bo;
 }
-
-/*
- * Query YUV component offsets for a buffer handle
- */
-void gralloc_gbm_resolve_format(buffer_handle_t _handle,
-	uint32_t *pitches, uint32_t *offsets, uint32_t *handles)
-{}
 
 /*
  * Lock a bo.  XXX thread-safety?
