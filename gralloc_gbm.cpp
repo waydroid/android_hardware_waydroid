@@ -77,7 +77,7 @@ static uint32_t get_gbm_format(int format)
 		fmt = GBM_FORMAT_RGB888;
 		break;
 	case HAL_PIXEL_FORMAT_RGB_565:
-		fmt = GBM_FORMAT_BGR565;
+		fmt = GBM_FORMAT_RGB565;
 		break;
 	case HAL_PIXEL_FORMAT_BGRA_8888:
 		fmt = GBM_FORMAT_ARGB8888;
