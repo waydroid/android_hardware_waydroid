@@ -243,7 +243,7 @@ static int gbm_mod_alloc_gpu0(alloc_device_t *dev,
 {
 	struct gbm_module_t *dmod = (struct gbm_module_t *) dev->common.module;
 	struct gralloc_gbm_bo_t *bo;
-	int size, err = 0;
+	int err = 0;
 
 	pthread_mutex_lock(&dmod->mutex);
 
