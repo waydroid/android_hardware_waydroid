@@ -56,7 +56,7 @@ struct gralloc_drm_handle_t {
 		uint64_t reserved;
 	} __attribute__((aligned(8)));
 };
-#define GRALLOC_GBM_HANDLE_MAGIC 0x12345678
+#define GRALLOC_GBM_HANDLE_MAGIC 0x5f47424d
 #define GRALLOC_GBM_HANDLE_NUM_FDS 1
 #define GRALLOC_GBM_HANDLE_NUM_INTS (						\
 	((sizeof(struct gralloc_drm_handle_t) - sizeof(native_handle_t))/sizeof(int))	\
