@@ -242,6 +242,7 @@ struct gbm_device *gbm_dev_create(void)
 	gbm = gbm_create_device(fd);
 	if (!gbm) {
 		ALOGE("failed to create gbm device");
+		close(fd);
 	}
 
 	return gbm;
