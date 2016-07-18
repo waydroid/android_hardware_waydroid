@@ -233,7 +233,7 @@ struct gbm_device *gbm_dev_create(void)
 	int fd;
 
 	property_get("gralloc.gbm.device", path, "/dev/dri/renderD128");
-	fd = open(path, O_RDWR);
+	fd = open(path, O_RDWR | O_CLOEXEC);
 	if (fd < 0) {
 		ALOGE("failed to open %s", path);
 		return NULL;
