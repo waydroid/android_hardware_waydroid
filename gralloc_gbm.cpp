@@ -280,13 +280,9 @@ static struct gralloc_gbm_bo_t *validate_handle(buffer_handle_t _handle,
 	if (!gbm)
 		return NULL;
 
-	ALOGE("handle: name=%d pfd=%d\n", handle->name,
-		handle->prime_fd);
-	/* create the struct gralloc_gbm_bo_t locally */
-	if (handle->name || handle->prime_fd >= 0)
-		bo = gbm_import(gbm, handle);
-	else /* an invalid handle */
-		bo = NULL;
+	ALOGE("handle: pfd=%d\n", handle->prime_fd);
+
+	bo = gbm_import(gbm, handle);
 	if (bo) {
 		bo->imported = 1;
 		bo->handle = handle;
