@@ -83,6 +83,9 @@ static uint32_t get_gbm_format(int format)
 		fmt = GBM_FORMAT_ARGB8888;
 		break;
 	case HAL_PIXEL_FORMAT_YV12:
+		/* YV12 is planar, but must be a single buffer so ask for GR88 */
+		fmt = GBM_FORMAT_GR88;
+		break;
 	case HAL_PIXEL_FORMAT_YCbCr_422_SP:
 	case HAL_PIXEL_FORMAT_YCrCb_420_SP:
 	default:
@@ -131,6 +134,12 @@ static struct gralloc_gbm_bo_t *gbm_import(struct gbm_device *gbm,
 	data.stride = handle->stride;
 	data.format = format;
 
+	/* Adjust the width and height for a GBM GR88 buffer */
+	if (handle->format == HAL_PIXEL_FORMAT_YV12) {
+		data.width /= 2;
+		data.height += handle->height / 2;
+	}
+
 	buf->bo = gbm_bo_import(gbm, GBM_BO_IMPORT_FD, &data, 0);
 	if (!buf->bo) {
 		delete buf;
@@ -160,6 +169,15 @@ static struct gralloc_gbm_bo_t *gbm_alloc(struct gbm_device *gbm,
 			width = 64;
 		if (handle->height < 64)
 			height = 64;
+	}
+
+	/*
+	 * For YV12, we request GR88, so halve the width since we're getting
+	 * 16bpp. Then increase the height by 1.5 for the U and V planes.
+	 */
+	if (handle->format == HAL_PIXEL_FORMAT_YV12) {
+		width /= 2;
+		height += handle->height / 2;
 	}
 
 	ALOGD("create BO, size=%dx%d, fmt=%d, usage=%x",
@@ -198,6 +216,13 @@ static int gbm_map(struct gralloc_gbm_bo_t *bo, int x, int y, int w, int h,
 
 	if (bo->map_data)
 		return -EINVAL;
+
+	if (bo->handle->format == HAL_PIXEL_FORMAT_YV12) {
+		if (x || y)
+			ALOGE("can't map with offset for planar %p - fmt %x", bo, bo->handle->format);
+		w /= 2;
+		h += h / 2;
+	}
 
 	if (enable_write)
 		flags |= GBM_BO_TRANSFER_WRITE;
