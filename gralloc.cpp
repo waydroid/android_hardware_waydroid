@@ -114,6 +114,14 @@ static int gbm_mod_perform(const struct gralloc_module_t *mod, int op, ...)
 			err = 0;
 		}
 		break;
+	/* TODO: This is a stub and should be implemented fully */
+	case GRALLOC_MODULE_PERFORM_GET_USAGE:
+		{
+			int *buffer_usage = va_arg(args, int *);
+			*buffer_usage = 0;
+			err = 0;
+		}
+		break;
 	default:
 		err = -EINVAL;
 		break;
