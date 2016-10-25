@@ -99,17 +99,26 @@ static int gbm_mod_perform(const struct gralloc_module_t *mod, int op, ...)
 	struct gbm_module_t *dmod = (struct gbm_module_t *) mod;
 	va_list args;
 	int err;
+	uint32_t uop = static_cast<uint32_t>(op);
 
 	err = gbm_init(dmod);
 	if (err)
 		return err;
 
 	va_start(args, op);
-	switch (op) {
+	switch (uop) {
 	case GRALLOC_MODULE_PERFORM_GET_DRM_FD:
 		{
 			int *fd = va_arg(args, int *);
 			*fd = gbm_device_get_fd(dmod->gbm);
+			err = 0;
+		}
+		break;
+	/* TODO: This is a stub and should be implemented fully */
+	case GRALLOC_MODULE_PERFORM_GET_USAGE:
+		{
+			int *buffer_usage = va_arg(args, int *);
+			*buffer_usage = 0;
 			err = 0;
 		}
 		break;

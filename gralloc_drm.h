@@ -30,6 +30,13 @@ extern "C" {
 
 enum {
 	GRALLOC_MODULE_PERFORM_GET_DRM_FD                = 0x40000002,
+
+	/* perform(const struct gralloc_module_t *mod,
+	 *     int op,
+	 *     buffer_handle_t buffer,
+	 *     int *usage);
+	 */
+	GRALLOC_MODULE_PERFORM_GET_USAGE                 = 0xffeeff03,
 };
 
 #ifdef __cplusplus
