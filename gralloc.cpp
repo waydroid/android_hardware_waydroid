@@ -271,7 +271,7 @@ static int gbm_mod_open_gpu0(struct gbm_module_t *dmod, hw_device_t **dev)
 	if (err)
 		return err;
 
-	alloc = new alloc_device_t;
+	alloc = new alloc_device_t();
 	if (!alloc)
 		return -EINVAL;
 
