@@ -175,7 +175,7 @@ static int gbm_mod_lock(const gralloc_module_t *mod, buffer_handle_t handle,
 	}
 
 	err = gralloc_gbm_bo_lock(bo, usage, x, y, w, h, ptr);
-	ALOGE("buffer %p lock usage = %08x", handle, usage);
+	ALOGV("buffer %p lock usage = %08x", handle, usage);
 
 unlock:
 	pthread_mutex_unlock(&dmod->mutex);
@@ -256,7 +256,7 @@ static int gbm_mod_alloc_gpu0(alloc_device_t *dev,
 	*stride = gbm_bo_get_stride(gralloc_gbm_bo_to_gbm_bo(bo)) /
 		gralloc_gbm_get_bpp(format);
 
-	ALOGE("buffer %p usage = %08x", *handle, usage);
+	ALOGV("buffer %p usage = %08x", *handle, usage);
 unlock:
 	pthread_mutex_unlock(&dmod->mutex);
 	return err;

@@ -180,7 +180,7 @@ static struct gralloc_gbm_bo_t *gbm_alloc(struct gbm_device *gbm,
 		height += handle->height / 2;
 	}
 
-	ALOGD("create BO, size=%dx%d, fmt=%d, usage=%x",
+	ALOGV("create BO, size=%dx%d, fmt=%d, usage=%x",
 	      handle->width, handle->height, handle->format, usage);
 	buf->bo = gbm_bo_create(gbm, width, height, format, usage);
 	if (!buf->bo) {
@@ -228,7 +228,7 @@ static int gbm_map(struct gralloc_gbm_bo_t *bo, int x, int y, int w, int h,
 		flags |= GBM_BO_TRANSFER_WRITE;
 
 	*addr = gbm_bo_map(bo->bo, 0, 0, x + w, y + h, flags, &stride, &bo->map_data);
-	ALOGE("mapped bo %p (%d, %d)-(%d, %d) at %p", bo, x, y, w, h, *addr);
+	ALOGV("mapped bo %p (%d, %d)-(%d, %d) at %p", bo, x, y, w, h, *addr);
 	if (*addr == NULL)
 		return -ENOMEM;
 
@@ -305,7 +305,7 @@ static struct gralloc_gbm_bo_t *validate_handle(buffer_handle_t _handle,
 	if (!gbm)
 		return NULL;
 
-	ALOGE("handle: pfd=%d\n", handle->prime_fd);
+	ALOGV("handle: pfd=%d\n", handle->prime_fd);
 
 	bo = gbm_import(gbm, handle);
 	if (bo) {
