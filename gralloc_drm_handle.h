@@ -22,8 +22,8 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef _GRALLOC_GBM_HANDLE_H_
-#define _GRALLOC_GBM_HANDLE_H_
+#ifndef _GRALLOC_DRM_HANDLE_H_
+#define _GRALLOC_DRM_HANDLE_H_
 
 #include <cutils/log.h>
 #include <cutils/native_handle.h>
@@ -94,4 +94,4 @@ static inline int gralloc_drm_get_gem_handle(buffer_handle_t handle)
 #ifdef __cplusplus
 }
 #endif
-#endif /* _GRALLOC_GBM_HANDLE_H_ */
+#endif /* _GRALLOC_DRM_HANDLE_H_ */
