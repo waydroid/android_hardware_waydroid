@@ -29,6 +29,10 @@ extern "C" {
 #endif
 
 enum {
+	/* perform(const struct gralloc_module_t *mod,
+	 *	   int op,
+	 *	   int *fd);
+	 */
 	GRALLOC_MODULE_PERFORM_GET_DRM_FD                = 0x40000002,
 
 	/* perform(const struct gralloc_module_t *mod,
