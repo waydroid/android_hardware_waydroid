@@ -116,9 +116,13 @@ static struct gralloc_gbm_bo_t *gbm_import(struct gbm_device *gbm,
 		struct gralloc_gbm_handle_t *handle)
 {
 	struct gralloc_gbm_bo_t *buf;
+	#ifdef GBM_BO_IMPORT_FD_MODIFIER
+	struct gbm_import_fd_modifier_data data;
+	#else
 	struct gbm_import_fd_data data;
-	int format = get_gbm_format(handle->format);
+	#endif
 
+	int format = get_gbm_format(handle->format);
 	if (handle->prime_fd < 0)
 		return NULL;
 
@@ -133,14 +137,18 @@ static struct gralloc_gbm_bo_t *gbm_import(struct gbm_device *gbm,
 	data.height = handle->height;
 	data.stride = handle->stride;
 	data.format = format;
-
 	/* Adjust the width and height for a GBM GR88 buffer */
 	if (handle->format == HAL_PIXEL_FORMAT_YV12) {
 		data.width /= 2;
 		data.height += handle->height / 2;
 	}
 
+	#ifdef GBM_BO_IMPORT_FD_MODIFIER
+	data.modifier = handle->modifier;
+	buf->bo = gbm_bo_import(gbm, GBM_BO_IMPORT_FD_MODIFIER, &data, 0);
+	#else
 	buf->bo = gbm_bo_import(gbm, GBM_BO_IMPORT_FD, &data, 0);
+	#endif
 	if (!buf->bo) {
 		delete buf;
 		return NULL;
@@ -192,6 +200,9 @@ static struct gralloc_gbm_bo_t *gbm_alloc(struct gbm_device *gbm,
 
 	handle->prime_fd = gbm_bo_get_fd(buf->bo);
 	handle->stride = gbm_bo_get_stride(buf->bo);
+	#ifdef GBM_BO_IMPORT_FD_MODIFIER
+	handle->modifier = gbm_bo_get_modifier(buf->bo);
+	#endif
 
 	return buf;
 }

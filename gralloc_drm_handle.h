@@ -49,6 +49,7 @@ struct gralloc_drm_handle_t {
 
 	int name;   /* the name of the bo */
 	int stride; /* the stride in bytes */
+	uint64_t modifier; /* buffer modifiers */
 
 	int data_owner; /* owner of data (for validation) */
 	union {
