@@ -38,3 +38,12 @@ LOCAL_MODULE := gralloc.gbm
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_RELATIVE_PATH := hw
 include $(BUILD_SHARED_LIBRARY)
+
+include $(CLEAR_VARS)
+
+LOCAL_EXPORT_C_INCLUDE_DIRS := \
+	$(LOCAL_PATH)
+
+LOCAL_MODULE := libgralloc_drm
+LOCAL_MODULE_TAGS := optional
+include $(BUILD_SHARED_LIBRARY)
