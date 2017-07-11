@@ -132,6 +132,7 @@ static struct gralloc_gbm_bo_t *gbm_import(struct gbm_device *gbm,
 		return NULL;
 	}
 
+	memset(&data, 0, sizeof(data));
 	data.width = handle->width;
 	data.height = handle->height;
 	data.format = format;
