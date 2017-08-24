@@ -213,11 +213,6 @@ static struct gralloc_gbm_bo_t *gbm_alloc(struct gbm_device *gbm,
 
 static void gbm_free(struct gralloc_gbm_bo_t *bo)
 {
-	struct gralloc_gbm_handle_t *handle = bo->handle;
-
-	close(handle->prime_fd);
-	handle->prime_fd = -1;
-
 	gbm_bo_destroy(bo->bo);
 	delete bo;
 }
@@ -433,6 +428,7 @@ static void gralloc_gbm_bo_destroy(struct gralloc_gbm_bo_t *bo)
 		handle->data = 0;
 	}
 	else {
+		native_handle_close(handle);
 		delete handle;
 	}
 }
