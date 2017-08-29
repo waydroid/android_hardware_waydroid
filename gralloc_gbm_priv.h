@@ -38,7 +38,7 @@ struct gralloc_gbm_bo_t;
 int gralloc_gbm_handle_register(buffer_handle_t handle, struct gbm_device *gbm);
 int gralloc_gbm_handle_unregister(buffer_handle_t handle);
 
-struct gralloc_gbm_bo_t *gralloc_gbm_bo_create(struct gbm_device *gbm,
+struct gralloc_gbm_handle_t *gralloc_gbm_bo_create(struct gbm_device *gbm,
 		int width, int height, int format, int usage);
 void gbm_free(struct gralloc_gbm_bo_t *bo);
 
@@ -47,8 +47,8 @@ buffer_handle_t gralloc_gbm_bo_get_handle(struct gralloc_gbm_bo_t *bo);
 int gralloc_gbm_get_gem_handle(buffer_handle_t handle);
 struct gbm_bo *gralloc_gbm_bo_to_gbm_bo(struct gralloc_gbm_bo_t *_bo);
 
-int gralloc_gbm_bo_lock(struct gralloc_gbm_bo_t *bo, int x, int y, int w, int h, int enable_write, void **addr);
-void gralloc_gbm_bo_unlock(struct gralloc_gbm_bo_t *bo);
+int gralloc_gbm_bo_lock(buffer_handle_t handle, int x, int y, int w, int h, int enable_write, void **addr);
+int gralloc_gbm_bo_unlock(buffer_handle_t handle);
 
 struct gbm_device *gbm_dev_create(void);
 void gbm_dev_destroy(struct gbm_device *gbm);

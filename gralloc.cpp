@@ -37,6 +37,7 @@
 
 #include "gralloc_drm.h"
 #include "gralloc_gbm_priv.h"
+#include "gralloc_drm_handle.h"
 
 struct gbm_module_t {
 	gralloc_module_t base;
@@ -163,21 +164,13 @@ static int gbm_mod_lock(const gralloc_module_t *mod, buffer_handle_t handle,
 		int usage, int x, int y, int w, int h, void **ptr)
 {
 	struct gbm_module_t *dmod = (struct gbm_module_t *) mod;
-	struct gralloc_gbm_bo_t *bo;
 	int err;
 
 	pthread_mutex_lock(&dmod->mutex);
 
-	bo = gralloc_gbm_bo_from_handle(handle);
-	if (!bo) {
-		err = -EINVAL;
-		goto unlock;
-	}
-
-	err = gralloc_gbm_bo_lock(bo, usage, x, y, w, h, ptr);
+	err = gralloc_gbm_bo_lock(handle, usage, x, y, w, h, ptr);
 	ALOGV("buffer %p lock usage = %08x", handle, usage);
 
-unlock:
 	pthread_mutex_unlock(&dmod->mutex);
 	return err;
 }
@@ -185,21 +178,12 @@ unlock:
 static int gbm_mod_unlock(const gralloc_module_t *mod, buffer_handle_t handle)
 {
 	struct gbm_module_t *dmod = (struct gbm_module_t *) mod;
-	struct gralloc_gbm_bo_t *bo;
-	int err = 0;
+	int err;
 
 	pthread_mutex_lock(&dmod->mutex);
-
-	bo = gralloc_gbm_bo_from_handle(handle);
-	if (!bo) {
-		err = -EINVAL;
-		goto unlock;
-	}
-
-	gralloc_gbm_bo_unlock(bo);
-
-unlock:
+	err = gralloc_gbm_bo_unlock(handle);
 	pthread_mutex_unlock(&dmod->mutex);
+
 	return err;
 }
 
@@ -242,21 +226,20 @@ static int gbm_mod_alloc_gpu0(alloc_device_t *dev,
 		buffer_handle_t *handle, int *stride)
 {
 	struct gbm_module_t *dmod = (struct gbm_module_t *) dev->common.module;
-	struct gralloc_gbm_bo_t *bo;
+	struct gralloc_gbm_handle_t *gbm_handle;
 	int err = 0;
 
 	pthread_mutex_lock(&dmod->mutex);
 
-	bo = gralloc_gbm_bo_create(dmod->gbm, w, h, format, usage);
-	if (!bo) {
+	gbm_handle = gralloc_gbm_bo_create(dmod->gbm, w, h, format, usage);
+	if (!gbm_handle) {
 		err = -errno;
 		goto unlock;
 	}
 
-	*handle = gralloc_gbm_bo_get_handle(bo);
+	*handle = &gbm_handle->base;
 	/* in pixels */
-	*stride = gbm_bo_get_stride(gralloc_gbm_bo_to_gbm_bo(bo)) /
-		gralloc_gbm_get_bpp(format);
+	*stride = gbm_handle->stride / gralloc_gbm_get_bpp(format);
 
 	ALOGV("buffer %p usage = %08x", *handle, usage);
 unlock:

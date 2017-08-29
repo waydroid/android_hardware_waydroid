@@ -50,8 +50,6 @@ struct gralloc_gbm_bo_t {
 	struct gbm_bo *bo;
 	void *map_data;
 
-	struct gralloc_gbm_handle_t *handle;
-
 	int lock_count;
 	int locked_for;
 };
@@ -213,19 +211,40 @@ void gbm_free(struct gralloc_gbm_bo_t *bo)
 	delete bo;
 }
 
-static int gbm_map(struct gralloc_gbm_bo_t *bo, int x, int y, int w, int h,
+/*
+ * Return the bo of a registered handle.
+ */
+struct gralloc_gbm_bo_t *gralloc_gbm_bo_from_handle(buffer_handle_t handle)
+{
+	int pid = getpid();
+	struct gralloc_gbm_handle_t *gbm_handle = gralloc_gbm_handle(handle);
+
+	if (!gbm_handle)
+		return NULL;
+
+	/* the buffer handle is passed to a new process */
+	ALOGV("data_owner=%d gralloc_pid=%d data=%p\n", gbm_handle->data_owner, pid, gbm_handle->data);
+	if (gbm_handle->data_owner == pid)
+		return (struct gralloc_gbm_bo_t *)gbm_handle->data;
+
+	return NULL;
+}
+
+static int gbm_map(buffer_handle_t handle, int x, int y, int w, int h,
 		int enable_write, void **addr)
 {
 	int err = 0;
 	int flags = GBM_BO_TRANSFER_READ;
+	struct gralloc_gbm_handle_t *gbm_handle = gralloc_gbm_handle(handle);
+	struct gralloc_gbm_bo_t *bo = gralloc_gbm_bo_from_handle(handle);
 	uint32_t stride;
 
 	if (bo->map_data)
 		return -EINVAL;
 
-	if (bo->handle->format == HAL_PIXEL_FORMAT_YV12) {
+	if (gbm_handle->format == HAL_PIXEL_FORMAT_YV12) {
 		if (x || y)
-			ALOGE("can't map with offset for planar %p - fmt %x", bo, bo->handle->format);
+			ALOGE("can't map with offset for planar %p - fmt %x", bo, gbm_handle->format);
 		w /= 2;
 		h += h / 2;
 	}
@@ -314,8 +333,6 @@ static struct gralloc_gbm_bo_t *validate_handle(buffer_handle_t _handle,
 	ALOGV("handle: pfd=%d\n", handle->prime_fd);
 
 	bo = gbm_import(gbm, handle);
-	if (bo)
-		bo->handle = handle;
 
 	handle->data_owner = gralloc_gbm_get_pid();
 	handle->data = bo;
@@ -379,7 +396,7 @@ static struct gralloc_gbm_handle_t *create_bo_handle(int width,
 /*
  * Create a bo.
  */
-struct gralloc_gbm_bo_t *gralloc_gbm_bo_create(struct gbm_device *gbm,
+struct gralloc_gbm_handle_t *gralloc_gbm_bo_create(struct gbm_device *gbm,
 		int width, int height, int format, int usage)
 {
 	struct gralloc_gbm_bo_t *bo;
@@ -395,28 +412,10 @@ struct gralloc_gbm_bo_t *gralloc_gbm_bo_create(struct gbm_device *gbm,
 		return NULL;
 	}
 
-	bo->handle = handle;
-
 	handle->data_owner = gralloc_gbm_get_pid();
 	handle->data = bo;
 
-	return bo;
-}
-
-/*
- * Return the bo of a registered handle.
- */
-struct gralloc_gbm_bo_t *gralloc_gbm_bo_from_handle(buffer_handle_t handle)
-{
-	return validate_handle(handle, NULL);
-}
-
-/*
- * Get the buffer handle and stride of a bo.
- */
-buffer_handle_t gralloc_gbm_bo_get_handle(struct gralloc_gbm_bo_t *bo)
-{
-	return &bo->handle->base;
+	return handle;
 }
 
 /*
@@ -430,18 +429,24 @@ struct gbm_bo *gralloc_gbm_bo_to_gbm_bo(struct gralloc_gbm_bo_t *_bo)
 /*
  * Lock a bo.  XXX thread-safety?
  */
-int gralloc_gbm_bo_lock(struct gralloc_gbm_bo_t *bo,
+int gralloc_gbm_bo_lock(buffer_handle_t handle,
 		int usage, int x, int y, int w, int h,
 		void **addr)
 {
-	if ((bo->handle->usage & usage) != usage) {
+	struct gralloc_gbm_handle_t *gbm_handle = gralloc_gbm_handle(handle);
+	struct gralloc_gbm_bo_t *bo = gralloc_gbm_bo_from_handle(handle);
+	if (!bo)
+		return -EINVAL;
+
+	ALOGI("lock bo %p, cnt=%d, usage=%x", bo, bo->lock_count, usage);
+	if ((gbm_handle->usage & usage) != usage) {
 		/* make FB special for testing software renderer with */
 
-		if (!(bo->handle->usage & GRALLOC_USAGE_SW_READ_OFTEN) &&
-				!(bo->handle->usage & GRALLOC_USAGE_HW_FB) &&
-				!(bo->handle->usage & GRALLOC_USAGE_HW_TEXTURE)) {
+		if (!(gbm_handle->usage & GRALLOC_USAGE_SW_READ_OFTEN) &&
+				!(gbm_handle->usage & GRALLOC_USAGE_HW_FB) &&
+				!(gbm_handle->usage & GRALLOC_USAGE_HW_TEXTURE)) {
 			ALOGE("bo.usage:x%X/usage:x%X is not GRALLOC_USAGE_HW_FB or GRALLOC_USAGE_HW_TEXTURE",
-				bo->handle->usage, usage);
+				gbm_handle->usage, usage);
 			return -EINVAL;
 		}
 	}
@@ -456,7 +461,7 @@ int gralloc_gbm_bo_lock(struct gralloc_gbm_bo_t *bo,
 		     GRALLOC_USAGE_SW_READ_MASK)) {
 		/* the driver is supposed to wait for the bo */
 		int write = !!(usage & GRALLOC_USAGE_SW_WRITE_MASK);
-		int err = gbm_map(bo, x, y, w, h, write, addr);
+		int err = gbm_map(handle, x, y, w, h, write, addr);
 		if (err)
 			return err;
 	}
@@ -473,13 +478,17 @@ int gralloc_gbm_bo_lock(struct gralloc_gbm_bo_t *bo,
 /*
  * Unlock a bo.
  */
-void gralloc_gbm_bo_unlock(struct gralloc_gbm_bo_t *bo)
+int gralloc_gbm_bo_unlock(buffer_handle_t handle)
 {
+	struct gralloc_gbm_bo_t *bo = gralloc_gbm_bo_from_handle(handle);
+	if (!bo)
+		return -EINVAL;
+
 	int mapped = bo->locked_for &
 		(GRALLOC_USAGE_SW_WRITE_MASK | GRALLOC_USAGE_SW_READ_MASK);
 
 	if (!bo->lock_count)
-		return;
+		return 0;
 
 	if (mapped)
 		gbm_unmap(bo);
@@ -487,4 +496,6 @@ void gralloc_gbm_bo_unlock(struct gralloc_gbm_bo_t *bo)
 	bo->lock_count--;
 	if (!bo->lock_count)
 		bo->locked_for = 0;
+
+	return 0;
 }
