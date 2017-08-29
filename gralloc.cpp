@@ -228,7 +228,9 @@ static int gbm_mod_free_gpu0(alloc_device_t *dev, buffer_handle_t handle)
 		goto unlock;
 	}
 
-	gralloc_gbm_bo_decref(bo);
+	gbm_free(bo);
+	native_handle_close(handle);
+	delete handle;
 
 unlock:
 	pthread_mutex_unlock(&dmod->mutex);

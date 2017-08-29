@@ -52,12 +52,8 @@ struct gralloc_gbm_bo_t {
 
 	struct gralloc_gbm_handle_t *handle;
 
-	int imported;  /* the handle is from a remote proces when true */
-
 	int lock_count;
 	int locked_for;
-
-	unsigned int refcount;
 };
 
 static int32_t gralloc_gbm_pid = 0;
@@ -211,7 +207,7 @@ static struct gralloc_gbm_bo_t *gbm_alloc(struct gbm_device *gbm,
 	return buf;
 }
 
-static void gbm_free(struct gralloc_gbm_bo_t *bo)
+void gbm_free(struct gralloc_gbm_bo_t *bo)
 {
 	gbm_bo_destroy(bo->bo);
 	delete bo;
@@ -318,11 +314,8 @@ static struct gralloc_gbm_bo_t *validate_handle(buffer_handle_t _handle,
 	ALOGV("handle: pfd=%d\n", handle->prime_fd);
 
 	bo = gbm_import(gbm, handle);
-	if (bo) {
-		bo->imported = 1;
+	if (bo)
 		bo->handle = handle;
-		bo->refcount = 1;
-	}
 
 	handle->data_owner = gralloc_gbm_get_pid();
 	handle->data = bo;
@@ -343,14 +336,16 @@ int gralloc_gbm_handle_register(buffer_handle_t handle, struct gbm_device *gbm)
  */
 int gralloc_gbm_handle_unregister(buffer_handle_t handle)
 {
+	struct gralloc_gbm_handle_t *gbm_handle = gralloc_gbm_handle(handle);
 	struct gralloc_gbm_bo_t *bo;
 
 	bo = validate_handle(handle, NULL);
 	if (!bo)
 		return -EINVAL;
 
-	if (bo->imported)
-		gralloc_gbm_bo_decref(bo);
+	gbm_free(bo);
+	gbm_handle->data_owner = 0;
+	gbm_handle->data = 0;
 
 	return 0;
 }
@@ -400,46 +395,12 @@ struct gralloc_gbm_bo_t *gralloc_gbm_bo_create(struct gbm_device *gbm,
 		return NULL;
 	}
 
-	bo->imported = 0;
 	bo->handle = handle;
-	bo->refcount = 1;
 
 	handle->data_owner = gralloc_gbm_get_pid();
 	handle->data = bo;
 
 	return bo;
-}
-
-/*
- * Destroy a bo.
- */
-static void gralloc_gbm_bo_destroy(struct gralloc_gbm_bo_t *bo)
-{
-	struct gralloc_gbm_handle_t *handle = bo->handle;
-	int imported = bo->imported;
-
-	/* gralloc still has a reference */
-	if (bo->refcount)
-		return;
-
-	gbm_free(bo);
-	if (imported) {
-		handle->data_owner = 0;
-		handle->data = 0;
-	}
-	else {
-		native_handle_close(handle);
-		delete handle;
-	}
-}
-
-/*
- * Decrease refcount, if no refs anymore then destroy.
- */
-void gralloc_gbm_bo_decref(struct gralloc_gbm_bo_t *bo)
-{
-	if (!--bo->refcount)
-		gralloc_gbm_bo_destroy(bo);
 }
 
 /*

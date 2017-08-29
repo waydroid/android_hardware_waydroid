@@ -40,7 +40,7 @@ int gralloc_gbm_handle_unregister(buffer_handle_t handle);
 
 struct gralloc_gbm_bo_t *gralloc_gbm_bo_create(struct gbm_device *gbm,
 		int width, int height, int format, int usage);
-void gralloc_gbm_bo_decref(struct gralloc_gbm_bo_t *bo);
+void gbm_free(struct gralloc_gbm_bo_t *bo);
 
 struct gralloc_gbm_bo_t *gralloc_gbm_bo_from_handle(buffer_handle_t handle);
 buffer_handle_t gralloc_gbm_bo_get_handle(struct gralloc_gbm_bo_t *bo);
