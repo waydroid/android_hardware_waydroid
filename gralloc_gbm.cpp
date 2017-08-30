@@ -310,42 +310,24 @@ static int gralloc_gbm_get_pid(void)
 }
 
 /*
- * Validate a buffer handle and return the associated bo.
+ * Register a buffer handle.
  */
-static struct gralloc_gbm_bo_t *validate_handle(buffer_handle_t _handle,
-		struct gbm_device *gbm)
+int gralloc_gbm_handle_register(buffer_handle_t _handle, struct gbm_device *gbm)
 {
 	struct gralloc_gbm_bo_t *bo;
 	struct gralloc_gbm_handle_t *handle = gralloc_gbm_handle(_handle);
 
 	if (!handle)
-		return NULL;
-
-	/* the buffer handle is passed to a new process */
-	//ALOGE("data_owner=%d gralloc_pid=%d data=%p\n", handle->data_owner, gralloc_gbm_get_pid(), handle->data);
-	if (handle->data_owner == gralloc_gbm_get_pid())
-		return (struct gralloc_gbm_bo_t *)handle->data;
-
-	/* check only */
-	if (!gbm)
-		return NULL;
-
-	ALOGV("handle: pfd=%d\n", handle->prime_fd);
+		return -EINVAL;
 
 	bo = gbm_import(gbm, handle);
+	if (!bo)
+		return -EINVAL;
 
 	handle->data_owner = gralloc_gbm_get_pid();
 	handle->data = bo;
 
-	return bo;
-}
-
-/*
- * Register a buffer handle.
- */
-int gralloc_gbm_handle_register(buffer_handle_t handle, struct gbm_device *gbm)
-{
-	return (validate_handle(handle, gbm)) ? 0 : -EINVAL;
+	return 0;
 }
 
 /*
@@ -354,15 +336,14 @@ int gralloc_gbm_handle_register(buffer_handle_t handle, struct gbm_device *gbm)
 int gralloc_gbm_handle_unregister(buffer_handle_t handle)
 {
 	struct gralloc_gbm_handle_t *gbm_handle = gralloc_gbm_handle(handle);
-	struct gralloc_gbm_bo_t *bo;
+	struct gralloc_gbm_bo_t *bo = gralloc_gbm_bo_from_handle(handle);
 
-	bo = validate_handle(handle, NULL);
 	if (!bo)
 		return -EINVAL;
 
 	gbm_free(bo);
 	gbm_handle->data_owner = 0;
-	gbm_handle->data = 0;
+	gbm_handle->data = NULL;
 
 	return 0;
 }
