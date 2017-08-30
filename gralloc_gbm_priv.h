@@ -30,7 +30,7 @@ extern "C" {
 #endif
 
 struct gbm_device;
-struct gralloc_gbm_bo_t;
+struct gbm_bo;
 
 #define gralloc_gbm_handle_t gralloc_drm_handle_t
 #define gralloc_gbm_handle gralloc_drm_handle
@@ -40,12 +40,11 @@ int gralloc_gbm_handle_unregister(buffer_handle_t handle);
 
 struct gralloc_gbm_handle_t *gralloc_gbm_bo_create(struct gbm_device *gbm,
 		int width, int height, int format, int usage);
-void gbm_free(struct gralloc_gbm_bo_t *bo);
+void gbm_free(buffer_handle_t handle);
 
-struct gralloc_gbm_bo_t *gralloc_gbm_bo_from_handle(buffer_handle_t handle);
-buffer_handle_t gralloc_gbm_bo_get_handle(struct gralloc_gbm_bo_t *bo);
+struct gbm_bo *gralloc_gbm_bo_from_handle(buffer_handle_t handle);
+buffer_handle_t gralloc_gbm_bo_get_handle(struct gbm_bo *bo);
 int gralloc_gbm_get_gem_handle(buffer_handle_t handle);
-struct gbm_bo *gralloc_gbm_bo_to_gbm_bo(struct gralloc_gbm_bo_t *_bo);
 
 int gralloc_gbm_bo_lock(buffer_handle_t handle, int x, int y, int w, int h, int enable_write, void **addr);
 int gralloc_gbm_bo_unlock(buffer_handle_t handle);

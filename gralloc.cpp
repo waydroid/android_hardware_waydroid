@@ -201,24 +201,14 @@ static int gbm_mod_close_gpu0(struct hw_device_t *dev)
 static int gbm_mod_free_gpu0(alloc_device_t *dev, buffer_handle_t handle)
 {
 	struct gbm_module_t *dmod = (struct gbm_module_t *) dev->common.module;
-	struct gralloc_gbm_bo_t *bo;
-	int err = 0;
 
 	pthread_mutex_lock(&dmod->mutex);
-
-	bo = gralloc_gbm_bo_from_handle(handle);
-	if (!bo) {
-		err = -EINVAL;
-		goto unlock;
-	}
-
-	gbm_free(bo);
+	gbm_free(handle);
 	native_handle_close(handle);
 	delete handle;
 
-unlock:
 	pthread_mutex_unlock(&dmod->mutex);
-	return err;
+	return 0;
 }
 
 static int gbm_mod_alloc_gpu0(alloc_device_t *dev,
