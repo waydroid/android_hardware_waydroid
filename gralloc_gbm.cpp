@@ -54,8 +54,6 @@ struct gralloc_gbm_bo_t {
 	int locked_for;
 };
 
-static int32_t gralloc_gbm_pid = 0;
-
 static uint32_t get_gbm_format(int format)
 {
 	uint32_t fmt;
@@ -299,17 +297,6 @@ struct gbm_device *gbm_dev_create(void)
 }
 
 /*
- * Return the pid of the process.
- */
-static int gralloc_gbm_get_pid(void)
-{
-	if (unlikely(!gralloc_gbm_pid))
-		android_atomic_write((int32_t) getpid(), &gralloc_gbm_pid);
-
-	return gralloc_gbm_pid;
-}
-
-/*
  * Register a buffer handle.
  */
 int gralloc_gbm_handle_register(buffer_handle_t _handle, struct gbm_device *gbm)
@@ -324,7 +311,7 @@ int gralloc_gbm_handle_register(buffer_handle_t _handle, struct gbm_device *gbm)
 	if (!bo)
 		return -EINVAL;
 
-	handle->data_owner = gralloc_gbm_get_pid();
+	handle->data_owner = getpid();
 	handle->data = bo;
 
 	return 0;
@@ -393,7 +380,7 @@ struct gralloc_gbm_handle_t *gralloc_gbm_bo_create(struct gbm_device *gbm,
 		return NULL;
 	}
 
-	handle->data_owner = gralloc_gbm_get_pid();
+	handle->data_owner = getpid();
 	handle->data = bo;
 
 	return handle;
