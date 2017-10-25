@@ -341,13 +341,9 @@ static struct gralloc_gbm_handle_t *create_bo_handle(int width,
 {
 	struct gralloc_gbm_handle_t *handle;
 
-	handle = new gralloc_gbm_handle_t();
+	handle = (gralloc_gbm_handle_t *)native_handle_create(GRALLOC_GBM_HANDLE_NUM_FDS, GRALLOC_GBM_HANDLE_NUM_INTS);
 	if (!handle)
 		return NULL;
-
-	handle->base.version = sizeof(handle->base);
-	handle->base.numInts = GRALLOC_GBM_HANDLE_NUM_INTS;
-	handle->base.numFds = GRALLOC_GBM_HANDLE_NUM_FDS;
 
 	handle->magic = GRALLOC_GBM_HANDLE_MAGIC;
 	handle->width = width;
@@ -374,7 +370,7 @@ struct gralloc_gbm_handle_t *gralloc_gbm_bo_create(struct gbm_device *gbm,
 
 	bo = gbm_alloc(gbm, handle);
 	if (!bo) {
-		delete handle;
+		native_handle_delete(&handle->base);
 		return NULL;
 	}
 
