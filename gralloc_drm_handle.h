@@ -89,6 +89,7 @@ static inline int gralloc_drm_get_prime_fd(buffer_handle_t _handle)
 
 static inline int gralloc_drm_get_gem_handle(buffer_handle_t handle)
 {
+	(void)handle;
 	return 0; /* Not supported, return invalid handle. */
 }
 
