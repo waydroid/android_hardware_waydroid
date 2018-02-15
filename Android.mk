@@ -27,6 +27,7 @@ LOCAL_SRC_FILES := \
 	gralloc.cpp
 
 LOCAL_SHARED_LIBRARIES := \
+	libdrm \
 	libgbm \
 	liblog \
 	libcutils

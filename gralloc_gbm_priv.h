@@ -32,9 +32,6 @@ extern "C" {
 struct gbm_device;
 struct gbm_bo;
 
-#define gralloc_gbm_handle_t gralloc_drm_handle_t
-#define gralloc_gbm_handle gralloc_drm_handle
-
 int gralloc_gbm_handle_register(buffer_handle_t handle, struct gbm_device *gbm);
 int gralloc_gbm_handle_unregister(buffer_handle_t handle);
 

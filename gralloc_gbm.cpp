@@ -41,7 +41,7 @@
 #include <gbm.h>
 
 #include "gralloc_gbm_priv.h"
-#include "gralloc_drm_handle.h"
+#include <android/gralloc_handle.h>
 
 #include <unordered_map>
 
@@ -152,9 +152,10 @@ static unsigned int get_pipe_bind(int usage)
 }
 
 static struct gbm_bo *gbm_import(struct gbm_device *gbm,
-		struct gralloc_gbm_handle_t *handle)
+		buffer_handle_t _handle)
 {
 	struct gbm_bo *bo;
+	struct gralloc_handle_t *handle = gralloc_handle(_handle);
 	#ifdef GBM_BO_IMPORT_FD_MODIFIER
 	struct gbm_import_fd_modifier_data data;
 	#else
@@ -191,9 +192,10 @@ static struct gbm_bo *gbm_import(struct gbm_device *gbm,
 }
 
 static struct gbm_bo *gbm_alloc(struct gbm_device *gbm,
-		struct gralloc_gbm_handle_t *handle)
+		buffer_handle_t _handle)
 {
 	struct gbm_bo *bo;
+	struct gralloc_handle_t *handle = gralloc_handle(_handle);
 	int format = get_gbm_format(handle->format);
 	int usage = get_pipe_bind(handle->usage);
 	int width, height;
@@ -241,6 +243,7 @@ void gbm_free(buffer_handle_t handle)
 	if (!bo)
 		return;
 
+	gbm_bo_handle_map.erase(handle);
 	gbm_bo_destroy(bo);
 }
 
@@ -257,7 +260,7 @@ static int gbm_map(buffer_handle_t handle, int x, int y, int w, int h,
 {
 	int err = 0;
 	int flags = GBM_BO_TRANSFER_READ;
-	struct gralloc_gbm_handle_t *gbm_handle = gralloc_gbm_handle(handle);
+	struct gralloc_gbm_handle_t *gbm_handle = gralloc_handle(handle);
 	struct gbm_bo *bo = gralloc_gbm_bo_from_handle(handle);
 	struct bo_data_t *bo_data = gbm_bo_data(bo);
 	uint32_t stride;
@@ -267,7 +270,7 @@ static int gbm_map(buffer_handle_t handle, int x, int y, int w, int h,
 
 	if (gbm_handle->format == HAL_PIXEL_FORMAT_YV12) {
 		if (x || y)
-			ALOGE("can't map with offset for planar %p - fmt %x", bo, gbm_handle->format);
+			ALOGE("can't map with offset for planar %p", bo);
 		w /= 2;
 		h += h / 2;
 	}
@@ -329,15 +332,14 @@ struct gbm_device *gbm_dev_create(void)
 int gralloc_gbm_handle_register(buffer_handle_t _handle, struct gbm_device *gbm)
 {
 	struct gbm_bo *bo;
-	struct gralloc_gbm_handle_t *handle = gralloc_gbm_handle(_handle);
 
-	if (!handle)
+	if (!_handle)
 		return -EINVAL;
 
 	if (gbm_bo_handle_map.count(_handle))
 		return -EINVAL;
 
-	bo = gbm_import(gbm, handle);
+	bo = gbm_import(gbm, _handle);
 	if (!bo)
 		return -EINVAL;
 
@@ -352,31 +354,8 @@ int gralloc_gbm_handle_register(buffer_handle_t _handle, struct gbm_device *gbm)
 int gralloc_gbm_handle_unregister(buffer_handle_t handle)
 {
 	gbm_free(handle);
-	gbm_bo_handle_map.erase(handle);
 
 	return 0;
-}
-
-/*
- * Create a buffer handle.
- */
-static struct gralloc_gbm_handle_t *create_bo_handle(int width,
-		int height, int format, int usage)
-{
-	struct gralloc_gbm_handle_t *handle;
-
-	handle = (gralloc_gbm_handle_t *)native_handle_create(GRALLOC_GBM_HANDLE_NUM_FDS, GRALLOC_GBM_HANDLE_NUM_INTS);
-	if (!handle)
-		return NULL;
-
-	handle->magic = GRALLOC_GBM_HANDLE_MAGIC;
-	handle->width = width;
-	handle->height = height;
-	handle->format = format;
-	handle->usage = usage;
-	handle->prime_fd = -1;
-
-	return handle;
 }
 
 /*
@@ -386,24 +365,24 @@ buffer_handle_t gralloc_gbm_bo_create(struct gbm_device *gbm,
 		int width, int height, int format, int usage, int *stride)
 {
 	struct gbm_bo *bo;
-	struct gralloc_gbm_handle_t *handle;
+	native_handle_t *handle;
 
-	handle = create_bo_handle(width, height, format, usage);
+	handle = gralloc_handle_create(width, height, format, usage);
 	if (!handle)
 		return NULL;
 
 	bo = gbm_alloc(gbm, handle);
 	if (!bo) {
-		native_handle_delete(&handle->base);
+		native_handle_delete(handle);
 		return NULL;
 	}
 
-	gbm_bo_handle_map.emplace(&handle->base, bo);
+	gbm_bo_handle_map.emplace(handle, bo);
 
 	/* in pixels */
-	*stride = handle->stride / gralloc_gbm_get_bpp(format);
+	*stride = gralloc_handle(handle)->stride / gralloc_gbm_get_bpp(format);
 
-	return &handle->base;
+	return handle;
 }
 
 /*
@@ -413,14 +392,14 @@ int gralloc_gbm_bo_lock(buffer_handle_t handle,
 		int usage, int x, int y, int w, int h,
 		void **addr)
 {
-	struct gralloc_gbm_handle_t *gbm_handle = gralloc_gbm_handle(handle);
+	struct gralloc_handle_t *gbm_handle = gralloc_handle(handle);
 	struct gbm_bo *bo = gralloc_gbm_bo_from_handle(handle);
 	struct bo_data_t *bo_data;
 
 	if (!bo)
 		return -EINVAL;
 
-	if ((gbm_handle->usage & usage) != usage) {
+	if ((gbm_handle->usage & usage) != (uint32_t)usage) {
 		/* make FB special for testing software renderer with */
 
 		if (!(gbm_handle->usage & GRALLOC_USAGE_SW_READ_OFTEN) &&
