@@ -43,9 +43,13 @@
 #include "gralloc_gbm_priv.h"
 #include "gralloc_drm_handle.h"
 
+#include <unordered_map>
+
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
 
 #define unlikely(x) __builtin_expect(!!(x), 0)
+
+static std::unordered_map<buffer_handle_t, struct gbm_bo *> gbm_bo_handle_map;
 
 struct bo_data_t {
 	void *map_data;
@@ -245,18 +249,7 @@ void gbm_free(buffer_handle_t handle)
  */
 struct gbm_bo *gralloc_gbm_bo_from_handle(buffer_handle_t handle)
 {
-	int pid = getpid();
-	struct gralloc_gbm_handle_t *gbm_handle = gralloc_gbm_handle(handle);
-
-	if (!gbm_handle)
-		return NULL;
-
-	/* the buffer handle is passed to a new process */
-	ALOGV("data_owner=%d gralloc_pid=%d data=%p\n", gbm_handle->data_owner, pid, gbm_handle->data);
-	if (gbm_handle->data_owner == pid)
-		return (struct gbm_bo *)gbm_handle->data;
-
-	return NULL;
+	return gbm_bo_handle_map[handle];
 }
 
 static int gbm_map(buffer_handle_t handle, int x, int y, int w, int h,
@@ -341,12 +334,14 @@ int gralloc_gbm_handle_register(buffer_handle_t _handle, struct gbm_device *gbm)
 	if (!handle)
 		return -EINVAL;
 
+	if (gbm_bo_handle_map.count(_handle))
+		return -EINVAL;
+
 	bo = gbm_import(gbm, handle);
 	if (!bo)
 		return -EINVAL;
 
-	handle->data_owner = getpid();
-	handle->data = bo;
+	gbm_bo_handle_map.emplace(_handle, bo);
 
 	return 0;
 }
@@ -356,11 +351,8 @@ int gralloc_gbm_handle_register(buffer_handle_t _handle, struct gbm_device *gbm)
  */
 int gralloc_gbm_handle_unregister(buffer_handle_t handle)
 {
-	struct gralloc_gbm_handle_t *gbm_handle = gralloc_gbm_handle(handle);
-
 	gbm_free(handle);
-	gbm_handle->data_owner = 0;
-	gbm_handle->data = NULL;
+	gbm_bo_handle_map.erase(handle);
 
 	return 0;
 }
@@ -406,8 +398,7 @@ buffer_handle_t gralloc_gbm_bo_create(struct gbm_device *gbm,
 		return NULL;
 	}
 
-	handle->data_owner = getpid();
-	handle->data = bo;
+	gbm_bo_handle_map.emplace(&handle->base, bo);
 
 	/* in pixels */
 	*stride = handle->stride / gralloc_gbm_get_bpp(format);
