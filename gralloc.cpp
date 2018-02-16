@@ -84,12 +84,6 @@ static int gbm_mod_perform(const struct gralloc_module_t *mod, int op, ...)
 			err = 0;
 		}
 		break;
-	/* TODO: This is a stub and should be implemented fully */
-	case GRALLOC_MODULE_PERFORM_GET_USAGE:
-		{
-			err = 0;
-		}
-		break;
 	default:
 		err = -EINVAL;
 		break;
