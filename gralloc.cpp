@@ -38,7 +38,6 @@
 
 #include "gralloc_drm.h"
 #include "gralloc_gbm_priv.h"
-#include "gralloc_drm_handle.h"
 
 struct gbm_module_t {
 	gralloc_module_t base;
@@ -46,37 +45,6 @@ struct gbm_module_t {
 	pthread_mutex_t mutex;
 	struct gbm_device *gbm;
 };
-
-static inline int gralloc_gbm_get_bpp(int format)
-{
-	int bpp;
-
-	switch (format) {
-	case HAL_PIXEL_FORMAT_RGBA_8888:
-	case HAL_PIXEL_FORMAT_RGBX_8888:
-	case HAL_PIXEL_FORMAT_BGRA_8888:
-		bpp = 4;
-		break;
-	case HAL_PIXEL_FORMAT_RGB_888:
-		bpp = 3;
-		break;
-	case HAL_PIXEL_FORMAT_RGB_565:
-	case HAL_PIXEL_FORMAT_YCbCr_422_I:
-		bpp = 2;
-		break;
-	/* planar; only Y is considered */
-	case HAL_PIXEL_FORMAT_YV12:
-	case HAL_PIXEL_FORMAT_YCbCr_422_SP:
-	case HAL_PIXEL_FORMAT_YCrCb_420_SP:
-		bpp = 1;
-		break;
-	default:
-		bpp = 0;
-		break;
-	}
-
-	return bpp;
-}
 
 /*
  * Initialize the DRM device object
@@ -217,23 +185,15 @@ static int gbm_mod_alloc_gpu0(alloc_device_t *dev,
 		buffer_handle_t *handle, int *stride)
 {
 	struct gbm_module_t *dmod = (struct gbm_module_t *) dev->common.module;
-	struct gralloc_gbm_handle_t *gbm_handle;
 	int err = 0;
 
 	pthread_mutex_lock(&dmod->mutex);
 
-	gbm_handle = gralloc_gbm_bo_create(dmod->gbm, w, h, format, usage);
-	if (!gbm_handle) {
+	*handle = gralloc_gbm_bo_create(dmod->gbm, w, h, format, usage, stride);
+	if (!*handle)
 		err = -errno;
-		goto unlock;
-	}
-
-	*handle = &gbm_handle->base;
-	/* in pixels */
-	*stride = gbm_handle->stride / gralloc_gbm_get_bpp(format);
 
 	ALOGV("buffer %p usage = %08x", *handle, usage);
-unlock:
 	pthread_mutex_unlock(&dmod->mutex);
 	return err;
 }

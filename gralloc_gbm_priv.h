@@ -38,8 +38,8 @@ struct gbm_bo;
 int gralloc_gbm_handle_register(buffer_handle_t handle, struct gbm_device *gbm);
 int gralloc_gbm_handle_unregister(buffer_handle_t handle);
 
-struct gralloc_gbm_handle_t *gralloc_gbm_bo_create(struct gbm_device *gbm,
-		int width, int height, int format, int usage);
+buffer_handle_t gralloc_gbm_bo_create(struct gbm_device *gbm,
+		int width, int height, int format, int usage, int *stride);
 void gbm_free(buffer_handle_t handle);
 
 struct gbm_bo *gralloc_gbm_bo_from_handle(buffer_handle_t handle);
