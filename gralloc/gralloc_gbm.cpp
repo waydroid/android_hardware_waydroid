@@ -147,9 +147,9 @@ static unsigned int get_pipe_bind(int usage)
 	if (usage & (GRALLOC_USAGE_HW_RENDER | GRALLOC_USAGE_HW_TEXTURE))
 		bind |= GBM_BO_USE_RENDERING;
 	if (usage & GRALLOC_USAGE_HW_FB)
-		bind |= GBM_BO_USE_SCANOUT;
+		bind |= GBM_BO_USE_RENDERING;
 	if (usage & GRALLOC_USAGE_HW_COMPOSER)
-		bind |= GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING;
+		bind |= GBM_BO_USE_RENDERING;
 
 	return bind;
 }
