@@ -156,8 +156,7 @@ static int gbm_mod_close_gpu0(struct hw_device_t *dev)
 	struct alloc_device_t *alloc = (struct alloc_device_t *) dev;
 
 	gbm_dev_destroy(dmod->gbm);
-	native_handle_delete((native_handle*)handle);
-	//delete alloc;
+	delete alloc;
 
 	return 0;
 }
