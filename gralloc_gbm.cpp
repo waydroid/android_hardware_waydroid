@@ -24,7 +24,7 @@
 
 #define LOG_TAG "GRALLOC-GBM"
 
-#include <cutils/log.h>
+#include <log/log.h>
 #include <cutils/atomic.h>
 #include <cutils/properties.h>
 #include <stdlib.h>
