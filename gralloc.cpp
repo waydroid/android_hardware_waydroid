@@ -24,7 +24,7 @@
 
 #define LOG_TAG "GRALLOC-GBM"
 
-#include <cutils/log.h>
+#include <log/log.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
@@ -156,8 +156,7 @@ static int gbm_mod_close_gpu0(struct hw_device_t *dev)
 	struct alloc_device_t *alloc = (struct alloc_device_t *) dev;
 
 	gbm_dev_destroy(dmod->gbm);
-	native_handle_delete((native_handle*)handle);
-	//delete alloc;
+	delete alloc;
 
 	return 0;
 }

@@ -30,7 +30,8 @@ LOCAL_SHARED_LIBRARIES := \
 	libdrm \
 	libgbm \
 	liblog \
-	libcutils
+	libcutils \
+	libhardware \
 
 LOCAL_EXPORT_C_INCLUDE_DIRS := \
 	$(LOCAL_PATH)
