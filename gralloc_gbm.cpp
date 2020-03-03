@@ -428,6 +428,15 @@ int gralloc_gbm_bo_lock(buffer_handle_t handle,
 
 	usage |= bo_data->locked_for;
 
+	/*
+	 * Some users will lock with an null crop rect.
+	 * Interpret this as no-crop (full buffer WxH).
+	 */
+	if (w == 0 && h == 0) {
+		w = gbm_handle->width;
+		h = gbm_handle->height;
+	}
+
 	if (usage & (GRALLOC_USAGE_SW_WRITE_MASK |
 		     GRALLOC_USAGE_SW_READ_MASK)) {
 		/* the driver is supposed to wait for the bo */
