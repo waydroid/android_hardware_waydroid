@@ -150,6 +150,19 @@ static int gbm_mod_unlock(const gralloc_module_t *mod, buffer_handle_t handle)
 	return err;
 }
 
+static int gbm_mod_lock_ycbcr(gralloc_module_t const *mod, buffer_handle_t handle,
+		int usage, int x, int y, int w, int h, struct android_ycbcr *ycbcr)
+{
+	struct gbm_module_t *dmod = (struct gbm_module_t *) mod;
+	int err;
+
+	pthread_mutex_lock(&dmod->mutex);
+	err = gralloc_gbm_bo_lock_ycbcr(handle, usage, x, y, w, h, ycbcr);
+	pthread_mutex_unlock(&dmod->mutex);
+
+	return err;
+}
+
 static int gbm_mod_close_gpu0(struct hw_device_t *dev)
 {
 	struct gbm_module_t *dmod = (struct gbm_module_t *)dev->module;
@@ -251,6 +264,7 @@ struct gbm_module_t HAL_MODULE_INFO_SYM = {
 		.unregisterBuffer = gbm_mod_unregister_buffer,
 		.lock = gbm_mod_lock,
 		.unlock = gbm_mod_unlock,
+		.lock_ycbcr = gbm_mod_lock_ycbcr,
 		.perform = gbm_mod_perform
 	},
 

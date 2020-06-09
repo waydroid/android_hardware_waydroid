@@ -482,3 +482,50 @@ int gralloc_gbm_bo_unlock(buffer_handle_t handle)
 
 	return 0;
 }
+
+#define GRALLOC_ALIGN(value, base) (((value) + ((base)-1)) & ~((base)-1))
+
+int gralloc_gbm_bo_lock_ycbcr(buffer_handle_t handle,
+		int usage, int x, int y, int w, int h,
+		struct android_ycbcr *ycbcr)
+{
+	struct gralloc_handle_t *hnd = gralloc_handle(handle);
+	int ystride, cstride;
+	void *addr;
+	int err;
+
+	ALOGD("handle %p, hnd %p, usage 0x%x", handle, hnd, usage);
+
+	err = gralloc_gbm_bo_lock(handle, usage, x, y, w, h, &addr);
+	if (err)
+		return err;
+
+	memset(ycbcr->reserved, 0, sizeof(ycbcr->reserved));
+
+	switch (hnd->format) {
+	case HAL_PIXEL_FORMAT_YCrCb_420_SP:
+		ystride = cstride = GRALLOC_ALIGN(hnd->width, 16);
+		ycbcr->y = addr;
+		ycbcr->cr = (unsigned char *)addr + ystride * hnd->height;
+		ycbcr->cb = (unsigned char *)addr + ystride * hnd->height + 1;
+		ycbcr->ystride = ystride;
+		ycbcr->cstride = cstride;
+		ycbcr->chroma_step = 2;
+		break;
+	case HAL_PIXEL_FORMAT_YV12:
+		ystride = hnd->width;
+		cstride = GRALLOC_ALIGN(ystride / 2, 16);
+		ycbcr->y = addr;
+		ycbcr->cr = (unsigned char *)addr + ystride * hnd->height;
+		ycbcr->cb = (unsigned char *)addr + ystride * hnd->height + cstride * hnd->height / 2;
+		ycbcr->ystride = ystride;
+		ycbcr->cstride = cstride;
+		ycbcr->chroma_step = 1;
+		break;
+	default:
+		ALOGE("Can not lock buffer, invalid format: 0x%x", hnd->format);
+		return -EINVAL;
+	}
+
+	return 0;
+}
