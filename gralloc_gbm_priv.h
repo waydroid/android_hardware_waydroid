@@ -43,8 +43,10 @@ struct gbm_bo *gralloc_gbm_bo_from_handle(buffer_handle_t handle);
 buffer_handle_t gralloc_gbm_bo_get_handle(struct gbm_bo *bo);
 int gralloc_gbm_get_gem_handle(buffer_handle_t handle);
 
-int gralloc_gbm_bo_lock(buffer_handle_t handle, int x, int y, int w, int h, int enable_write, void **addr);
+int gralloc_gbm_bo_lock(buffer_handle_t handle, int usage, int x, int y, int w, int h, void **addr);
 int gralloc_gbm_bo_unlock(buffer_handle_t handle);
+int gralloc_gbm_bo_lock_ycbcr(buffer_handle_t handle, int usage,
+		int x, int y, int w, int h, struct android_ycbcr *ycbcr);
 
 struct gbm_device *gbm_dev_create(void);
 void gbm_dev_destroy(struct gbm_device *gbm);
