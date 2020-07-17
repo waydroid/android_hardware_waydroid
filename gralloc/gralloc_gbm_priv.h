@@ -51,6 +51,9 @@ int gralloc_gbm_bo_lock_ycbcr(buffer_handle_t handle, int usage,
 struct gbm_device *gbm_dev_create(void);
 void gbm_dev_destroy(struct gbm_device *gbm);
 
+bool is_kms_dev(int fd);
+int open_first_kms_dev(const char *pattern);
+
 #ifdef __cplusplus
 }
 #endif

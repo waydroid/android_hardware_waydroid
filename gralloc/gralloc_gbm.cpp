@@ -35,6 +35,8 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <assert.h>
+#include <xf86drmMode.h>
+#include <glob.h>
 
 #include <hardware/gralloc.h>
 #include <system/graphics.h>
@@ -317,13 +319,25 @@ struct gbm_device *gbm_dev_create(void)
 {
 	struct gbm_device *gbm;
 	char path[PROPERTY_VALUE_MAX];
+	int path_len;
 	int fd;
 
-	property_get("gralloc.gbm.device", path, "/dev/dri/renderD128");
-	fd = open(path, O_RDWR | O_CLOEXEC);
-	if (fd < 0) {
-		ALOGE("failed to open %s", path);
-		return NULL;
+	path_len = property_get("gralloc.gbm.device", path, "/dev/dri/card*");
+	/* Search for KMS device with the pattern or open it from property */
+	if (path[path_len - 1] == '*') {
+		fd = open_first_kms_dev(path);
+	} else {
+		fd = open(path, O_RDWR | O_CLOEXEC);
+	}
+
+	/* Open default path when KMS device wasn't found */
+	if (fd <= 0) {
+		strcpy(path, "/dev/dri/renderD128");
+		fd = open(path, O_RDWR | O_CLOEXEC);
+		if (fd < 0) {
+			ALOGE("failed to open %s with error %s", path, strerror(errno));
+			return NULL;
+		}
 	}
 
 	gbm = gbm_create_device(fd);
@@ -534,4 +548,55 @@ int gralloc_gbm_bo_lock_ycbcr(buffer_handle_t handle,
 	}
 
 	return 0;
+}
+
+/*
+ * Check if target device has KMS.
+ */
+bool is_kms_dev(int fd)
+{
+	auto res = drmModeGetResources(fd);
+	if (!res)
+		return false;
+
+	bool is_kms = res->count_crtcs > 0 && res->count_connectors > 0 &&
+			res->count_encoders > 0;
+
+	drmModeFreeResources(res);
+
+	return is_kms;
+}
+
+/*
+ * Search for a KMS device. Return opened file descriptor on success.
+ */
+int open_first_kms_dev(const char *pattern)
+{
+	glob_t glob_buf;
+	memset(&glob_buf, 0, sizeof(glob_buf));
+	int fd;
+
+	int ret = glob(pattern, 0, NULL, &glob_buf);
+	if (ret) {
+		globfree(&glob_buf);
+		return -EINVAL;
+	}
+
+	for (size_t i = 0; i < glob_buf.gl_pathc; ++i) {
+		fd = open(glob_buf.gl_pathv[i], O_RDWR | O_CLOEXEC);
+		if (fd < 0) {
+			ALOGE("failed to open %s with error %s", glob_buf.gl_pathv[i], strerror(errno));
+			continue;
+		}
+
+		if (is_kms_dev(fd))
+			break;
+
+		close(fd);
+		fd = 0;
+	}
+
+	globfree(&glob_buf);
+
+	return fd;
 }
