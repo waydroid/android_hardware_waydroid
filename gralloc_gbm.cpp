@@ -491,7 +491,7 @@ int gralloc_gbm_bo_lock_ycbcr(buffer_handle_t handle,
 {
 	struct gralloc_handle_t *hnd = gralloc_handle(handle);
 	int ystride, cstride;
-	void *addr;
+	void *addr = 0;
 	int err;
 
 	ALOGD("handle %p, hnd %p, usage 0x%x", handle, hnd, usage);
