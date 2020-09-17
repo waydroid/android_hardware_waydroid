@@ -420,7 +420,7 @@ int gralloc_gbm_bo_lock(buffer_handle_t handle,
 		gbm_bo_set_user_data(bo, bo_data, gralloc_gbm_destroy_user_data);
 	}
 
-	ALOGI("lock bo %p, cnt=%d, usage=%x", bo, bo_data->lock_count, usage);
+	ALOGV("lock bo %p, cnt=%d, usage=%x", bo, bo_data->lock_count, usage);
 
 	/* allow multiple locks with compatible usages */
 	if (bo_data->lock_count && (bo_data->locked_for & usage) != usage)
@@ -494,7 +494,7 @@ int gralloc_gbm_bo_lock_ycbcr(buffer_handle_t handle,
 	void *addr = 0;
 	int err;
 
-	ALOGD("handle %p, hnd %p, usage 0x%x", handle, hnd, usage);
+	ALOGV("handle %p, hnd %p, usage 0x%x", handle, hnd, usage);
 
 	err = gralloc_gbm_bo_lock(handle, usage, x, y, w, h, &addr);
 	if (err)
