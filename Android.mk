@@ -40,6 +40,7 @@ LOCAL_MODULE := gralloc.gbm
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_RELATIVE_PATH := hw
 LOCAL_PROPRIETARY_MODULE := true
+LOCAL_VINTF_FRAGMENTS := gbm_gralloc_manifest.xml
 
 include $(BUILD_SHARED_LIBRARY)
 
