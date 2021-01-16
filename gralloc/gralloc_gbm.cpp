@@ -35,6 +35,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <assert.h>
+#include <xf86drm.h>
 #include <xf86drmMode.h>
 #include <glob.h>
 
@@ -339,6 +340,8 @@ struct gbm_device *gbm_dev_create(void)
 			return NULL;
 		}
 	}
+
+	drmDropMaster(fd);
 
 	gbm = gbm_create_device(fd);
 	if (!gbm) {
