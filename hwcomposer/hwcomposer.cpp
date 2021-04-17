@@ -33,7 +33,6 @@
 #include <drm_fourcc.h>
 #include <linux-dmabuf-unstable-v1-client-protocol.h>
 #include <presentation-time-client-protocol.h>
-#include <xdg-shell-unstable-v6-client-protocol.h>
 #include <gralloc_handle.h>
 
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
@@ -92,7 +91,7 @@ static int hwc_prepare(hwc_composer_device_1_t* dev __unused,
     return 0;
 }
 
-static struct buffer *get_dmabuf_buffer(struct spurv_hwc_composer_device_1* pdev, struct gralloc_handle_t *drm_handle)
+static struct buffer *get_dmabuf_buffer(struct spurv_hwc_composer_device_1 *pdev, struct gralloc_handle_t *drm_handle)
 {
     struct buffer *buf = NULL;
     static unsigned created_buffers = 0;
@@ -110,21 +109,9 @@ static struct buffer *get_dmabuf_buffer(struct spurv_hwc_composer_device_1* pdev
     //gralloc_gbm_bo_t *gbm_bo = drm_handle->data;
 
     if (!buf) {
-        int drm_format;
-
         assert(created_buffers < NUM_BUFFERS);
-        switch(drm_handle->format) {
-        case HAL_PIXEL_FORMAT_RGBA_8888:
-            drm_format = DRM_FORMAT_XBGR8888;
-            break;
-        case HAL_PIXEL_FORMAT_RGBX_8888:
-            drm_format = DRM_FORMAT_XBGR8888;
-            break;
-        default:
-            ALOGE("failed to convert Android format %d", drm_handle->format);
-            return NULL;
-        }
-        ret = create_dmabuf_buffer(pdev->display, &pdev->window->buffers[created_buffers], drm_handle->width, drm_handle->height, drm_format, 0, drm_handle->prime_fd, drm_handle->stride, drm_handle->modifier);
+
+        ret = create_dmabuf_buffer(pdev->display, &pdev->window->buffers[created_buffers], drm_handle->width, drm_handle->height, drm_handle->format, 0, drm_handle->prime_fd, drm_handle->stride, drm_handle->modifier, &drm_handle->base);
         if (ret) {
             ALOGE("failed to create a wayland dmabuf buffer");
             return NULL;
@@ -420,16 +407,10 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         pdev->window->callback = wl_surface_frame(pdev->window->surface);
         wl_callback_add_listener(pdev->window->callback, &frame_listener, pdev);
 
-	struct wp_presentation *pres = pdev->window->display->presentation;
-	buf->feedback = wp_presentation_feedback(pres, surface);
-	wp_presentation_feedback_add_listener(buf->feedback,
+	    struct wp_presentation *pres = pdev->window->display->presentation;
+	    buf->feedback = wp_presentation_feedback(pres, surface);
+	    wp_presentation_feedback_add_listener(buf->feedback,
 					      &feedback_listener, pdev);
-
-	if (drm_handle->width == (uint32_t) pdev->display->width &&
-	    drm_handle->height == (uint32_t) pdev->display->height)
-	        zxdg_toplevel_v6_set_fullscreen(pdev->window->xdg_toplevel, NULL);
-        else
-	        zxdg_toplevel_v6_unset_fullscreen(pdev->window->xdg_toplevel);
 
         wl_surface_commit(surface);
 
@@ -795,9 +776,9 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     pdev->next_sync_point = 1;
     //mExpectAcquireFences = false;
 
-    setenv("XDG_RUNTIME_DIR", "/run/user/1000", 1);
+    setenv("XDG_RUNTIME_DIR", "/run/user/32011", 1);
+    setenv("WAYLAND_DISPLAY", "wayland-1", 1);
     pdev->display = create_display(&touch_listener, pdev);
-    pdev->display->req_dmabuf_immediate = true;
     if (!pdev->display) {
         ALOGE("failed to open wayland connection");
         return -ENODEV;
