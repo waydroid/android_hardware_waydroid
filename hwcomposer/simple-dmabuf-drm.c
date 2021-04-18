@@ -75,7 +75,6 @@ buffer_release(void *data, struct wl_buffer *buffer)
 	struct buffer *mybuf = data;
 
 	//ALOGE("*** %s: Signaling release fence for buffer %p with FD %d fence %d", __func__, mybuf, mybuf->dmabuf_fd, mybuf->release_fence_fd);
-	mybuf->busy = false;
 	sw_sync_timeline_inc(mybuf->timeline_fd, 1);
 	close(mybuf->release_fence_fd);
 	mybuf->release_fence_fd = -1;
@@ -163,89 +162,11 @@ create_window(struct display *display, int width, int height)
 		wl_shell_surface_add_listener(window->shell_surface, &shell_surface_listener, NULL);
 
 		wl_shell_surface_set_toplevel(window->shell_surface);
-
-		wl_surface_commit(window->surface);
 	} else {
 		assert(0);
 	}
-#if 0
-	for (i = 0; i < NUM_BUFFERS; ++i) {
-		ret = create_dmabuf_buffer(display, &window->buffers[i],
-		                               width, height, format, opts);
-
-		if (ret < 0)
-			return NULL;
-	}
-#endif
 	return window;
 }
-
-static void
-destroy_window(struct window *window)
-{
-	int i;
-
-	if (window->callback)
-		wl_callback_destroy(window->callback);
-
-	for (i = 0; i < NUM_BUFFERS; i++) {
-		if (!window->buffers[i].buffer)
-			continue;
-
-		wl_buffer_destroy(window->buffers[i].buffer);
-	}
-
-	if (window->shell_surface)
-		wl_shell_surface_destroy(window->shell_surface);
-	wl_surface_destroy(window->surface);
-	free(window);
-}
-
-static struct buffer *
-window_next_buffer(struct window *window)
-{
-	int i;
-
-	for (i = 0; i < NUM_BUFFERS; i++)
-		if (!window->buffers[i].busy)
-			return &window->buffers[i];
-
-	return NULL;
-}
-
-static const struct wl_callback_listener frame_listener;
-
-static void
-redraw(void *data, struct wl_callback *callback, uint32_t time)
-{
-	struct window *window = data;
-	struct buffer *buffer;
-
-	buffer = window_next_buffer(window);
-	if (!buffer) {
-		fprintf(stderr,
-			!callback ? "Failed to create the first buffer.\n" :
-			"All buffers busy at redraw(). Server bug?\n");
-		abort();
-	}
-
-	/* XXX: would be nice to draw something that changes here... */
-
-	wl_surface_attach(window->surface, buffer->buffer, 0, 0);
-	wl_surface_damage(window->surface, 0, 0, window->width, window->height);
-
-	if (callback)
-		wl_callback_destroy(callback);
-
-	window->callback = wl_surface_frame(window->surface);
-	wl_callback_add_listener(window->callback, &frame_listener, window);
-	wl_surface_commit(window->surface);
-	buffer->busy = 1;
-}
-
-static const struct wl_callback_listener frame_listener = {
-	redraw
-};
 
 static void
 seat_handle_capabilities(void *data, struct wl_seat *seat,
@@ -396,7 +317,7 @@ create_display(const struct wl_touch_listener *touch_listener, void *touch_data)
 	return display;
 }
 
-static void
+void
 destroy_display(struct display *display)
 {
 	if (display->shell)

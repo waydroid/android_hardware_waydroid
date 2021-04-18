@@ -84,6 +84,8 @@ create_dmabuf_buffer(struct display *display, struct buffer *buffer,
 
 struct display *
 create_display(const struct wl_touch_listener *touch_listener, void *touch_data);
+void
+destroy_display(struct display *display);
 
 struct window *
 create_window(struct display *display, int width, int height);

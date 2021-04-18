@@ -160,6 +160,10 @@ frame(void *data, struct wl_callback *callback, uint32_t time)
     bool vsync_enabled;
     struct timespec rt;
 
+    pdev->window->callback = 0;
+    if (callback)
+        wl_callback_destroy(callback);
+
     pthread_mutex_lock(&pdev->vsync_lock);
     vsync_enabled = pdev->vsync_callback_enabled;
     pthread_mutex_unlock(&pdev->vsync_lock);
@@ -302,7 +306,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                    hwc_display_contents_1_t** displays) {
 
     struct spurv_hwc_composer_device_1* pdev = (struct spurv_hwc_composer_device_1*)dev;
-    struct wl_region *region;
     int width, height;
 
     //ALOGE("*** %s: %d", __PRETTY_FUNCTION__, 1);
@@ -368,13 +371,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             continue;
         }
 
-        if (buf->busy) {
-            if (fb_layer->acquireFenceFd != -1) {
-                close(fb_layer->acquireFenceFd);
-            }
-            continue;
-        }
-
 
         /* These layers do not require a releaseFenceFD to be created:
          * HWC_FRAMEBUFFER, HWC_SIDEBAND
@@ -398,19 +394,11 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
              continue;
         }
 
-        buf->busy = true;
+        pdev->window->callback = wl_surface_frame(surface);
+        wl_callback_add_listener(pdev->window->callback, &frame_listener, pdev);
 
         wl_surface_attach(surface, buf->buffer, 0, 0);
         wl_surface_damage(surface, 0, 0, width, height);
-
-        region = wl_compositor_create_region(pdev->display->compositor);
-        wl_region_add(region, 0, 0, width, height);
-        wl_surface_set_opaque_region(surface, region);
-        wl_region_destroy(region);
-
-        wl_callback_destroy(pdev->window->callback);
-        pdev->window->callback = wl_surface_frame(pdev->window->surface);
-        wl_callback_add_listener(pdev->window->callback, &frame_listener, pdev);
 
 	    struct wp_presentation *pres = pdev->window->display->presentation;
         if (pres) {
@@ -574,6 +562,15 @@ static int hwc_close(hw_device_t* dev) {
     ALOGE("*** %s: %d", __PRETTY_FUNCTION__, 1);
 
     struct spurv_hwc_composer_device_1* pdev = (struct spurv_hwc_composer_device_1*)dev;
+
+    for (unsigned i = 0; i < NUM_BUFFERS; i++) {
+        if (pdev->window->buffers[i].handle) {
+            wl_buffer_destroy(pdev->window->buffers[i].buffer);
+        }
+    }
+
+    destroy_display(pdev->display);
+
     pthread_kill(pdev->wayland_thread, SIGTERM);
     pthread_join(pdev->wayland_thread, NULL);
 
@@ -806,9 +803,12 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
      * or error */
     wl_display_roundtrip(pdev->display->display);
 
-    pdev->window->callback = wl_surface_frame(pdev->window->surface);
-    wl_callback_add_listener(pdev->window->callback, &frame_listener, pdev);
-    wl_surface_commit(pdev->window->surface);
+    struct wl_region *region;
+    region = wl_compositor_create_region(pdev->display->compositor);
+    wl_region_add(region, 0, 0, width, height);
+    wl_surface_set_opaque_region(pdev->window->surface, region);
+    wl_region_destroy(region);
+    pdev->window->callback = 0;
 
     pthread_mutex_init(&pdev->vsync_lock, NULL);
     pdev->vsync_callback_enabled = true;
