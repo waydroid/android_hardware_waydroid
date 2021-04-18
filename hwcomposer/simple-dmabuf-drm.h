@@ -46,8 +46,7 @@ struct buffer {
 	int busy;
 	struct wp_presentation_feedback *feedback;
 
-	uint32_t gem_handle;
-	int dmabuf_fd;
+	buffer_handle_t handle;
 	uint8_t *mmap;
 
 	int width;
@@ -81,7 +80,7 @@ struct window {
 int
 create_dmabuf_buffer(struct display *display, struct buffer *buffer,
 		     int width, int height, int format, uint32_t opts,
-		     int prime_fd, int stride, uint64_t modifier, buffer_handle_t target);
+		     int stride, buffer_handle_t target);
 
 struct display *
 create_display(const struct wl_touch_listener *touch_listener, void *touch_data);

@@ -91,27 +91,25 @@ static int hwc_prepare(hwc_composer_device_1_t* dev __unused,
     return 0;
 }
 
-static struct buffer *get_dmabuf_buffer(struct spurv_hwc_composer_device_1 *pdev, struct gralloc_handle_t *drm_handle)
+static struct buffer *get_dmabuf_buffer(struct spurv_hwc_composer_device_1 *pdev, buffer_handle_t drm_handle, int width, int height)
 {
     struct buffer *buf = NULL;
     static unsigned created_buffers = 0;
     int ret = 0;
 
     for (unsigned i = 0; i < created_buffers; i++) {
-        if (pdev->window->buffers[i].dmabuf_fd == drm_handle->prime_fd) {
+        if (pdev->window->buffers[i].handle == drm_handle) {
             buf = &pdev->window->buffers[i];
             break;
         }
     }
 
-    ///ALOGE("*** %s: %d prime_fd %d format %d stride %d width %d height %d usage %d modifier %" PRIu64, __PRETTY_FUNCTION__, 6, drm_handle->prime_fd, drm_handle->format, drm_handle->stride, drm_handle->width, drm_handle->height, drm_handle->usage, drm_handle->modifier);
-
-    //gralloc_gbm_bo_t *gbm_bo = drm_handle->data;
+    ///ALOGE("*** %s: %d width %d height %d", __PRETTY_FUNCTION__, 6, width, height);
 
     if (!buf) {
         assert(created_buffers < NUM_BUFFERS);
 
-        ret = create_dmabuf_buffer(pdev->display, &pdev->window->buffers[created_buffers], drm_handle->width, drm_handle->height, drm_handle->format, 0, drm_handle->prime_fd, drm_handle->stride, drm_handle->modifier, &drm_handle->base);
+        ret = create_dmabuf_buffer(pdev->display, &pdev->window->buffers[created_buffers], width, height, HAL_PIXEL_FORMAT_RGBA_8888, 0, width, drm_handle);
         if (ret) {
             ALOGE("failed to create a wayland dmabuf buffer");
             return NULL;
@@ -293,11 +291,19 @@ static const struct wp_presentation_feedback_listener feedback_listener = {
 	feedback_discarded
 };
 
+inline void getLayerResolution(const hwc_layer_1_t* layer,
+                               int& width, int& height) {
+    hwc_rect_t displayFrame  = layer->displayFrame;
+    width = displayFrame.right - displayFrame.left;
+    height = displayFrame.bottom - displayFrame.top;
+}
+
 static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                    hwc_display_contents_1_t** displays) {
 
     struct spurv_hwc_composer_device_1* pdev = (struct spurv_hwc_composer_device_1*)dev;
     struct wl_region *region;
+    int width, height;
 
     //ALOGE("*** %s: %d", __PRETTY_FUNCTION__, 1);
     if (!numDisplays || !displays) {
@@ -311,11 +317,10 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     int err = 0;
     for (size_t layer = 0; layer < contents->numHwLayers; layer++) {
         hwc_layer_1_t* fb_layer = &contents->hwLayers[layer];
-        struct gralloc_handle_t *drm_handle = (struct gralloc_handle_t *)fb_layer->handle;
-
+        getLayerResolution(fb_layer, width, height);
 #if 0
         ALOGE("*** %s: composition %d %dx%d flags %x hints %x transform %x blending %x", __PRETTY_FUNCTION__, fb_layer->compositionType,
-              drm_handle ? drm_handle->width : 0, drm_handle ? drm_handle->height : 0,
+              width, height,
               fb_layer->flags, fb_layer->hints, fb_layer->transform, fb_layer->blending);
 #endif
 
@@ -354,7 +359,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
 
         //ALOGE("*** %s: %d handle %d", __PRETTY_FUNCTION__, 5, fb_layer->handle->data[0]);
-        struct buffer *buf = get_dmabuf_buffer(pdev, drm_handle);
+        struct buffer *buf = get_dmabuf_buffer(pdev, fb_layer->handle, width, height);
         if (!buf) {
             ALOGE("Failed to get wl_dmabuf");
             if (fb_layer->acquireFenceFd != -1) {
@@ -396,10 +401,10 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         buf->busy = true;
 
         wl_surface_attach(surface, buf->buffer, 0, 0);
-        wl_surface_damage(surface, 0, 0, drm_handle->width, drm_handle->height);
+        wl_surface_damage(surface, 0, 0, width, height);
 
         region = wl_compositor_create_region(pdev->display->compositor);
-        wl_region_add(region, 0, 0, drm_handle->width, drm_handle->height);
+        wl_region_add(region, 0, 0, width, height);
         wl_surface_set_opaque_region(surface, region);
         wl_region_destroy(region);
 

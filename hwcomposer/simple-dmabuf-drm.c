@@ -107,7 +107,7 @@ struct wl_shell_surface_listener shell_surface_listener = {
 int
 create_dmabuf_buffer(struct display *display, struct buffer *buffer,
 		     int width, int height, int format, uint32_t opts,
-		     int prime_fd, int stride, uint64_t modifier, buffer_handle_t target)
+		     int stride, buffer_handle_t target)
 {
 	struct android_wlegl_handle *wlegl_handle;
 	struct wl_array ints;
@@ -118,8 +118,7 @@ create_dmabuf_buffer(struct display *display, struct buffer *buffer,
 	buffer->bpp = 32;
 	buffer->format = format;
 
-    assert(prime_fd >= 0);
-    buffer->dmabuf_fd = prime_fd;
+	buffer->handle = target;
 	buffer->stride = stride;
 
 	wl_array_init(&ints);
