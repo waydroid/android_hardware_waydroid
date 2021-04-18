@@ -343,7 +343,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             continue;
         }
 #else
-        if (fb_layer->compositionType != HWC_OVERLAY || fb_layer->blending != HWC_BLENDING_NONE) {
+        if (fb_layer->compositionType != HWC_OVERLAY) {
             if (fb_layer->acquireFenceFd != -1) {
                 close(fb_layer->acquireFenceFd);
             }
@@ -450,10 +450,6 @@ static int hwc_query(struct hwc_composer_device_1* dev, int what, int* value) {
 
     ALOGE("*** %s: %d", __PRETTY_FUNCTION__, 1);
     switch (what) {
-        case HWC_BACKGROUND_LAYER_SUPPORTED:
-            // we do not support the background layer
-            value[0] = 0;
-            break;
         case HWC_VSYNC_PERIOD:
             value[0] = pdev->vsync_period_ns;
             break;
