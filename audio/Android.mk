@@ -27,6 +27,7 @@ LOCAL_PROPRIETARY_MODULE := true
 LOCAL_MODULE_RELATIVE_PATH := hw
 LOCAL_SRC_FILES := audio_hw.c
 LOCAL_SHARED_LIBRARIES := liblog libcutils libasound
+LOCAL_HEADER_LIBRARIES := libhardware_headers
 LOCAL_CFLAGS := -Wno-unused-parameter
 LOCAL_C_INCLUDES += \
         external/alsa-lib/include \
