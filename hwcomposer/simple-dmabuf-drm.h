@@ -54,9 +54,6 @@ struct buffer {
 	int bpp;
 	unsigned long stride;
 	int format;
-
-   int timeline_fd;
-   int release_fence_fd;
 };
 
 #define NUM_BUFFERS 1024
