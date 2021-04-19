@@ -109,6 +109,7 @@ static uint32_t get_gbm_format(int format)
 		break;
 	case HAL_PIXEL_FORMAT_YCbCr_422_SP:
 	case HAL_PIXEL_FORMAT_YCrCb_420_SP:
+	case HAL_PIXEL_FORMAT_YCbCr_420_888:
 	default:
 		fmt = 0;
 		break;
@@ -142,6 +143,7 @@ static int gralloc_gbm_get_bpp(int format)
 	case HAL_PIXEL_FORMAT_YV12:
 	case HAL_PIXEL_FORMAT_YCbCr_422_SP:
 	case HAL_PIXEL_FORMAT_YCrCb_420_SP:
+	case HAL_PIXEL_FORMAT_YCbCr_420_888:
 		bpp = 1;
 		break;
 	default:
@@ -503,6 +505,7 @@ int gralloc_gbm_bo_lock_ycbcr(buffer_handle_t handle,
 
 	switch (hnd->format) {
 	case HAL_PIXEL_FORMAT_YCrCb_420_SP:
+	case HAL_PIXEL_FORMAT_YCbCr_420_888:
 		ystride = cstride = GRALLOC_ALIGN(hnd->width, 16);
 		ycbcr->y = addr;
 		ycbcr->cr = (unsigned char *)addr + ystride * hnd->height;
