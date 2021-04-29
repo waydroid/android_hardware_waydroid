@@ -98,7 +98,10 @@ static struct buffer *get_dmabuf_buffer(struct spurv_hwc_composer_device_1 *pdev
     if (!buf) {
         assert(created_buffers < NUM_BUFFERS);
 
-        ret = create_dmabuf_buffer(pdev->display, &pdev->window->buffers[created_buffers], width, height, HAL_PIXEL_FORMAT_RGBA_8888, 0, width, drm_handle);
+        int stride = property_get_int32("anbox.layer.stride", width);
+        int format = property_get_int32("anbox.layer.format", HAL_PIXEL_FORMAT_RGBA_8888);
+        ALOGE("*** %s: stride: %d", __PRETTY_FUNCTION__, stride);
+        ret = create_dmabuf_buffer(pdev->display, &pdev->window->buffers[created_buffers], width, height, format, 0, stride, drm_handle);
         if (ret) {
             ALOGE("failed to create a wayland dmabuf buffer");
             return NULL;
