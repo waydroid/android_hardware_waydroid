@@ -408,9 +408,11 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         wl_callback_add_listener(pdev->window->callback, &frame_listener, pdev);
 
 	    struct wp_presentation *pres = pdev->window->display->presentation;
-	    buf->feedback = wp_presentation_feedback(pres, surface);
-	    wp_presentation_feedback_add_listener(buf->feedback,
-					      &feedback_listener, pdev);
+        if (pres) {
+            buf->feedback = wp_presentation_feedback(pres, surface);
+            wp_presentation_feedback_add_listener(buf->feedback,
+					          &feedback_listener, pdev);
+        }
 
         wl_surface_commit(surface);
 
