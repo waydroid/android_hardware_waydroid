@@ -57,7 +57,6 @@ struct buffer {
 };
 
 #define NUM_BUFFERS 1024
-#define NUM_SURFACES 128
 
 struct window {
 	struct display *display;
@@ -65,8 +64,6 @@ struct window {
 	struct wl_surface *surface;
 	struct wl_shell_surface *shell_surface;
 	struct buffer buffers[NUM_BUFFERS];
-    struct wl_surface *surfaces[NUM_SURFACES];
-    struct wl_subsurface *subsurfaces[NUM_SURFACES];
 
 	struct buffer *prev_buffer;
 	struct wl_callback *callback;

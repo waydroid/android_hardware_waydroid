@@ -55,7 +55,6 @@ struct spurv_hwc_composer_device_1 {
     int input_fd;
 };
 
-#define USE_SUBSURFACES 0
 #define EMIT_VSYNC 0
 #define FENCES 1
 
@@ -74,13 +73,8 @@ static int hwc_prepare(hwc_composer_device_1_t* dev __unused,
         if (contents->hwLayers[i].flags & HWC_SKIP_LAYER)
             continue;
 
-#if USE_SUBSURFACES
-        if (contents->hwLayers[i].compositionType == HWC_FRAMEBUFFER)
-            contents->hwLayers[i].compositionType = HWC_OVERLAY;
-#else
-        if (contents->hwLayers[i].compositionType == HWC_FRAMEBUFFER)
-            contents->hwLayers[i].compositionType = HWC_OVERLAY;
-#endif
+        if (contents->hwLayers[i].compositionType == HWC_OVERLAY)
+            contents->hwLayers[i].compositionType = HWC_FRAMEBUFFER;
     }
 
     return 0;
@@ -114,38 +108,6 @@ static struct buffer *get_dmabuf_buffer(struct spurv_hwc_composer_device_1 *pdev
     }
 
     return buf;
-}
-
-static struct wl_surface *get_surface(struct spurv_hwc_composer_device_1* pdev, hwc_layer_1_t* layer, int pos)
-{
-#if !USE_SUBSURFACES
-    return pdev->window->surface;
-#endif
-
-    if (layer->compositionType == HWC_FRAMEBUFFER_TARGET)
-        return pdev->window->surface;
-
-    struct wl_surface *surface = NULL;
-    struct wl_subsurface *subsurface = NULL;
-    static unsigned created_surfaces = 0;
-
-    if (pos < created_surfaces) {
-        surface = pdev->window->surfaces[pos];
-        subsurface = pdev->window->subsurfaces[pos];
-    } else {
-        surface = wl_compositor_create_surface(pdev->display->compositor);
-        subsurface = wl_subcompositor_get_subsurface(pdev->display->subcompositor,
-							            surface,
-                                        pdev->window->surface);
-        pdev->window->surfaces[created_surfaces] = surface;
-        pdev->window->subsurfaces[created_surfaces] = subsurface;
-        created_surfaces++;
-    }
-
-    wl_subsurface_set_position(subsurface, layer->displayFrame.left, layer->displayFrame.top);
-    wl_subsurface_set_desync(subsurface);
-
-    return surface;
 }
 
 static void
@@ -348,16 +310,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         if (fb_layer->flags & HWC_SKIP_LAYER)
             continue;
 
-#if USE_SUBSURFACES
-        if (fb_layer->compositionType != HWC_OVERLAY &&
-            fb_layer->compositionType != HWC_FRAMEBUFFER_TARGET) {
-            ALOGE("Unexpected layer with compositionType %d", fb_layer->compositionType);
+        if (fb_layer->compositionType != HWC_FRAMEBUFFER_TARGET)
             continue;
-        }
-#else
-        if (fb_layer->compositionType != HWC_OVERLAY)
-            continue;
-#endif
 
         if (!fb_layer->handle)
             continue;
@@ -369,7 +323,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             continue;
         }
 
-        struct wl_surface *surface = get_surface(pdev, fb_layer, layer);
+        struct wl_surface *surface = pdev->window->surface;
         if (!surface) {
              ALOGE("Failed to get surface");
              continue;
