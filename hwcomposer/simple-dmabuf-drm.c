@@ -44,6 +44,8 @@
 
 #include <drm_fourcc.h>
 
+#include <libsync/sw_sync.h>
+#include <sync/sync.h>
 #include <hardware/gralloc.h>
 
 #include <wayland-client.h>
@@ -70,6 +72,12 @@ redraw(void *data, struct wl_callback *callback, uint32_t time);
 static void
 buffer_release(void *data, struct wl_buffer *buffer)
 {
+	struct buffer *mybuf = data;
+
+	//ALOGE("*** %s: Signaling release fence for buffer %p with FD %d fence %d", __func__, mybuf, mybuf->dmabuf_fd, mybuf->release_fence_fd);
+	sw_sync_timeline_inc(mybuf->timeline_fd, 1);
+	close(mybuf->release_fence_fd);
+	mybuf->release_fence_fd = -1;
 }
 
 static const struct wl_buffer_listener buffer_listener = {

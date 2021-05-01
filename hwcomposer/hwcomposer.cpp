@@ -28,6 +28,8 @@
 #include <log/log.h>
 #include <cutils/properties.h>
 #include <hardware/hwcomposer.h>
+#include <libsync/sw_sync.h>
+#include <sync/sync.h>
 #include <drm_fourcc.h>
 #include <linux-dmabuf-unstable-v1-client-protocol.h>
 #include <presentation-time-client-protocol.h>
@@ -53,6 +55,9 @@ struct spurv_hwc_composer_device_1 {
     uint64_t last_vsync_ns;
 
     int input_fd;
+
+    int timeline_fd;
+    int next_sync_point;
 };
 
 #define EMIT_VSYNC 0
@@ -262,28 +267,6 @@ inline void getLayerResolution(const hwc_layer_1_t* layer,
     height = displayFrame.bottom - displayFrame.top;
 }
 
-/*
- * We're using "implicit" synchronization, so make sure we aren't passing any
- * sync object descriptors around.
- */
-static void check_sync_fds(size_t numDisplays, hwc_display_contents_1_t** displays)
-{
-    unsigned int j;
-    hwc_display_contents_1_t* list = displays[HWC_DISPLAY_PRIMARY];
-    if (list->retireFenceFd >= 0)
-        list->retireFenceFd = -1;
-
-    for (j = 0; j < list->numHwLayers; j++) {
-        hwc_layer_1_t* layer = &list->hwLayers[j];
-        if (layer->acquireFenceFd >= 0) {
-            close(layer->acquireFenceFd);
-            layer->acquireFenceFd = -1;
-        }
-        if (layer->releaseFenceFd >= 0)
-            layer->releaseFenceFd = -1;
-    }
-}
-
 static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                    hwc_display_contents_1_t** displays) {
 
@@ -297,6 +280,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
     //ALOGE("*** %s: %d", __PRETTY_FUNCTION__, 2);
     hwc_display_contents_1_t* contents = displays[HWC_DISPLAY_PRIMARY];
+    contents->retireFenceFd = sw_sync_fence_create(pdev->timeline_fd, "hwc_contents_release", pdev->next_sync_point);
 
     int err = 0;
     for (size_t layer = 0; layer < contents->numHwLayers; layer++) {
@@ -310,21 +294,52 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
         //ALOGE("*** %s: %d", __PRETTY_FUNCTION__, 4);
 
-        if (fb_layer->flags & HWC_SKIP_LAYER)
+        if (fb_layer->flags & HWC_SKIP_LAYER) {
+            if (fb_layer->acquireFenceFd != -1) {
+                close(fb_layer->acquireFenceFd);
+            }
             continue;
+        }
 
-        if (fb_layer->compositionType != HWC_FRAMEBUFFER_TARGET)
+        if (fb_layer->compositionType != HWC_FRAMEBUFFER_TARGET) {
+            if (fb_layer->acquireFenceFd != -1) {
+                close(fb_layer->acquireFenceFd);
+            }
             continue;
+        }
 
-        if (!fb_layer->handle)
+        if (!fb_layer->handle) {
+            if (fb_layer->acquireFenceFd != -1) {
+                close(fb_layer->acquireFenceFd);
+            }
             continue;
+        }
 
         //ALOGE("*** %s: %d handle %d", __PRETTY_FUNCTION__, 5, fb_layer->handle->data[0]);
         struct buffer *buf = get_dmabuf_buffer(pdev, fb_layer->handle, width, height);
         if (!buf) {
             ALOGE("Failed to get wl_dmabuf");
+            if (fb_layer->acquireFenceFd != -1) {
+               close(fb_layer->acquireFenceFd);
+            }
             continue;
         }
+
+        /* These layers do not require a releaseFenceFD to be created:
+         * HWC_FRAMEBUFFER, HWC_SIDEBAND
+         * https://android.googlesource.com/platform/hardware/libhardware/+/master/include/hardware/hwcomposer.h#216
+         */
+         if (fb_layer->compositionType != HWC_FRAMEBUFFER &&
+             fb_layer->compositionType != HWC_SIDEBAND)
+         {
+             /* To be signaled when the compositor releases the buffer */
+             fb_layer->releaseFenceFd = sw_sync_fence_create(pdev->timeline_fd, "wayland_release", pdev->next_sync_point++);
+             //ALOGE("%s(): fb_layer->releaseFenceFd=%d   fence-sync-point=%d", __func__, fb_layer->releaseFenceFd, pdev->next_sync_point-1);
+             buf->release_fence_fd = fb_layer->releaseFenceFd;
+         } else {
+             buf->release_fence_fd = -1;
+         }
+         buf->timeline_fd = pdev->timeline_fd;
 
         struct wl_surface *surface = pdev->window->surface;
         if (!surface) {
@@ -347,11 +362,25 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
         wl_surface_commit(surface);
 
+        const int kAcquireWarningMS = 100;
+        int err = sync_wait(fb_layer->acquireFenceFd, kAcquireWarningMS);
+        if (err < 0 && errno == ETIME) {
+          ALOGE("hwcomposer waited on fence %d for %d ms",
+                fb_layer->acquireFenceFd, kAcquireWarningMS);
+        }
+        close(fb_layer->acquireFenceFd);
+
         //ALOGE("*** %s: Committing buffer %p with FD %d fence %d timeline_fd %d next_sync_point %d", __func__, buf, buf->dmabuf_fd, fb_layer->releaseFenceFd, pdev->timeline_fd, pdev->next_sync_point);
         wl_display_flush(pdev->display->display);
     }
 
-    check_sync_fds(numDisplays, displays);
+    /* TODO: According to[1] the contents->retireFenceFd is the responsibility
+     * of SurfaceFlinger to close, but leaving it open is causing a graphical
+     * stall.
+     * [1] https://android.googlesource.com/platform/hardware/libhardware/+/master/include/hardware/hwcomposer.h#333
+     */
+    close(contents->retireFenceFd);
+    contents->retireFenceFd = -1;
 
     return err;
 }
@@ -716,6 +745,8 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     pdev->vsync_period_ns = 1000*1000*1000/60; // vsync is 60 hz
     pdev->input_fd = -1;
 
+    pdev->timeline_fd = sw_sync_timeline_create();
+    pdev->next_sync_point = 1;
     //mExpectAcquireFences = false;
 
     setenv("XDG_RUNTIME_DIR", "/run/user/32011", 1);

@@ -26,6 +26,7 @@ cc_library_shared {
         "libEGL",
         "libutils",
         "libhardware",
+        "libsync",
         "libui",
         "libdrm",
         "libdrm_etnaviv",
@@ -41,6 +42,11 @@ cc_library_shared {
     ],
     header_libs: [
         "libsystem_headers",
+    ],
+    include_dirs: [
+        "system/core",
+        "system/core/libsync",
+        "system/core/libsync/include"
     ],
     cflags: [
         "-DLOG_TAG=\"hwcomposer\"",
