@@ -325,6 +325,13 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             continue;
         }
 
+        if (buf->busy) {
+            if (fb_layer->acquireFenceFd != -1) {
+                close(fb_layer->acquireFenceFd);
+            }
+            continue;
+        }
+
         /* These layers do not require a releaseFenceFD to be created:
          * HWC_FRAMEBUFFER, HWC_SIDEBAND
          * https://android.googlesource.com/platform/hardware/libhardware/+/master/include/hardware/hwcomposer.h#216
@@ -346,6 +353,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
              ALOGE("Failed to get surface");
              continue;
         }
+
+        buf->busy = true;
 
         pdev->window->callback = wl_surface_frame(surface);
         wl_callback_add_listener(pdev->window->callback, &frame_listener, pdev);
