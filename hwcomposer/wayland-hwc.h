@@ -18,10 +18,6 @@ extern "C"
 #include <getopt.h>
 #include <errno.h>
 
-#include <xf86drm.h>
-
-#define HAVE_LIBDRM_ETNAVIV 1
-
 struct display {
 	struct wl_display *display;
 	struct wl_registry *registry;
@@ -75,7 +71,7 @@ struct window {
 };
 
 int
-create_dmabuf_buffer(struct display *display, struct buffer *buffer,
+create_wl_buffer(struct display *display, struct buffer *buffer,
 		     int width, int height, int format, uint32_t opts,
 		     int stride, buffer_handle_t target);
 

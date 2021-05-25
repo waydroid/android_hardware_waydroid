@@ -30,18 +30,15 @@
 #include <hardware/hwcomposer.h>
 #include <libsync/sw_sync.h>
 #include <sync/sync.h>
-#include <drm_fourcc.h>
-#include <linux-dmabuf-unstable-v1-client-protocol.h>
 #include <presentation-time-client-protocol.h>
-#include <gralloc_handle.h>
 
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
 #include <cutils/trace.h>
 #include <utils/Trace.h>
 
-#include "simple-dmabuf-drm.h"
+#include "wayland-hwc.h"
 
-struct spurv_hwc_composer_device_1 {
+struct anbox_hwc_composer_device_1 {
     hwc_composer_device_1_t base; // constant after init
     const hwc_procs_t *procs;     // constant after init
     pthread_t wayland_thread;     // constant after init
@@ -85,14 +82,14 @@ static int hwc_prepare(hwc_composer_device_1_t* dev __unused,
     return 0;
 }
 
-static struct buffer *get_dmabuf_buffer(struct spurv_hwc_composer_device_1 *pdev, buffer_handle_t drm_handle, int width, int height)
+static struct buffer *get_wl_buffer(struct anbox_hwc_composer_device_1 *pdev, buffer_handle_t handle, int width, int height)
 {
     struct buffer *buf = NULL;
     static unsigned created_buffers = 0;
     int ret = 0;
 
     for (unsigned i = 0; i < created_buffers; i++) {
-        if (pdev->window->buffers[i].handle == drm_handle) {
+        if (pdev->window->buffers[i].handle == handle) {
             buf = &pdev->window->buffers[i];
             break;
         }
@@ -106,9 +103,9 @@ static struct buffer *get_dmabuf_buffer(struct spurv_hwc_composer_device_1 *pdev
         int stride = property_get_int32("anbox.layer.stride", width);
         int format = property_get_int32("anbox.layer.format", HAL_PIXEL_FORMAT_RGBA_8888);
         ALOGE("*** %s: stride: %d", __PRETTY_FUNCTION__, stride);
-        ret = create_dmabuf_buffer(pdev->display, &pdev->window->buffers[created_buffers], width, height, format, 0, stride, drm_handle);
+        ret = create_wl_buffer(pdev->display, &pdev->window->buffers[created_buffers], width, height, format, 0, stride, handle);
         if (ret) {
-            ALOGE("failed to create a wayland dmabuf buffer");
+            ALOGE("failed to create a wayland buffer");
             return NULL;
         }
         buf = &pdev->window->buffers[created_buffers];
@@ -121,7 +118,7 @@ static struct buffer *get_dmabuf_buffer(struct spurv_hwc_composer_device_1 *pdev
 static void
 frame(void *data, struct wl_callback *callback, uint32_t time)
 {
-    struct spurv_hwc_composer_device_1* pdev = (struct spurv_hwc_composer_device_1*)data;
+    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)data;
     bool vsync_enabled;
     struct timespec rt;
 
@@ -161,7 +158,7 @@ static long time_to_sleep_to_next_vsync(struct timespec *rt, uint64_t last_vsync
 }
 
 static void* hwc_vsync_thread(void* data) {
-    struct spurv_hwc_composer_device_1* pdev = (struct spurv_hwc_composer_device_1*)data;
+    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)data;
     setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
 
     struct timespec rt;
@@ -236,7 +233,7 @@ feedback_presented(void *data,
 		   uint32_t seq_lo,
 		   uint32_t flags)
 {
-        struct spurv_hwc_composer_device_1* pdev = (struct spurv_hwc_composer_device_1*)data;
+        struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)data;
 
         pthread_mutex_lock(&pdev->vsync_lock);
 	pdev->last_vsync_ns = (((uint64_t)tv_sec_hi << 32) + tv_sec_lo) * 1e9 + tv_nsec;
@@ -270,7 +267,7 @@ inline void getLayerResolution(const hwc_layer_1_t* layer,
 static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                    hwc_display_contents_1_t** displays) {
 
-    struct spurv_hwc_composer_device_1* pdev = (struct spurv_hwc_composer_device_1*)dev;
+    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)dev;
     int width, height;
 
     //ALOGE("*** %s: %d", __PRETTY_FUNCTION__, 1);
@@ -316,9 +313,9 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
 
         //ALOGE("*** %s: %d handle %d", __PRETTY_FUNCTION__, 5, fb_layer->handle->data[0]);
-        struct buffer *buf = get_dmabuf_buffer(pdev, fb_layer->handle, width, height);
+        struct buffer *buf = get_wl_buffer(pdev, fb_layer->handle, width, height);
         if (!buf) {
-            ALOGE("Failed to get wl_dmabuf");
+            ALOGE("Failed to get wayland buffer");
             if (fb_layer->acquireFenceFd != -1) {
                close(fb_layer->acquireFenceFd);
             }
@@ -379,7 +376,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
         close(fb_layer->acquireFenceFd);
 
-        //ALOGE("*** %s: Committing buffer %p with FD %d fence %d timeline_fd %d next_sync_point %d", __func__, buf, buf->dmabuf_fd, fb_layer->releaseFenceFd, pdev->timeline_fd, pdev->next_sync_point);
+        //ALOGE("*** %s: Committing buffer %p with fence %d timeline_fd %d next_sync_point %d", __func__, buf, fb_layer->releaseFenceFd, pdev->timeline_fd, pdev->next_sync_point);
         wl_display_flush(pdev->display->display);
     }
 
@@ -395,8 +392,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 }
 
 static int hwc_query(struct hwc_composer_device_1* dev, int what, int* value) {
-    struct spurv_hwc_composer_device_1* pdev =
-            (struct spurv_hwc_composer_device_1*)dev;
+    struct anbox_hwc_composer_device_1* pdev =
+            (struct anbox_hwc_composer_device_1*)dev;
 
     ALOGE("*** %s: %d", __PRETTY_FUNCTION__, 1);
     switch (what) {
@@ -413,8 +410,8 @@ static int hwc_query(struct hwc_composer_device_1* dev, int what, int* value) {
 
 static int hwc_event_control(struct hwc_composer_device_1* dev, int dpy __unused,
                              int event, int enabled) {
-    struct spurv_hwc_composer_device_1* pdev =
-            (struct spurv_hwc_composer_device_1*)dev;
+    struct anbox_hwc_composer_device_1* pdev =
+            (struct anbox_hwc_composer_device_1*)dev;
     int ret = -EINVAL;
 
     // enabled can only be 0 or 1
@@ -464,7 +461,7 @@ static int hwc_get_display_configs(struct hwc_composer_device_1* dev __unused,
 }
 
 
-static int32_t hwc_attribute(struct spurv_hwc_composer_device_1* pdev,
+static int32_t hwc_attribute(struct anbox_hwc_composer_device_1* pdev,
                              const uint32_t attribute) {
     char property[PROPERTY_VALUE_MAX];
     int width = 0;
@@ -477,12 +474,12 @@ static int32_t hwc_attribute(struct spurv_hwc_composer_device_1* pdev,
         case HWC_DISPLAY_VSYNC_PERIOD:
             return pdev->vsync_period_ns;
         case HWC_DISPLAY_WIDTH:
-            if (property_get("spurv.display_width", property, nullptr) > 0) {
+            if (property_get("anbox.display_width", property, nullptr) > 0) {
                 width = atoi(property);
             }
             return width;
         case HWC_DISPLAY_HEIGHT:
-            if (property_get("spurv.display_height", property, nullptr) > 0) {
+            if (property_get("anbox.display_height", property, nullptr) > 0) {
                 height = atoi(property);
             }
             return height;
@@ -503,7 +500,7 @@ static int32_t hwc_attribute(struct spurv_hwc_composer_device_1* pdev,
 static int hwc_get_display_attributes(struct hwc_composer_device_1* dev __unused,
                                       int disp, uint32_t config __unused,
                                       const uint32_t* attributes, int32_t* values) {
-    struct spurv_hwc_composer_device_1* pdev = (struct spurv_hwc_composer_device_1*)dev;
+    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)dev;
     ALOGE("*** %s: %d", __PRETTY_FUNCTION__, 1);
     for (int i = 0; attributes[i] != HWC_DISPLAY_NO_ATTRIBUTE; i++) {
         if (disp == HWC_DISPLAY_PRIMARY) {
@@ -523,7 +520,7 @@ static int hwc_get_display_attributes(struct hwc_composer_device_1* dev __unused
 static int hwc_close(hw_device_t* dev) {
     ALOGE("*** %s: %d", __PRETTY_FUNCTION__, 1);
 
-    struct spurv_hwc_composer_device_1* pdev = (struct spurv_hwc_composer_device_1*)dev;
+    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)dev;
 
     for (unsigned i = 0; i < NUM_BUFFERS; i++) {
         if (pdev->window->buffers[i].handle) {
@@ -543,7 +540,7 @@ static int hwc_close(hw_device_t* dev) {
 #define INPUT_PIPE_NAME "/dev/input/wayland_events"
 
 static int
-ensure_pipe(struct spurv_hwc_composer_device_1* pdev)
+ensure_pipe(struct anbox_hwc_composer_device_1* pdev)
 {
     if (pdev->input_fd == -1) {
         pdev->input_fd = open(INPUT_PIPE_NAME, O_WRONLY | O_NONBLOCK);
@@ -568,7 +565,7 @@ touch_handle_down(void *data, struct wl_touch *wl_touch,
 		  uint32_t serial, uint32_t, struct wl_surface *surface,
 		  int32_t id, wl_fixed_t x_w, wl_fixed_t y_w)
 {
-    struct spurv_hwc_composer_device_1* pdev = (struct spurv_hwc_composer_device_1*)data;
+    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)data;
     struct input_event event[6];
     struct timespec rt;
     int res, n = 0;
@@ -596,7 +593,7 @@ static void
 touch_handle_up(void *data, struct wl_touch *wl_touch,
 		uint32_t serial, uint32_t, int32_t id)
 {
-    struct spurv_hwc_composer_device_1* pdev = (struct spurv_hwc_composer_device_1*)data;
+    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)data;
     struct input_event event[4];
     struct timespec rt;
     int res, n = 0;
@@ -621,7 +618,7 @@ static void
 touch_handle_motion(void *data, struct wl_touch *wl_touch,
 		    uint32_t, int32_t id, wl_fixed_t x_w, wl_fixed_t y_w)
 {
-    struct spurv_hwc_composer_device_1* pdev = (struct spurv_hwc_composer_device_1*)data;
+    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)data;
     struct input_event event[6];
     struct timespec rt;
     int res, n = 0;
@@ -658,7 +655,7 @@ touch_handle_cancel(void *data, struct wl_touch *wl_touch)
 static void
 touch_handle_shape(void *data, struct wl_touch *wl_touch, int32_t id, wl_fixed_t major, wl_fixed_t minor)
 {
-    struct spurv_hwc_composer_device_1* pdev = (struct spurv_hwc_composer_device_1*)data;
+    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)data;
     struct input_event event[6];
     struct timespec rt;
     int res, n = 0;
@@ -697,7 +694,7 @@ static const struct wl_touch_listener touch_listener = {
 };
 
 static void* hwc_wayland_thread(void* data) {
-    struct spurv_hwc_composer_device_1* pdev = (struct spurv_hwc_composer_device_1*)data;
+    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)data;
     int ret = 0;
 
     ALOGE("*** %s: %d", __PRETTY_FUNCTION__, 1);
@@ -714,7 +711,7 @@ static void* hwc_wayland_thread(void* data) {
 
 static void hwc_register_procs(struct hwc_composer_device_1* dev,
                                hwc_procs_t const* procs) {
-    struct spurv_hwc_composer_device_1* pdev = (struct spurv_hwc_composer_device_1*)dev;
+    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)dev;
     pdev->procs = procs;
 }
 
@@ -730,7 +727,7 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
         return -EINVAL;
     }
 
-    spurv_hwc_composer_device_1 *pdev = new spurv_hwc_composer_device_1();
+    anbox_hwc_composer_device_1 *pdev = new anbox_hwc_composer_device_1();
     if (!pdev) {
         ALOGE("%s failed to allocate dev", __FUNCTION__);
         return -ENOMEM;
@@ -767,11 +764,11 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     }
     ALOGE("wayland display %p", pdev->display);
 
-    if (property_get("spurv.display_width", property, nullptr) > 0) {
+    if (property_get("anbox.display_width", property, nullptr) > 0) {
         width = atoi(property);
     }
 
-    if (property_get("spurv.display_height", property, nullptr) > 0) {
+    if (property_get("anbox.display_height", property, nullptr) > 0) {
         height = atoi(property);
     }
 
@@ -781,8 +778,7 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
         return -ENODEV;
     }
 
-    /* Here we retrieve the linux-dmabuf objects if executed without immed,
-     * or error */
+    /* Here we retrieve objects if executed without immed, or error */
     wl_display_roundtrip(pdev->display->display);
 
     struct wl_region *region;
@@ -806,13 +802,13 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     if (!pdev->vsync_thread) {
 	    ret = pthread_create (&pdev->vsync_thread, NULL, hwc_vsync_thread, pdev);
 	    if (ret) {
-		    ALOGE("spurv_hw_composer could not start vsync_thread\n");
+		    ALOGE("anbox_hw_composer could not start vsync_thread\n");
 	    }
     }
 
     ret = pthread_create (&pdev->wayland_thread, NULL, hwc_wayland_thread, pdev);
     if (ret) {
-        ALOGE("spurv_hw_composer could not start wayland_thread\n");
+        ALOGE("anbox_hw_composer could not start wayland_thread\n");
     }
 
     *device = &pdev->base.common;
@@ -831,7 +827,7 @@ hwc_module_t HAL_MODULE_INFO_SYM = {
         .module_api_version = HWC_MODULE_API_VERSION_0_1,
         .hal_api_version = HARDWARE_HAL_API_VERSION,
         .id = HWC_HARDWARE_MODULE_ID,
-        .name = "Android Emulator hwcomposer module",
+        .name = "Anbox hwcomposer module",
         .author = "The Android Open Source Project",
         .methods = &hwc_module_methods,
     }

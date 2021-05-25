@@ -25,7 +25,7 @@
  * SOFTWARE.
  */
 
-#include "simple-dmabuf-drm.h"
+#include "wayland-hwc.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -40,41 +40,26 @@
 #include <getopt.h>
 #include <errno.h>
 
-#include <xf86drm.h>
-
-#include <drm_fourcc.h>
-
 #include <libsync/sw_sync.h>
 #include <sync/sync.h>
 #include <hardware/gralloc.h>
-
-#include <wayland-client.h>
-#include <wayland-android-client-protocol.h>
-#include "linux-dmabuf-unstable-v1-client-protocol.h"
-#include "presentation-time-client-protocol.h"
-
-#ifndef DRM_FORMAT_MOD_LINEAR
-#define DRM_FORMAT_MOD_LINEAR 0
-#endif
-
-struct buffer;
-
-#define ALIGN(v, a) ((v + a - 1) & ~(a - 1))
-
-static void
-redraw(void *data, struct wl_callback *callback, uint32_t time);
-
 #include <log/log.h>
 
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
 #include <cutils/trace.h>
+
+#include <wayland-client.h>
+#include <wayland-android-client-protocol.h>
+#include "presentation-time-client-protocol.h"
+
+struct buffer;
 
 static void
 buffer_release(void *data, struct wl_buffer *buffer)
 {
 	struct buffer *mybuf = data;
 
-	//ALOGE("*** %s: Signaling release fence for buffer %p with FD %d fence %d", __func__, mybuf, mybuf->dmabuf_fd, mybuf->release_fence_fd);
+	//ALOGE("*** %s: Signaling release fence for buffer %p with fence %d", __func__, mybuf, mybuf->release_fence_fd);
     mybuf->busy = false;
 	sw_sync_timeline_inc(mybuf->timeline_fd, 1);
 	close(mybuf->release_fence_fd);
@@ -105,7 +90,7 @@ struct wl_shell_surface_listener shell_surface_listener = {
 };
 
 int
-create_dmabuf_buffer(struct display *display, struct buffer *buffer,
+create_wl_buffer(struct display *display, struct buffer *buffer,
 		     int width, int height, int format, uint32_t opts,
 		     int stride, buffer_handle_t target)
 {

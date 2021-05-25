@@ -19,17 +19,11 @@ cc_library_shared {
     relative_install_path: "hw",
     vendor: true,
     shared_libs: [
-        "libcutils",
         "liblog",
         "libutils",
         "libcutils",
-        "libEGL",
-        "libutils",
         "libhardware",
         "libsync",
-        "libui",
-        "libdrm",
-        "libdrm_etnaviv",
     ],
     static_libs: [
         "libwayland_client",
@@ -38,7 +32,7 @@ cc_library_shared {
     ],
     srcs: [
         "hwcomposer.cpp",
-        "simple-dmabuf-drm.c"
+        "wayland-hwc.c"
     ],
     header_libs: [
         "libsystem_headers",
