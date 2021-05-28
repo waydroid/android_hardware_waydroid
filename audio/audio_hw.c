@@ -1055,8 +1055,11 @@ static int adev_open(const hw_module_t* module, const char* name,
         hw_device_t** device)
 {
     struct alsa_audio_device *adev;
+    char property[PROPERTY_VALUE_MAX];
 
-    setenv("PULSE_RUNTIME_PATH", "/run/user/32011/pulse/", 1);
+    if (property_get("anbox.pulse_runtime_path", property, "/run/user/1000/pulse") > 0) {
+        setenv("PULSE_RUNTIME_PATH", property, 1);
+    }
 
     ALOGV("adev_open: %s", name);
 

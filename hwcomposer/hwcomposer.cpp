@@ -753,10 +753,13 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
 
     pdev->timeline_fd = sw_sync_timeline_create();
     pdev->next_sync_point = 1;
-    //mExpectAcquireFences = false;
 
-    setenv("XDG_RUNTIME_DIR", "/run/user/32011", 1);
-    setenv("WAYLAND_DISPLAY", "wayland-1", 1);
+    if (property_get("anbox.xdg_runtime_dir", property, "/run/user/1000") > 0) {
+        setenv("XDG_RUNTIME_DIR", property, 1);
+    }
+    if (property_get("anbox.wayland_display", property, "wayland-0") > 0) {
+        setenv("WAYLAND_DISPLAY", property, 1);
+    }
     pdev->display = create_display(&touch_listener, pdev);
     if (!pdev->display) {
         ALOGE("failed to open wayland connection");
