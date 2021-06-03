@@ -30,7 +30,9 @@
 #include <hardware/hwcomposer.h>
 #include <libsync/sw_sync.h>
 #include <sync/sync.h>
+#include <drm_fourcc.h>
 #include <presentation-time-client-protocol.h>
+#include <gralloc_handle.h>
 
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
 #include <cutils/trace.h>
@@ -104,8 +106,11 @@ static struct buffer *get_wl_buffer(struct anbox_hwc_composer_device_1 *pdev, bu
         int format = property_get_int32("anbox.layer.format", HAL_PIXEL_FORMAT_RGBA_8888);
         if (pdev->display->gtype == GRALLOC_ANDROID) {
             ret = create_android_wl_buffer(pdev->display, &pdev->window->buffers[created_buffers], width, height, format, stride, handle);
+        } else if (pdev->display->gtype == GRALLOC_GBM) {
+            struct gralloc_handle_t *drm_handle = (struct gralloc_handle_t *) handle;
+            ret = create_dmabuf_wl_buffer(pdev->display, &pdev->window->buffers[created_buffers], drm_handle->width, drm_handle->height, drm_handle->format, drm_handle->prime_fd, drm_handle->stride, drm_handle->modifier, handle);
         }
-            
+
         if (ret) {
             ALOGE("failed to create a wayland buffer");
             return NULL;
@@ -359,7 +364,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         wl_callback_add_listener(pdev->window->callback, &frame_listener, pdev);
 
         wl_surface_attach(surface, buf->buffer, 0, 0);
-        wl_surface_damage(surface, 0, 0, width, height);
+        wl_surface_damage(surface, 0, 0, buf->width, buf->height);
 
 	    struct wp_presentation *pres = pdev->window->display->presentation;
         if (pres) {

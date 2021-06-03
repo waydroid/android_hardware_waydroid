@@ -39,6 +39,8 @@
 #include <fcntl.h>
 #include <getopt.h>
 #include <errno.h>
+#include <drm_fourcc.h>
+#include <system/graphics.h>
 
 #include <libsync/sw_sync.h>
 #include <sync/sync.h>
@@ -51,6 +53,7 @@
 #include <wayland-client.h>
 #include <wayland-android-client-protocol.h>
 #include "presentation-time-client-protocol.h"
+#include "linux-dmabuf-unstable-v1-client-protocol.h"
 
 struct buffer;
 
@@ -123,6 +126,116 @@ create_android_wl_buffer(struct display *display, struct buffer *buffer,
 	return 0;
 }
 
+static void
+create_succeeded(void *data,
+         struct zwp_linux_buffer_params_v1 *params,
+         struct wl_buffer *new_buffer)
+{
+    struct buffer *buffer = data;
+
+    buffer->buffer = new_buffer;
+    wl_buffer_add_listener(buffer->buffer, &buffer_listener, buffer);
+
+    zwp_linux_buffer_params_v1_destroy(params);
+}
+
+static void
+create_failed(void *data, struct zwp_linux_buffer_params_v1 *params)
+{
+    struct buffer *buffer = data;
+
+    buffer->buffer = NULL;
+
+    zwp_linux_buffer_params_v1_destroy(params);
+
+    ALOGE("%s: zwp_linux_buffer_params.create failed.", __func__);
+}
+
+static const struct zwp_linux_buffer_params_v1_listener params_listener = {
+    create_succeeded,
+    create_failed
+};
+
+bool isFormatSupported(struct display *display, uint32_t format) {
+	for (int i = 0; i < display->formats_count; i++) {
+		if (format == display->formats[i])
+			return true;
+	}
+	return false;
+}
+
+int ConvertHalFormatToDrm(struct display *display, uint32_t hal_format) {
+	uint32_t fmt;
+
+	switch (hal_format) {
+		case HAL_PIXEL_FORMAT_RGB_888:
+			fmt = DRM_FORMAT_BGR888;
+			if (!isFormatSupported(display, fmt))
+				fmt = DRM_FORMAT_RGB888;
+			break;
+		case HAL_PIXEL_FORMAT_BGRA_8888:
+			fmt = DRM_FORMAT_ARGB8888;
+			if (!isFormatSupported(display, fmt))
+				fmt = DRM_FORMAT_ABGR8888;
+			break;
+		case HAL_PIXEL_FORMAT_RGBX_8888:
+			fmt = DRM_FORMAT_XBGR8888;
+			if (!isFormatSupported(display, fmt))
+				fmt = DRM_FORMAT_XRGB8888;
+			break;
+		case HAL_PIXEL_FORMAT_RGBA_8888:
+			fmt = DRM_FORMAT_ABGR8888;
+			if (!isFormatSupported(display, fmt))
+				fmt = DRM_FORMAT_ARGB8888;
+			break;
+		case HAL_PIXEL_FORMAT_RGB_565:
+			fmt = DRM_FORMAT_BGR565;
+			if (!isFormatSupported(display, fmt))
+				fmt = DRM_FORMAT_RGB565;
+			break;
+		case HAL_PIXEL_FORMAT_YV12:
+			fmt = DRM_FORMAT_YVU420;
+			if (!isFormatSupported(display, fmt))
+				fmt = DRM_FORMAT_GR88;
+			break;
+		default:
+			ALOGE("Cannot convert hal format to drm format %u", hal_format);
+			return -EINVAL;
+	}
+	if (!isFormatSupported(display, fmt)) {
+		ALOGE("Current wayland display doesn't support hal format %u", hal_format);
+		return -EINVAL;
+	}
+	return fmt;
+}
+
+int
+create_dmabuf_wl_buffer(struct display *display, struct buffer *buffer,
+             int width, int height, int format,
+             int prime_fd, int stride, uint64_t modifier,
+             buffer_handle_t target)
+{
+    struct zwp_linux_buffer_params_v1 *params;
+
+    assert(prime_fd >= 0);
+    buffer->format = ConvertHalFormatToDrm(display, format);
+    assert(buffer->format >= 0);
+    buffer->width = width;
+    buffer->height = height;
+    buffer->bpp = 32;
+    buffer->handle = target;
+    buffer->stride = stride;
+
+    params = zwp_linux_dmabuf_v1_create_params(display->dmabuf);
+    zwp_linux_buffer_params_v1_add(params, prime_fd, 0, 0, buffer->stride, modifier >> 32, modifier & 0xffffffff);
+    zwp_linux_buffer_params_v1_add_listener(params, &params_listener, buffer);
+
+    buffer->buffer = zwp_linux_buffer_params_v1_create_immed(params, buffer->width, buffer->height, buffer->format, 0);
+    wl_buffer_add_listener(buffer->buffer, &buffer_listener, buffer);
+
+    return 0;
+}
+
 struct window *
 create_window(struct display *display, int width, int height)
 {
@@ -179,6 +292,29 @@ seat_handle_name(void *data, struct wl_seat *seat,
 static const struct wl_seat_listener seat_listener = {
 	seat_handle_capabilities,
 	seat_handle_name,
+};
+
+static void
+dmabuf_modifiers(void *data, struct zwp_linux_dmabuf_v1 *zwp_linux_dmabuf,
+		 uint32_t format, uint32_t modifier_hi, uint32_t modifier_lo)
+{
+	struct display *d = data;
+
+	++d->formats_count;
+	d->formats = realloc(d->formats,
+					d->formats_count * sizeof(*d->formats));
+	d->formats[d->formats_count - 1] = format;
+}
+
+static void
+dmabuf_format(void *data, struct zwp_linux_dmabuf_v1 *zwp_linux_dmabuf, uint32_t format)
+{
+	/* XXX: deprecated */
+}
+
+static const struct zwp_linux_dmabuf_v1_listener dmabuf_listener = {
+	dmabuf_format,
+	dmabuf_modifiers
 };
 
 static void
@@ -261,11 +397,18 @@ registry_handle_global(void *data, struct wl_registry *registry,
 					   &wp_presentation_interface, 1);
 		wp_presentation_add_listener(d->presentation,
 					     &presentation_listener, d);
-	} else if((d->gtype == GRALLOC_ANDROID) &&
-              (strcmp(interface, "android_wlegl") == 0)) {
+	} else if ((d->gtype == GRALLOC_ANDROID) &&
+			   (strcmp(interface, "android_wlegl") == 0)) {
 		d->android_wlegl = wl_registry_bind(registry, id,
 						&android_wlegl_interface, 1);
-	}
+	} else if ((d->gtype == GRALLOC_GBM) &&
+			   (strcmp(interface, "zwp_linux_dmabuf_v1") == 0)) {
+		if (version < 3)
+			return;
+		d->dmabuf = wl_registry_bind(registry, id,
+				&zwp_linux_dmabuf_v1_interface, 3);
+		zwp_linux_dmabuf_v1_add_listener(d->dmabuf, &dmabuf_listener, d);
+    }
 }
 
 static void

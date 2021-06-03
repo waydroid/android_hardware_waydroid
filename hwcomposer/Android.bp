@@ -24,6 +24,8 @@ cc_library_shared {
         "libcutils",
         "libhardware",
         "libsync",
+        "libui",
+        "libdrm",
     ],
     static_libs: [
         "libwayland_client",

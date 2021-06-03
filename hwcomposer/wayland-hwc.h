@@ -35,6 +35,7 @@ struct display {
 	struct wl_output *output;
 	struct wp_presentation *presentation;
 	struct android_wlegl *android_wlegl;
+	struct zwp_linux_dmabuf_v1 *dmabuf;
 	int gtype;
 
 	const struct wl_touch_listener *touch_listener;
@@ -42,6 +43,8 @@ struct display {
 
 	int width;
 	int height;
+	uint32_t *formats;
+	int formats_count;
 };
 
 struct buffer {
@@ -81,6 +84,12 @@ int
 create_android_wl_buffer(struct display *display, struct buffer *buffer,
 		     int width, int height, int format,
 		     int stride, buffer_handle_t target);
+
+int
+create_dmabuf_wl_buffer(struct display *display, struct buffer *buffer,
+             int width, int height, int format,
+             int prime_fd, int stride, uint64_t modifier,
+             buffer_handle_t target);
 
 struct display *
 create_display(const struct wl_touch_listener *touch_listener, void *touch_data, const char* gralloc);
