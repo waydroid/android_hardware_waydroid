@@ -18,17 +18,24 @@ extern "C"
 #include <getopt.h>
 #include <errno.h>
 
+enum {
+	GRALLOC_ANDROID,
+	GRALLOC_GBM,
+	GRALLOC_DEFAULT
+};
+
 struct display {
 	struct wl_display *display;
 	struct wl_registry *registry;
 	struct wl_compositor *compositor;
 	struct wl_subcompositor *subcompositor;
 	struct wl_seat *seat;
+	struct wl_shell *shell;
 	struct wl_touch *touch;
 	struct wl_output *output;
 	struct wp_presentation *presentation;
 	struct android_wlegl *android_wlegl;
-	struct wl_shell *shell;
+	int gtype;
 
 	const struct wl_touch_listener *touch_listener;
 	void *touch_data;
@@ -71,12 +78,12 @@ struct window {
 };
 
 int
-create_wl_buffer(struct display *display, struct buffer *buffer,
-		     int width, int height, int format, uint32_t opts,
+create_android_wl_buffer(struct display *display, struct buffer *buffer,
+		     int width, int height, int format,
 		     int stride, buffer_handle_t target);
 
 struct display *
-create_display(const struct wl_touch_listener *touch_listener, void *touch_data);
+create_display(const struct wl_touch_listener *touch_listener, void *touch_data, const char* gralloc);
 void
 destroy_display(struct display *display);
 

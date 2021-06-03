@@ -102,8 +102,10 @@ static struct buffer *get_wl_buffer(struct anbox_hwc_composer_device_1 *pdev, bu
 
         int stride = property_get_int32("anbox.layer.stride", width);
         int format = property_get_int32("anbox.layer.format", HAL_PIXEL_FORMAT_RGBA_8888);
-        ALOGE("*** %s: stride: %d", __PRETTY_FUNCTION__, stride);
-        ret = create_wl_buffer(pdev->display, &pdev->window->buffers[created_buffers], width, height, format, 0, stride, handle);
+        if (pdev->display->gtype == GRALLOC_ANDROID) {
+            ret = create_android_wl_buffer(pdev->display, &pdev->window->buffers[created_buffers], width, height, format, stride, handle);
+        }
+            
         if (ret) {
             ALOGE("failed to create a wayland buffer");
             return NULL;
@@ -760,7 +762,9 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     if (property_get("anbox.wayland_display", property, "wayland-0") > 0) {
         setenv("WAYLAND_DISPLAY", property, 1);
     }
-    pdev->display = create_display(&touch_listener, pdev);
+    if (property_get("ro.hardware.gralloc", property, "default") > 0) {
+        pdev->display = create_display(&touch_listener, pdev, property);
+    }
     if (!pdev->display) {
         ALOGE("failed to open wayland connection");
         return -ENODEV;

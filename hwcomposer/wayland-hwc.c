@@ -90,8 +90,8 @@ struct wl_shell_surface_listener shell_surface_listener = {
 };
 
 int
-create_wl_buffer(struct display *display, struct buffer *buffer,
-		     int width, int height, int format, uint32_t opts,
+create_android_wl_buffer(struct display *display, struct buffer *buffer,
+		     int width, int height, int format,
 		     int stride, buffer_handle_t target)
 {
 	struct android_wlegl_handle *wlegl_handle;
@@ -102,7 +102,6 @@ create_wl_buffer(struct display *display, struct buffer *buffer,
 	buffer->height = height;
 	buffer->bpp = 32;
 	buffer->format = format;
-
 	buffer->handle = target;
 	buffer->stride = stride;
 
@@ -262,7 +261,8 @@ registry_handle_global(void *data, struct wl_registry *registry,
 					   &wp_presentation_interface, 1);
 		wp_presentation_add_listener(d->presentation,
 					     &presentation_listener, d);
-	} else if(strcmp(interface, "android_wlegl") == 0) {
+	} else if((d->gtype == GRALLOC_ANDROID) &&
+              (strcmp(interface, "android_wlegl") == 0)) {
 		d->android_wlegl = wl_registry_bind(registry, id,
 						&android_wlegl_interface, 1);
 	}
@@ -279,8 +279,20 @@ static const struct wl_registry_listener registry_listener = {
 	registry_handle_global_remove
 };
 
+int
+get_gralloc_type(const char *gralloc)
+{
+    if (strcmp(gralloc, "default") == 0) {
+        return GRALLOC_DEFAULT;
+    } else if (strcmp(gralloc, "gbm") == 0) {
+        return GRALLOC_GBM;
+    } else {
+        return GRALLOC_ANDROID;
+    }
+}
+
 struct display *
-create_display(const struct wl_touch_listener *touch_listener, void *touch_data)
+create_display(const struct wl_touch_listener *touch_listener, void *touch_data, const char *gralloc)
 {
 	struct display *display;
 
@@ -289,6 +301,7 @@ create_display(const struct wl_touch_listener *touch_listener, void *touch_data)
 		fprintf(stderr, "out of memory\n");
 		return NULL;
 	}
+	display->gtype = get_gralloc_type(gralloc);
 	display->display = wl_display_connect(NULL);
 	assert(display->display);
 
