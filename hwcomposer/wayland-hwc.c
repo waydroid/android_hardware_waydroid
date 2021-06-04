@@ -292,6 +292,201 @@ ensure_pipe(struct display* display, int input_type)
 	n++;
 
 static void
+keyboard_handle_keymap(void *data, struct wl_keyboard *keyboard,
+               uint32_t format, int fd, uint32_t size)
+{
+	/* Just so we don’t leak the keymap fd */
+	close(fd);
+}
+
+static void
+keyboard_handle_enter(void *data, struct wl_keyboard *keyboard,
+					  uint32_t serial, struct wl_surface *surface,
+					  struct wl_array *keys)
+{
+}
+
+static void
+keyboard_handle_leave(void *data, struct wl_keyboard *keyboard,
+					  uint32_t serial, struct wl_surface *surface)
+{
+}
+
+static void
+keyboard_handle_key(void *data, struct wl_keyboard *keyboard,
+					uint32_t serial, uint32_t time, uint32_t key,
+					uint32_t state)
+{
+	struct display* display = (struct display*)data;
+	struct input_event event[6];
+	struct timespec rt;
+	int res, n = 0;
+
+	if (ensure_pipe(display, INPUT_KEYBOARD))
+		return;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+		ALOGE("%s:%d error in touch clock_gettime: %s",
+			  __FILE__, __LINE__, strerror(errno));
+	}
+	ADD_EVENT(EV_KEY, key, state);
+
+	res = write(display->input_fd[INPUT_KEYBOARD], &event, sizeof(event));
+	if (res < sizeof(event))
+		ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+}
+
+static void
+keyboard_handle_modifiers(void *data, struct wl_keyboard *keyboard,
+						  uint32_t serial, uint32_t mods_depressed,
+						  uint32_t mods_latched, uint32_t mods_locked,
+						  uint32_t group)
+{
+}
+
+static void
+keyboard_handle_repeat_info(void *data, struct wl_keyboard *keyboard,
+							int32_t rate, int32_t delay)
+{
+}
+
+static const struct wl_keyboard_listener keyboard_listener = {
+	keyboard_handle_keymap,
+	keyboard_handle_enter,
+	keyboard_handle_leave,
+	keyboard_handle_key,
+	keyboard_handle_modifiers,
+	keyboard_handle_repeat_info,
+};
+
+static void
+pointer_handle_enter(void *data, struct wl_pointer *pointer,
+					 uint32_t serial, struct wl_surface *surface,
+					 wl_fixed_t sx, wl_fixed_t sy)
+{
+}
+
+static void
+pointer_handle_leave(void *data, struct wl_pointer *pointer,
+					 uint32_t serial, struct wl_surface *surface)
+{
+}
+
+static void
+pointer_handle_motion(void *data, struct wl_pointer *pointer,
+					  uint32_t time, wl_fixed_t sx, wl_fixed_t sy)
+{
+	struct display* display = (struct display*)data;
+	struct input_event event[6];
+	struct timespec rt;
+	int res, n = 0;
+
+	if (ensure_pipe(display, INPUT_POINTER))
+		return;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+		ALOGE("%s:%d error in touch clock_gettime: %s",
+			  __FILE__, __LINE__, strerror(errno));
+	}
+	ADD_EVENT(EV_ABS, ABS_X, wl_fixed_to_int(sx));
+	ADD_EVENT(EV_ABS, ABS_Y, wl_fixed_to_int(sy));
+	ADD_EVENT(EV_REL, REL_X, display->ptrPrvX - wl_fixed_to_int(sx));
+	ADD_EVENT(EV_REL, REL_Y, display->ptrPrvY - wl_fixed_to_int(sy));
+	ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+	display->ptrPrvX = wl_fixed_to_int(sx);
+	display->ptrPrvY = wl_fixed_to_int(sy);
+
+	res = write(display->input_fd[INPUT_POINTER], &event, sizeof(event));
+	if (res < sizeof(event))
+		ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+}
+
+static void
+pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
+					  uint32_t serial, uint32_t time, uint32_t button,
+					  uint32_t state)
+{
+	struct display* display = (struct display*)data;
+	struct input_event event[6];
+	struct timespec rt;
+	int res, n = 0;
+
+	if (ensure_pipe(display, INPUT_POINTER))
+		return;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+		ALOGE("%s:%d error in touch clock_gettime: %s",
+			  __FILE__, __LINE__, strerror(errno));
+	}
+	ADD_EVENT(EV_KEY, button, state);
+	ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+
+	res = write(display->input_fd[INPUT_POINTER], &event, sizeof(event));
+	if (res < sizeof(event))
+		ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+}
+
+static void
+pointer_handle_axis(void *data, struct wl_pointer *wl_pointer,
+					uint32_t time, uint32_t axis, wl_fixed_t value)
+{
+	struct display* display = (struct display*)data;
+	struct input_event event[6];
+	struct timespec rt;
+	int res, n = 0;
+
+	if (ensure_pipe(display, INPUT_POINTER))
+		return;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+		ALOGE("%s:%d error in touch clock_gettime: %s",
+			  __FILE__, __LINE__, strerror(errno));
+	}
+	ADD_EVENT(EV_REL, (axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
+			  ? REL_WHEEL : REL_HWHEEL, wl_fixed_to_int(value));
+	ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+
+	res = write(display->input_fd[INPUT_POINTER], &event, sizeof(event));
+	if (res < sizeof(event))
+		ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+}
+
+static void
+pointer_handle_axis_source(void *data, struct wl_pointer *wl_pointer,
+						   uint32_t axis_source)
+{
+}
+
+static void
+pointer_handle_axis_stop(void *data, struct wl_pointer *wl_pointer,
+						 uint32_t time, uint32_t axis)
+{
+}
+
+static void
+pointer_handle_axis_discrete(void *data, struct wl_pointer *wl_pointer,
+							 uint32_t axis, int32_t discrete)
+{
+}
+
+static void
+pointer_handle_frame(void *data, struct wl_pointer *wl_pointer)
+{
+}
+
+static const struct wl_pointer_listener pointer_listener = {
+	pointer_handle_enter,
+	pointer_handle_leave,
+	pointer_handle_motion,
+	pointer_handle_button,
+	pointer_handle_axis,
+	pointer_handle_frame,
+	pointer_handle_axis_source,
+	pointer_handle_axis_stop,
+	pointer_handle_axis_discrete,
+};
+
+static void
 touch_handle_down(void *data, struct wl_touch *wl_touch,
 		  uint32_t serial, uint32_t time, struct wl_surface *surface,
 		  int32_t id, wl_fixed_t x_w, wl_fixed_t y_w)
@@ -429,6 +624,30 @@ seat_handle_capabilities(void *data, struct wl_seat *seat,
 			 enum wl_seat_capability caps)
 {
 	struct display *d = data;
+    
+	if ((caps & WL_SEAT_CAPABILITY_POINTER) && !d->pointer) {
+		d->pointer = wl_seat_get_pointer(seat);
+		d->input_fd[INPUT_POINTER] = -1;
+		d->ptrPrvX = 0;
+		d->ptrPrvY = 0;
+		mkfifo(INPUT_PIPE_NAME[INPUT_POINTER], S_IRWXO | S_IRWXG | S_IRWXU);
+		wl_pointer_add_listener(d->pointer, &pointer_listener, d);
+	} else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && d->pointer) {
+		remove(INPUT_PIPE_NAME[INPUT_POINTER]);
+		wl_pointer_destroy(d->pointer);
+		d->pointer = NULL;
+	}
+
+	if ((caps & WL_SEAT_CAPABILITY_KEYBOARD) && !d->keyboard) {
+		d->keyboard = wl_seat_get_keyboard(seat);
+		d->input_fd[INPUT_KEYBOARD] = -1;
+		mkfifo(INPUT_PIPE_NAME[INPUT_KEYBOARD], S_IRWXO | S_IRWXG | S_IRWXU);
+		wl_keyboard_add_listener(d->keyboard, &keyboard_listener, d);
+	} else if (!(caps & WL_SEAT_CAPABILITY_KEYBOARD) && d->keyboard) {
+		remove(INPUT_PIPE_NAME[INPUT_KEYBOARD]);
+		wl_keyboard_destroy(d->keyboard);
+		d->keyboard = NULL;
+	}
 
 	if ((caps & WL_SEAT_CAPABILITY_TOUCH) && !d->touch) {
 		d->touch = wl_seat_get_touch(seat);

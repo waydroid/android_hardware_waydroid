@@ -44,6 +44,8 @@ struct display {
 	struct wl_subcompositor *subcompositor;
 	struct wl_seat *seat;
 	struct wl_shell *shell;
+	struct wl_pointer *pointer;
+	struct wl_keyboard *keyboard;
 	struct wl_touch *touch;
 	struct wl_output *output;
 	struct wp_presentation *presentation;
@@ -52,6 +54,8 @@ struct display {
 	int gtype;
 
 	int input_fd[INPUT_TOTAL];
+	int ptrPrvX;
+	int ptrPrvY;
 
 	int width;
 	int height;
