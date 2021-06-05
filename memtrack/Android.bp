@@ -1,0 +1,12 @@
+cc_library_shared {
+    name: "memtrack.anbox",
+    relative_install_path: "hw",
+    proprietary: true,
+    srcs: ["memtrack.c"],
+    cflags: ["-Wconversion", "-Wall", "-Werror"],
+    include_dirs: [
+        "hardware/libhardware/include",
+        "system/core/libsystem/include",
+    ],
+    shared_libs: ["libcutils"],
+}
