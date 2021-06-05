@@ -77,17 +77,20 @@ static const struct wl_buffer_listener buffer_listener = {
 	buffer_release
 };
 
-void shell_surface_ping(void *data, struct wl_shell_surface *shell_surface, uint32_t serial) {
-    ALOGW("shell surface ping");
+void
+shell_surface_ping(void *data, struct wl_shell_surface *shell_surface, uint32_t serial)
+{
     wl_shell_surface_pong(shell_surface, serial);
 }
 
-void shell_surface_configure(void *data, struct wl_shell_surface *shell_surface, uint32_t edges, int32_t width, int32_t height) {
-    ALOGW("shell surface configure");
+void
+shell_surface_configure(void *data, struct wl_shell_surface *shell_surface, uint32_t edges, int32_t width, int32_t height)
+{
 }
 
-void shell_surface_popup_done(void *data, struct wl_shell_surface *shell_surface) {
-    ALOGW("shell surface popup done");
+void
+shell_surface_popup_done(void *data, struct wl_shell_surface *shell_surface)
+{
 }
 
 struct wl_shell_surface_listener shell_surface_listener = {
