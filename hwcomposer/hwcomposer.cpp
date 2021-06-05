@@ -21,7 +21,6 @@
 #include <sys/resource.h>
 #include <unistd.h>
 #include <wayland-client.h>
-#include <linux/input.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 
@@ -52,8 +51,6 @@ struct anbox_hwc_composer_device_1 {
     pthread_mutex_t vsync_lock;
     bool vsync_callback_enabled; // protected by this->vsync_lock
     uint64_t last_vsync_ns;
-
-    int input_fd;
 
     int timeline_fd;
     int next_sync_point;
@@ -544,162 +541,6 @@ static int hwc_close(hw_device_t* dev) {
     return 0;
 }
 
-#define INPUT_PIPE_NAME "/dev/input/wayland_events"
-
-static int
-ensure_pipe(struct anbox_hwc_composer_device_1* pdev)
-{
-    if (pdev->input_fd == -1) {
-        pdev->input_fd = open(INPUT_PIPE_NAME, O_WRONLY | O_NONBLOCK);
-        if (pdev->input_fd == -1) {
-            ALOGE("Failed to open pipe to InputFlinger: %s", strerror(errno));
-            return -1;
-        }
-    }
-    return 0;
-}
-
-#define ADD_EVENT(type_, code_, value_)            \
-    event[n].time.tv_sec = rt.tv_sec;              \
-    event[n].time.tv_usec = rt.tv_nsec / 1000;     \
-    event[n].type = type_;                         \
-    event[n].code = code_;                         \
-    event[n].value = value_;                       \
-    n++;
-
-static void
-touch_handle_down(void *data, struct wl_touch *wl_touch,
-		  uint32_t serial, uint32_t, struct wl_surface *surface,
-		  int32_t id, wl_fixed_t x_w, wl_fixed_t y_w)
-{
-    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)data;
-    struct input_event event[6];
-    struct timespec rt;
-    int res, n = 0;
-
-    if (ensure_pipe(pdev))
-        return;
-
-    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
-       ALOGE("%s:%d error in touch clock_gettime: %s",
-            __FILE__, __LINE__, strerror(errno));
-    }
-    ADD_EVENT(EV_ABS, ABS_MT_SLOT, id);
-    ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, id);
-    ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, wl_fixed_to_int(x_w));
-    ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, wl_fixed_to_int(y_w));
-    ADD_EVENT(EV_ABS, ABS_MT_PRESSURE, 50);
-    ADD_EVENT(EV_SYN, SYN_REPORT, 0);
-
-    res = write(pdev->input_fd, &event, sizeof(event));
-    if (res < sizeof(event))
-        ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
-}
-
-static void
-touch_handle_up(void *data, struct wl_touch *wl_touch,
-		uint32_t serial, uint32_t, int32_t id)
-{
-    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)data;
-    struct input_event event[4];
-    struct timespec rt;
-    int res, n = 0;
-
-    if (ensure_pipe(pdev))
-        return;
-
-    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
-       ALOGE("%s:%d error in touch clock_gettime: %s",
-            __FILE__, __LINE__, strerror(errno));
-    }
-    ADD_EVENT(EV_ABS, ABS_MT_SLOT, id);
-    ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, -1);
-    ADD_EVENT(EV_SYN, SYN_REPORT, 0);
-
-    res = write(pdev->input_fd, &event, sizeof(event));
-    if (res < sizeof(event))
-        ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
-}
-
-static void
-touch_handle_motion(void *data, struct wl_touch *wl_touch,
-		    uint32_t, int32_t id, wl_fixed_t x_w, wl_fixed_t y_w)
-{
-    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)data;
-    struct input_event event[6];
-    struct timespec rt;
-    int res, n = 0;
-
-    if (ensure_pipe(pdev))
-        return;
-
-    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
-       ALOGE("%s:%d error in touch clock_gettime: %s",
-            __FILE__, __LINE__, strerror(errno));
-    }
-    ADD_EVENT(EV_ABS, ABS_MT_SLOT, id);
-    ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, id);
-    ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, wl_fixed_to_int(x_w));
-    ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, wl_fixed_to_int(y_w));
-    ADD_EVENT(EV_ABS, ABS_MT_PRESSURE, 50);
-    ADD_EVENT(EV_SYN, SYN_REPORT, 0);
-
-    res = write(pdev->input_fd, &event, sizeof(event));
-    if (res < sizeof(event))
-        ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
-}
-
-static void
-touch_handle_frame(void *data, struct wl_touch *wl_touch)
-{
-}
-
-static void
-touch_handle_cancel(void *data, struct wl_touch *wl_touch)
-{
-}
-
-static void
-touch_handle_shape(void *data, struct wl_touch *wl_touch, int32_t id, wl_fixed_t major, wl_fixed_t minor)
-{
-    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)data;
-    struct input_event event[6];
-    struct timespec rt;
-    int res, n = 0;
-
-    if (ensure_pipe(pdev))
-        return;
-
-    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
-       ALOGE("%s:%d error in touch clock_gettime: %s",
-            __FILE__, __LINE__, strerror(errno));
-    }
-    ADD_EVENT(EV_ABS, ABS_MT_SLOT, id);
-    ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, id);
-    ADD_EVENT(EV_ABS, ABS_MT_TOUCH_MAJOR, wl_fixed_to_int(major));
-    ADD_EVENT(EV_ABS, ABS_MT_TOUCH_MINOR, wl_fixed_to_int(minor));
-    ADD_EVENT(EV_SYN, SYN_REPORT, 0);
-
-    res = write(pdev->input_fd, &event, sizeof(event));
-    if (res < sizeof(event))
-        ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
-}
-
-static void
-touch_handle_orientation(void *data, struct wl_touch *wl_touch, int32_t id, wl_fixed_t orientation)
-{
-}
-
-static const struct wl_touch_listener touch_listener = {
-	touch_handle_down,
-	touch_handle_up,
-	touch_handle_motion,
-	touch_handle_frame,
-	touch_handle_cancel,
-	touch_handle_shape,
-	touch_handle_orientation,
-};
-
 static void* hwc_wayland_thread(void* data) {
     struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)data;
     int ret = 0;
@@ -756,8 +597,6 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     pdev->base.getDisplayAttributes = hwc_get_display_attributes;
 
     pdev->vsync_period_ns = 1000*1000*1000/60; // vsync is 60 hz
-    pdev->input_fd = -1;
-
     pdev->timeline_fd = sw_sync_timeline_create();
     pdev->next_sync_point = 1;
 
@@ -768,7 +607,7 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
         setenv("WAYLAND_DISPLAY", property, 1);
     }
     if (property_get("ro.hardware.gralloc", property, "default") > 0) {
-        pdev->display = create_display(&touch_listener, pdev, property);
+        pdev->display = create_display(property);
     }
     if (!pdev->display) {
         ALOGE("failed to open wayland connection");

@@ -35,10 +35,14 @@
 #include <assert.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <signal.h>
+#include <time.h>
 #include <fcntl.h>
 #include <getopt.h>
 #include <errno.h>
+#include <linux/input.h>
 #include <drm_fourcc.h>
 #include <system/graphics.h>
 
@@ -266,6 +270,160 @@ create_window(struct display *display, int width, int height)
 	return window;
 }
 
+static int
+ensure_pipe(struct display* display, int input_type)
+{
+	if (display->input_fd[input_type] == -1) {
+		display->input_fd[input_type] = open(INPUT_PIPE_NAME[input_type], O_WRONLY | O_NONBLOCK);
+		if (display->input_fd[input_type] == -1) {
+			ALOGE("Failed to open pipe to InputFlinger: %s", strerror(errno));
+			return -1;
+		}
+	}
+	return 0;
+}
+
+#define ADD_EVENT(type_, code_, value_)            \
+	event[n].time.tv_sec = rt.tv_sec;              \
+	event[n].time.tv_usec = rt.tv_nsec / 1000;     \
+	event[n].type = type_;                         \
+	event[n].code = code_;                         \
+	event[n].value = value_;                       \
+	n++;
+
+static void
+touch_handle_down(void *data, struct wl_touch *wl_touch,
+		  uint32_t serial, uint32_t time, struct wl_surface *surface,
+		  int32_t id, wl_fixed_t x_w, wl_fixed_t y_w)
+{
+	struct display* display = (struct display*)data;
+	struct input_event event[6];
+	struct timespec rt;
+	int res, n = 0;
+
+	if (ensure_pipe(display, INPUT_TOUCH))
+		return;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+	   ALOGE("%s:%d error in touch clock_gettime: %s",
+			__FILE__, __LINE__, strerror(errno));
+	}
+	ADD_EVENT(EV_ABS, ABS_MT_SLOT, id);
+	ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, id);
+	ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, wl_fixed_to_int(x_w));
+	ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, wl_fixed_to_int(y_w));
+	ADD_EVENT(EV_ABS, ABS_MT_PRESSURE, 50);
+	ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+
+	res = write(display->input_fd[INPUT_TOUCH], &event, sizeof(event));
+	if (res < sizeof(event))
+		ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+}
+
+static void
+touch_handle_up(void *data, struct wl_touch *wl_touch,
+		uint32_t serial, uint32_t time, int32_t id)
+{
+	struct display* display = (struct display*)data;
+	struct input_event event[4];
+	struct timespec rt;
+	int res, n = 0;
+
+	if (ensure_pipe(display, INPUT_TOUCH))
+		return;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+	   ALOGE("%s:%d error in touch clock_gettime: %s",
+			__FILE__, __LINE__, strerror(errno));
+	}
+	ADD_EVENT(EV_ABS, ABS_MT_SLOT, id);
+	ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, -1);
+	ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+
+	res = write(display->input_fd[INPUT_TOUCH], &event, sizeof(event));
+	if (res < sizeof(event))
+		ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+}
+
+static void
+touch_handle_motion(void *data, struct wl_touch *wl_touch,
+			uint32_t time, int32_t id, wl_fixed_t x_w, wl_fixed_t y_w)
+{
+	struct display* display = (struct display*)data;
+	struct input_event event[6];
+	struct timespec rt;
+	int res, n = 0;
+
+	if (ensure_pipe(display, INPUT_TOUCH))
+		return;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+	   ALOGE("%s:%d error in touch clock_gettime: %s",
+			__FILE__, __LINE__, strerror(errno));
+	}
+	ADD_EVENT(EV_ABS, ABS_MT_SLOT, id);
+	ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, id);
+	ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, wl_fixed_to_int(x_w));
+	ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, wl_fixed_to_int(y_w));
+	ADD_EVENT(EV_ABS, ABS_MT_PRESSURE, 50);
+	ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+
+	res = write(display->input_fd[INPUT_TOUCH], &event, sizeof(event));
+	if (res < sizeof(event))
+		ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+}
+
+static void
+touch_handle_frame(void *data, struct wl_touch *wl_touch)
+{
+}
+
+static void
+touch_handle_cancel(void *data, struct wl_touch *wl_touch)
+{
+}
+
+static void
+touch_handle_shape(void *data, struct wl_touch *wl_touch, int32_t id, wl_fixed_t major, wl_fixed_t minor)
+{
+	struct display* display = (struct display*)data;
+	struct input_event event[6];
+	struct timespec rt;
+	int res, n = 0;
+
+	if (ensure_pipe(display, INPUT_TOUCH))
+		return;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+	   ALOGE("%s:%d error in touch clock_gettime: %s",
+			__FILE__, __LINE__, strerror(errno));
+	}
+	ADD_EVENT(EV_ABS, ABS_MT_SLOT, id);
+	ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, id);
+	ADD_EVENT(EV_ABS, ABS_MT_TOUCH_MAJOR, wl_fixed_to_int(major));
+	ADD_EVENT(EV_ABS, ABS_MT_TOUCH_MINOR, wl_fixed_to_int(minor));
+	ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+
+	res = write(display->input_fd[INPUT_TOUCH], &event, sizeof(event));
+	if (res < sizeof(event))
+		ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+}
+
+static void
+touch_handle_orientation(void *data, struct wl_touch *wl_touch, int32_t id, wl_fixed_t orientation)
+{
+}
+
+static const struct wl_touch_listener touch_listener = {
+	touch_handle_down,
+	touch_handle_up,
+	touch_handle_motion,
+	touch_handle_frame,
+	touch_handle_cancel,
+	touch_handle_shape,
+	touch_handle_orientation,
+};
+
 static void
 seat_handle_capabilities(void *data, struct wl_seat *seat,
 			 enum wl_seat_capability caps)
@@ -274,9 +432,12 @@ seat_handle_capabilities(void *data, struct wl_seat *seat,
 
 	if ((caps & WL_SEAT_CAPABILITY_TOUCH) && !d->touch) {
 		d->touch = wl_seat_get_touch(seat);
+		d->input_fd[INPUT_TOUCH] = -1;
+		mkfifo(INPUT_PIPE_NAME[INPUT_TOUCH], S_IRWXO | S_IRWXG | S_IRWXU);
 		wl_touch_set_user_data(d->touch, d);
-		wl_touch_add_listener(d->touch, d->touch_listener, d->touch_data);
+		wl_touch_add_listener(d->touch, &touch_listener, d);
 	} else if (!(caps & WL_SEAT_CAPABILITY_TOUCH) && d->touch) {
+		remove(INPUT_PIPE_NAME[INPUT_TOUCH]);
 		wl_touch_destroy(d->touch);
 		d->touch = NULL;
 	}
@@ -435,7 +596,7 @@ get_gralloc_type(const char *gralloc)
 }
 
 struct display *
-create_display(const struct wl_touch_listener *touch_listener, void *touch_data, const char *gralloc)
+create_display(const char *gralloc)
 {
 	struct display *display;
 
@@ -447,9 +608,6 @@ create_display(const struct wl_touch_listener *touch_listener, void *touch_data,
 	display->gtype = get_gralloc_type(gralloc);
 	display->display = wl_display_connect(NULL);
 	assert(display->display);
-
-	display->touch_listener = touch_listener;
-	display->touch_data = touch_data;
 
 	display->registry = wl_display_get_registry(display->display);
 	wl_registry_add_listener(display->registry,

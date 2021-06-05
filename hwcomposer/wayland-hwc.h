@@ -19,6 +19,19 @@ extern "C"
 #include <errno.h>
 
 enum {
+	INPUT_TOUCH,
+	INPUT_KEYBOARD,
+	INPUT_POINTER,
+	INPUT_TOTAL
+};
+
+static const char *INPUT_PIPE_NAME[INPUT_TOTAL] = {
+	"/dev/input/wl_touch_events",
+	"/dev/input/wl_keyboard_events",
+	"/dev/input/wl_pointer_events"
+};
+
+enum {
 	GRALLOC_ANDROID,
 	GRALLOC_GBM,
 	GRALLOC_DEFAULT
@@ -38,8 +51,7 @@ struct display {
 	struct zwp_linux_dmabuf_v1 *dmabuf;
 	int gtype;
 
-	const struct wl_touch_listener *touch_listener;
-	void *touch_data;
+	int input_fd[INPUT_TOTAL];
 
 	int width;
 	int height;
@@ -92,7 +104,7 @@ create_dmabuf_wl_buffer(struct display *display, struct buffer *buffer,
              buffer_handle_t target);
 
 struct display *
-create_display(const struct wl_touch_listener *touch_listener, void *touch_data, const char* gralloc);
+create_display(const char* gralloc);
 void
 destroy_display(struct display *display);
 
