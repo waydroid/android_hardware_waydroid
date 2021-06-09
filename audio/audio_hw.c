@@ -563,7 +563,7 @@ static int start_input_stream(struct alsa_stream_in *in)
                 in->pcm = NULL;
             }
             if (--pcm_retry_count == 0) {
-                ALOGE("Failed to open pcm_out after %d tries", PCM_OPEN_RETRIES);
+                ALOGE("Failed to open pcm_in after %d tries", PCM_OPEN_RETRIES);
                 adev->active_input = NULL;
                 return -ENODEV;
             }
