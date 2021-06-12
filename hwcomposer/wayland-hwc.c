@@ -692,7 +692,12 @@ dmabuf_modifiers(void *data, struct zwp_linux_dmabuf_v1 *zwp_linux_dmabuf,
 static void
 dmabuf_format(void *data, struct zwp_linux_dmabuf_v1 *zwp_linux_dmabuf, uint32_t format)
 {
-	/* XXX: deprecated */
+	struct display *d = data;
+
+	++d->formats_count;
+	d->formats = realloc(d->formats,
+					d->formats_count * sizeof(*d->formats));
+	d->formats[d->formats_count - 1] = format;
 }
 
 static const struct zwp_linux_dmabuf_v1_listener dmabuf_listener = {
