@@ -37,6 +37,8 @@ enum {
 	GRALLOC_DEFAULT
 };
 
+#define MAX_TOUCHPOINTS 1024
+
 struct display {
 	struct wl_display *display;
 	struct wl_registry *registry;
@@ -56,6 +58,7 @@ struct display {
 	int input_fd[INPUT_TOTAL];
 	int ptrPrvX;
 	int ptrPrvY;
+	int touch_id[MAX_TOUCHPOINTS];
 
 	int width;
 	int height;

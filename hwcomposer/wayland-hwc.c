@@ -489,6 +489,35 @@ static const struct wl_pointer_listener pointer_listener = {
 	pointer_handle_axis_discrete,
 };
 
+static int
+get_touch_id(struct display *display, int id)
+{
+	int i = 0;
+	for (i = 0; i < MAX_TOUCHPOINTS; i++) {
+		if (display->touch_id[i] == id)
+			return i;
+	}
+	for (i = 0; i < MAX_TOUCHPOINTS; i++) {
+		if (display->touch_id[i] == -1) {
+			display->touch_id[i] = id;
+			return i;
+		}
+	}
+	return -1;
+}
+
+static int
+flush_touch_id(struct display *display, int id)
+{
+	for (int i = 0; i < MAX_TOUCHPOINTS; i++) {
+		if (display->touch_id[i] == id) {
+			display->touch_id[i] = -1;
+			return i;
+		}
+	}
+	return -1;
+}
+
 static void
 touch_handle_down(void *data, struct wl_touch *wl_touch,
 		  uint32_t serial, uint32_t time, struct wl_surface *surface,
@@ -506,8 +535,8 @@ touch_handle_down(void *data, struct wl_touch *wl_touch,
 	   ALOGE("%s:%d error in touch clock_gettime: %s",
 			__FILE__, __LINE__, strerror(errno));
 	}
-	ADD_EVENT(EV_ABS, ABS_MT_SLOT, id);
-	ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, id);
+	ADD_EVENT(EV_ABS, ABS_MT_SLOT, get_touch_id(display, id));
+	ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, get_touch_id(display, id));
 	ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, wl_fixed_to_int(x_w));
 	ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, wl_fixed_to_int(y_w));
 	ADD_EVENT(EV_ABS, ABS_MT_PRESSURE, 50);
@@ -534,7 +563,7 @@ touch_handle_up(void *data, struct wl_touch *wl_touch,
 	   ALOGE("%s:%d error in touch clock_gettime: %s",
 			__FILE__, __LINE__, strerror(errno));
 	}
-	ADD_EVENT(EV_ABS, ABS_MT_SLOT, id);
+	ADD_EVENT(EV_ABS, ABS_MT_SLOT, flush_touch_id(display, id));
 	ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, -1);
 	ADD_EVENT(EV_SYN, SYN_REPORT, 0);
 
@@ -559,8 +588,8 @@ touch_handle_motion(void *data, struct wl_touch *wl_touch,
 	   ALOGE("%s:%d error in touch clock_gettime: %s",
 			__FILE__, __LINE__, strerror(errno));
 	}
-	ADD_EVENT(EV_ABS, ABS_MT_SLOT, id);
-	ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, id);
+	ADD_EVENT(EV_ABS, ABS_MT_SLOT, get_touch_id(display, id));
+	ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, get_touch_id(display, id));
 	ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, wl_fixed_to_int(x_w));
 	ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, wl_fixed_to_int(y_w));
 	ADD_EVENT(EV_ABS, ABS_MT_PRESSURE, 50);
@@ -596,8 +625,8 @@ touch_handle_shape(void *data, struct wl_touch *wl_touch, int32_t id, wl_fixed_t
 	   ALOGE("%s:%d error in touch clock_gettime: %s",
 			__FILE__, __LINE__, strerror(errno));
 	}
-	ADD_EVENT(EV_ABS, ABS_MT_SLOT, id);
-	ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, id);
+	ADD_EVENT(EV_ABS, ABS_MT_SLOT, get_touch_id(display, id));
+	ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, get_touch_id(display, id));
 	ADD_EVENT(EV_ABS, ABS_MT_TOUCH_MAJOR, wl_fixed_to_int(major));
 	ADD_EVENT(EV_ABS, ABS_MT_TOUCH_MINOR, wl_fixed_to_int(minor));
 	ADD_EVENT(EV_SYN, SYN_REPORT, 0);
@@ -656,6 +685,8 @@ seat_handle_capabilities(void *data, struct wl_seat *seat,
 		d->touch = wl_seat_get_touch(seat);
 		d->input_fd[INPUT_TOUCH] = -1;
 		mkfifo(INPUT_PIPE_NAME[INPUT_TOUCH], S_IRWXO | S_IRWXG | S_IRWXU);
+		for (int i = 0; i < MAX_TOUCHPOINTS; i++)
+			d->touch_id[i] = -1;
 		wl_touch_set_user_data(d->touch, d);
 		wl_touch_add_listener(d->touch, &touch_listener, d);
 	} else if (!(caps & WL_SEAT_CAPABILITY_TOUCH) && d->touch) {
