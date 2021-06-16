@@ -272,6 +272,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                    hwc_display_contents_1_t** displays) {
 
     struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)dev;
+	struct wl_region *region;
     int width, height;
 
     //ALOGE("*** %s: %d", __PRETTY_FUNCTION__, 1);
@@ -337,17 +338,17 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
          * HWC_FRAMEBUFFER, HWC_SIDEBAND
          * https://android.googlesource.com/platform/hardware/libhardware/+/master/include/hardware/hwcomposer.h#216
          */
-         if (fb_layer->compositionType != HWC_FRAMEBUFFER &&
-             fb_layer->compositionType != HWC_SIDEBAND)
-         {
-             /* To be signaled when the compositor releases the buffer */
-             fb_layer->releaseFenceFd = sw_sync_fence_create(pdev->timeline_fd, "wayland_release", pdev->next_sync_point++);
-             //ALOGE("%s(): fb_layer->releaseFenceFd=%d   fence-sync-point=%d", __func__, fb_layer->releaseFenceFd, pdev->next_sync_point-1);
-             buf->release_fence_fd = fb_layer->releaseFenceFd;
-         } else {
-             buf->release_fence_fd = -1;
-         }
-         buf->timeline_fd = pdev->timeline_fd;
+        if (fb_layer->compositionType != HWC_FRAMEBUFFER &&
+            fb_layer->compositionType != HWC_SIDEBAND)
+        {
+            /* To be signaled when the compositor releases the buffer */
+            fb_layer->releaseFenceFd = sw_sync_fence_create(pdev->timeline_fd, "wayland_release", pdev->next_sync_point++);
+            //ALOGE("%s(): fb_layer->releaseFenceFd=%d   fence-sync-point=%d", __func__, fb_layer->releaseFenceFd, pdev->next_sync_point-1);
+            buf->release_fence_fd = fb_layer->releaseFenceFd;
+        } else {
+            buf->release_fence_fd = -1;
+        }
+        buf->timeline_fd = pdev->timeline_fd;
 
         struct wl_surface *surface = pdev->window->surface;
         if (!surface) {
@@ -356,14 +357,16 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
 
         buf->busy = true;
-
-        pdev->window->callback = wl_surface_frame(surface);
-        wl_callback_add_listener(pdev->window->callback, &frame_listener, pdev);
-
+		
         wl_surface_attach(surface, buf->buffer, 0, 0);
         wl_surface_damage(surface, 0, 0, buf->width, buf->height);
 
-	    struct wp_presentation *pres = pdev->window->display->presentation;
+        region = wl_compositor_create_region(pdev->display->compositor);
+        wl_region_add(region, 0, 0, buf->width, buf->height);
+        wl_surface_set_opaque_region(surface, region);
+        wl_region_destroy(region);
+
+        struct wp_presentation *pres = pdev->window->display->presentation;
         if (pres) {
             buf->feedback = wp_presentation_feedback(pres, surface);
             wp_presentation_feedback_add_listener(buf->feedback,
@@ -631,13 +634,10 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
 
     /* Here we retrieve objects if executed without immed, or error */
     wl_display_roundtrip(pdev->display->display);
-
-    struct wl_region *region;
-    region = wl_compositor_create_region(pdev->display->compositor);
-    wl_region_add(region, 0, 0, width, height);
-    wl_surface_set_opaque_region(pdev->window->surface, region);
-    wl_region_destroy(region);
-    pdev->window->callback = 0;
+	
+    pdev->window->callback = wl_surface_frame(pdev->window->surface);
+    wl_callback_add_listener(pdev->window->callback, &frame_listener, pdev);
+    wl_surface_commit(pdev->window->surface);
 
     pthread_mutex_init(&pdev->vsync_lock, NULL);
     pdev->vsync_callback_enabled = true;

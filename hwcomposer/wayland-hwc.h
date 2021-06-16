@@ -45,7 +45,6 @@ struct display {
 	struct wl_compositor *compositor;
 	struct wl_subcompositor *subcompositor;
 	struct wl_seat *seat;
-	struct wl_shell *shell;
 	struct wl_pointer *pointer;
 	struct wl_keyboard *keyboard;
 	struct wl_touch *touch;
@@ -53,6 +52,7 @@ struct display {
 	struct wp_presentation *presentation;
 	struct android_wlegl *android_wlegl;
 	struct zwp_linux_dmabuf_v1 *dmabuf;
+	struct xdg_wm_base *wm_base;
 	int gtype;
 
 	int input_fd[INPUT_TOTAL];
@@ -80,8 +80,8 @@ struct buffer {
 	unsigned long stride;
 	int format;
 
-   int timeline_fd;
-   int release_fence_fd;
+	int timeline_fd;
+	int release_fence_fd;
 };
 
 #define NUM_BUFFERS 1024
@@ -90,7 +90,8 @@ struct window {
 	struct display *display;
 	int width, height;
 	struct wl_surface *surface;
-	struct wl_shell_surface *shell_surface;
+	struct xdg_surface *xdg_surface;
+	struct xdg_toplevel *xdg_toplevel;
 	struct buffer buffers[NUM_BUFFERS];
 
 	struct buffer *prev_buffer;

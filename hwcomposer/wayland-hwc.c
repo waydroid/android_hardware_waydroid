@@ -56,8 +56,9 @@
 
 #include <wayland-client.h>
 #include <wayland-android-client-protocol.h>
-#include "presentation-time-client-protocol.h"
 #include "linux-dmabuf-unstable-v1-client-protocol.h"
+#include "presentation-time-client-protocol.h"
+#include "xdg-shell-client-protocol.h"
 
 struct buffer;
 
@@ -75,28 +76,6 @@ buffer_release(void *data, struct wl_buffer *buffer)
 
 static const struct wl_buffer_listener buffer_listener = {
 	buffer_release
-};
-
-void
-shell_surface_ping(void *data, struct wl_shell_surface *shell_surface, uint32_t serial)
-{
-    wl_shell_surface_pong(shell_surface, serial);
-}
-
-void
-shell_surface_configure(void *data, struct wl_shell_surface *shell_surface, uint32_t edges, int32_t width, int32_t height)
-{
-}
-
-void
-shell_surface_popup_done(void *data, struct wl_shell_surface *shell_surface)
-{
-}
-
-struct wl_shell_surface_listener shell_surface_listener = {
-	&shell_surface_ping,
-	&shell_surface_configure,
-	&shell_surface_popup_done
 };
 
 int
@@ -243,6 +222,68 @@ create_dmabuf_wl_buffer(struct display *display, struct buffer *buffer,
     return 0;
 }
 
+static struct buffer *
+window_next_buffer(struct window *window)
+{
+	int i;
+
+	for (i = 0; i < NUM_BUFFERS; i++)
+		if (!window->buffers[i].busy)
+			return &window->buffers[i];
+
+	return NULL;
+}
+
+static const struct wl_callback_listener frame_listener;
+
+static void
+redraw(void *data, struct wl_callback *callback, uint32_t time)
+{
+	struct window *window = data;
+	struct buffer *buffer;
+
+	buffer = window_next_buffer(window);
+	if (!buffer) {
+		fprintf(stderr,
+			!callback ? "Failed to create the first buffer.\n" :
+			"All buffers busy at redraw(). Server bug?\n");
+		abort();
+	}
+
+	wl_surface_attach(window->surface, buffer->buffer, 0, 0);
+	wl_surface_damage(window->surface, 0, 0, window->width, window->height);
+
+	if (callback)
+		wl_callback_destroy(callback);
+
+	window->callback = wl_surface_frame(window->surface);
+	wl_callback_add_listener(window->callback, &frame_listener, window);
+	wl_surface_commit(window->surface);
+	buffer->busy = 1;
+}
+
+static const struct wl_callback_listener frame_listener = {
+	redraw
+};
+
+static void
+xdg_surface_handle_configure(void *data, struct xdg_surface *surface,
+				 uint32_t serial)
+{
+	struct window *window = data;
+
+	xdg_surface_ack_configure(surface, serial);
+	
+	if (window->initialized && window->wait_for_configure)
+		redraw(window, NULL, 0);
+
+	window->wait_for_configure = false;
+}
+
+static const struct xdg_surface_listener xdg_surface_listener = {
+	xdg_surface_handle_configure,
+};
+
 struct window *
 create_window(struct display *display, int width, int height)
 {
@@ -258,15 +299,22 @@ create_window(struct display *display, int width, int height)
 	window->height = height;
 	window->surface = wl_compositor_create_surface(display->compositor);
 
-	if (display->shell) {
-		window->shell_surface =
-			wl_shell_get_shell_surface(display->shell,
-									   window->surface);
+	if (display->wm_base) {
+		window->xdg_surface =
+				xdg_wm_base_get_xdg_surface(display->wm_base, window->surface);
+		assert(window->xdg_surface);
+		
+		xdg_surface_add_listener(window->xdg_surface,
+									 &xdg_surface_listener, window);
 
-		assert(window->shell_surface);
-		wl_shell_surface_add_listener(window->shell_surface, &shell_surface_listener, NULL);
+		window->xdg_toplevel = xdg_surface_get_toplevel(window->xdg_surface);
 
-		wl_shell_surface_set_toplevel(window->shell_surface);
+		assert(window->xdg_toplevel);
+
+		xdg_toplevel_set_title(window->xdg_toplevel, "Anbox");
+
+		window->wait_for_configure = true;
+		wl_surface_commit(window->surface);
 	} else {
 		assert(0);
 	}
@@ -652,6 +700,16 @@ static const struct wl_touch_listener touch_listener = {
 };
 
 static void
+xdg_wm_base_ping(void *data, struct xdg_wm_base *wm_base, uint32_t serial)
+{
+	xdg_wm_base_pong(wm_base, serial);
+}
+
+static const struct xdg_wm_base_listener xdg_wm_base_listener = {
+	xdg_wm_base_ping,
+};
+
+static void
 seat_handle_capabilities(void *data, struct wl_seat *seat,
 			 enum wl_seat_capability caps)
 {
@@ -800,9 +858,10 @@ registry_handle_global(void *data, struct wl_registry *registry,
 		d->subcompositor =
 			wl_registry_bind(registry,
 					 id, &wl_subcompositor_interface, 1);
-	} else if(strcmp(interface, "wl_shell") == 0) {
-		d->shell = (struct wl_shell *)wl_registry_bind(
-			           registry, id, &wl_shell_interface, 1);
+	} else if (strcmp(interface, "xdg_wm_base") == 0) {
+		d->wm_base = wl_registry_bind(registry,
+					 id, &xdg_wm_base_interface, 1);
+		xdg_wm_base_add_listener(d->wm_base, &xdg_wm_base_listener, d);
 	} else if (strcmp(interface, "wl_seat") == 0) {
 		d->seat = wl_registry_bind(registry, id,
 					   &wl_seat_interface, 1);
@@ -878,8 +937,8 @@ create_display(const char *gralloc)
 void
 destroy_display(struct display *display)
 {
-	if (display->shell)
-		wl_shell_destroy(display->shell);
+	if (display->wm_base)
+		xdg_wm_base_destroy(display->wm_base);
 
 	if (display->compositor)
 		wl_compositor_destroy(display->compositor);
