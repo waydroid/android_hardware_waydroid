@@ -176,29 +176,29 @@ int ConvertHalFormatToDrm(struct display *display, uint32_t hal_format) {
 
 	switch (hal_format) {
 		case HAL_PIXEL_FORMAT_RGB_888:
-			fmt = DRM_FORMAT_BGR888;
+			fmt = DRM_FORMAT_RGB888;
 			if (!isFormatSupported(display, fmt))
-				fmt = DRM_FORMAT_RGB888;
+				fmt = DRM_FORMAT_BGR888;
 			break;
 		case HAL_PIXEL_FORMAT_BGRA_8888:
-			fmt = DRM_FORMAT_ARGB8888;
-			if (!isFormatSupported(display, fmt))
-				fmt = DRM_FORMAT_ABGR8888;
-			break;
-		case HAL_PIXEL_FORMAT_RGBX_8888:
-			fmt = DRM_FORMAT_XBGR8888;
-			if (!isFormatSupported(display, fmt))
-				fmt = DRM_FORMAT_XRGB8888;
-			break;
-		case HAL_PIXEL_FORMAT_RGBA_8888:
 			fmt = DRM_FORMAT_ABGR8888;
 			if (!isFormatSupported(display, fmt))
 				fmt = DRM_FORMAT_ARGB8888;
 			break;
-		case HAL_PIXEL_FORMAT_RGB_565:
-			fmt = DRM_FORMAT_BGR565;
+		case HAL_PIXEL_FORMAT_RGBX_8888:
+			fmt = DRM_FORMAT_XRGB8888;
 			if (!isFormatSupported(display, fmt))
-				fmt = DRM_FORMAT_RGB565;
+				fmt = DRM_FORMAT_XBGR8888;
+			break;
+		case HAL_PIXEL_FORMAT_RGBA_8888:
+			fmt = DRM_FORMAT_ARGB8888;
+			if (!isFormatSupported(display, fmt))
+				fmt = DRM_FORMAT_ABGR8888;
+			break;
+		case HAL_PIXEL_FORMAT_RGB_565:
+			fmt = DRM_FORMAT_RGB565;
+			if (!isFormatSupported(display, fmt))
+				fmt = DRM_FORMAT_BGR565;
 			break;
 		case HAL_PIXEL_FORMAT_YV12:
 			fmt = DRM_FORMAT_YVU420;
