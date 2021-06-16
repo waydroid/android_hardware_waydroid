@@ -917,7 +917,7 @@ create_display(const char *gralloc)
 {
 	struct display *display;
 
-	display = malloc(sizeof *display);
+	display = calloc(1, sizeof *display);
 	if (display == NULL) {
 		fprintf(stderr, "out of memory\n");
 		return NULL;
