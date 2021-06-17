@@ -54,6 +54,7 @@ struct display {
 	struct zwp_linux_dmabuf_v1 *dmabuf;
 	struct xdg_wm_base *wm_base;
 	int gtype;
+    int scale;
 
 	int input_fd[INPUT_TOTAL];
 	int ptrPrvX;

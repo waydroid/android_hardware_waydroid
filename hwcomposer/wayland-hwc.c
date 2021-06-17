@@ -252,6 +252,8 @@ redraw(void *data, struct wl_callback *callback, uint32_t time)
 
 	wl_surface_attach(window->surface, buffer->buffer, 0, 0);
 	wl_surface_damage(window->surface, 0, 0, window->width, window->height);
+	if (window->display->scale > 1)
+		wl_surface_set_buffer_scale(window->surface, window->display->scale);
 
 	if (callback)
 		wl_callback_destroy(callback);
@@ -430,7 +432,7 @@ pointer_handle_motion(void *data, struct wl_pointer *pointer,
 	struct display* display = (struct display*)data;
 	struct input_event event[6];
 	struct timespec rt;
-	int res, n = 0;
+	int x, y, res, n = 0;
 
 	if (ensure_pipe(display, INPUT_POINTER))
 		return;
@@ -439,13 +441,20 @@ pointer_handle_motion(void *data, struct wl_pointer *pointer,
 		ALOGE("%s:%d error in touch clock_gettime: %s",
 			  __FILE__, __LINE__, strerror(errno));
 	}
-	ADD_EVENT(EV_ABS, ABS_X, wl_fixed_to_int(sx));
-	ADD_EVENT(EV_ABS, ABS_Y, wl_fixed_to_int(sy));
-	ADD_EVENT(EV_REL, REL_X, display->ptrPrvX - wl_fixed_to_int(sx));
-	ADD_EVENT(EV_REL, REL_Y, display->ptrPrvY - wl_fixed_to_int(sy));
+	x = wl_fixed_to_int(sx);
+	y = wl_fixed_to_int(sy);
+	if (display->scale > 1) {
+		x *= display->scale;
+		y *= display->scale;
+	}
+
+	ADD_EVENT(EV_ABS, ABS_X, x);
+	ADD_EVENT(EV_ABS, ABS_Y, y);
+	ADD_EVENT(EV_REL, REL_X, display->ptrPrvX - x);
+	ADD_EVENT(EV_REL, REL_Y, display->ptrPrvY - y);
 	ADD_EVENT(EV_SYN, SYN_REPORT, 0);
-	display->ptrPrvX = wl_fixed_to_int(sx);
-	display->ptrPrvY = wl_fixed_to_int(sy);
+	display->ptrPrvX = x;
+	display->ptrPrvY = y;
 
 	res = write(display->input_fd[INPUT_POINTER], &event, sizeof(event));
 	if (res < sizeof(event))
@@ -574,7 +583,7 @@ touch_handle_down(void *data, struct wl_touch *wl_touch,
 	struct display* display = (struct display*)data;
 	struct input_event event[6];
 	struct timespec rt;
-	int res, n = 0;
+	int x, y, res, n = 0;
 
 	if (ensure_pipe(display, INPUT_TOUCH))
 		return;
@@ -583,10 +592,17 @@ touch_handle_down(void *data, struct wl_touch *wl_touch,
 	   ALOGE("%s:%d error in touch clock_gettime: %s",
 			__FILE__, __LINE__, strerror(errno));
 	}
+	x = wl_fixed_to_int(x_w);
+	y = wl_fixed_to_int(y_w);
+	if (display->scale > 1) {
+		x *= display->scale;
+		y *= display->scale;
+	}
+
 	ADD_EVENT(EV_ABS, ABS_MT_SLOT, get_touch_id(display, id));
 	ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, get_touch_id(display, id));
-	ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, wl_fixed_to_int(x_w));
-	ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, wl_fixed_to_int(y_w));
+	ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, x);
+	ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, y);
 	ADD_EVENT(EV_ABS, ABS_MT_PRESSURE, 50);
 	ADD_EVENT(EV_SYN, SYN_REPORT, 0);
 
@@ -627,7 +643,7 @@ touch_handle_motion(void *data, struct wl_touch *wl_touch,
 	struct display* display = (struct display*)data;
 	struct input_event event[6];
 	struct timespec rt;
-	int res, n = 0;
+	int x, y, res, n = 0;
 
 	if (ensure_pipe(display, INPUT_TOUCH))
 		return;
@@ -636,10 +652,17 @@ touch_handle_motion(void *data, struct wl_touch *wl_touch,
 	   ALOGE("%s:%d error in touch clock_gettime: %s",
 			__FILE__, __LINE__, strerror(errno));
 	}
+	x = wl_fixed_to_int(x_w);
+	y = wl_fixed_to_int(y_w);
+	if (display->scale > 1) {
+		x *= display->scale;
+		y *= display->scale;
+	}
+
 	ADD_EVENT(EV_ABS, ABS_MT_SLOT, get_touch_id(display, id));
 	ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, get_touch_id(display, id));
-	ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, wl_fixed_to_int(x_w));
-	ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, wl_fixed_to_int(y_w));
+	ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, x);
+	ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, y);
 	ADD_EVENT(EV_ABS, ABS_MT_PRESSURE, 50);
 	ADD_EVENT(EV_SYN, SYN_REPORT, 0);
 
@@ -824,6 +847,9 @@ static void
 output_handle_scale(void *data, struct wl_output *wl_output,
 		    int32_t scale)
 {
+	struct display *d = data;
+
+	d->scale = scale;
 }
 
 static const struct wl_output_listener output_listener = {
@@ -868,7 +894,7 @@ registry_handle_global(void *data, struct wl_registry *registry,
 		wl_seat_add_listener(d->seat, &seat_listener, d);
 	} else if (strcmp(interface, "wl_output") == 0) {
 		d->output = wl_registry_bind(registry, id,
-					   &wl_output_interface, 1);
+						&wl_output_interface, version);
 		wl_output_add_listener(d->output, &output_listener, d);
 	} else if (strcmp(interface, "wp_presentation") == 0) {
 		d->presentation = wl_registry_bind(registry, id,
