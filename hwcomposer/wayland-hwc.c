@@ -503,7 +503,7 @@ pointer_handle_axis(void *data, struct wl_pointer *wl_pointer,
 			  __FILE__, __LINE__, strerror(errno));
 	}
 	ADD_EVENT(EV_REL, (axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
-			  ? REL_WHEEL : REL_HWHEEL, wl_fixed_to_int(value));
+			  ? REL_WHEEL : REL_HWHEEL, wl_fixed_to_double(value) / 10.00f);
 	ADD_EVENT(EV_SYN, SYN_REPORT, 0);
 
 	res = write(display->input_fd[INPUT_POINTER], &event, sizeof(event));
