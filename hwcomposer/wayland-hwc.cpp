@@ -90,7 +90,6 @@ create_android_wl_buffer(struct display *display, struct buffer *buffer,
     buffer->width = width;
     buffer->height = height;
     buffer->format = format;
-    buffer->handle = target;
     buffer->stride = stride;
 
     wl_array_init(&ints);
@@ -197,8 +196,7 @@ int ConvertHalFormatToDrm(struct display *display, uint32_t hal_format) {
 int
 create_dmabuf_wl_buffer(struct display *display, struct buffer *buffer,
              int width, int height, int format,
-             int prime_fd, int stride, uint64_t modifier,
-             buffer_handle_t target)
+             int prime_fd, int stride, uint64_t modifier)
 {
     struct zwp_linux_buffer_params_v1 *params;
 
@@ -207,7 +205,6 @@ create_dmabuf_wl_buffer(struct display *display, struct buffer *buffer,
     assert(buffer->format >= 0);
     buffer->width = width;
     buffer->height = height;
-    buffer->handle = target;
     buffer->stride = stride;
 
     params = zwp_linux_dmabuf_v1_create_params(display->dmabuf);
@@ -234,9 +231,7 @@ static const struct xdg_surface_listener xdg_surface_listener = {
 struct window *
 create_window(struct display *display, int width, int height)
 {
-    struct window *window;
-
-    window = (struct window*)calloc(1, sizeof *window);
+    struct window *window = new struct window();
     if (!window)
         return NULL;
 

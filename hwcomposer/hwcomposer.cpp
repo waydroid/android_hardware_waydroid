@@ -80,38 +80,28 @@ static int hwc_prepare(hwc_composer_device_1_t* dev __unused,
 
 static struct buffer *get_wl_buffer(struct anbox_hwc_composer_device_1 *pdev, buffer_handle_t handle, int width, int height)
 {
-    struct buffer *buf = NULL;
-    static unsigned created_buffers = 0;
-    int ret = 0;
+    if (pdev->window->buffer_map.find(handle) == pdev->window->buffer_map.end()) {
+        struct buffer *buf;
+        int ret = 0;
 
-    for (unsigned i = 0; i < created_buffers; i++) {
-        if (pdev->window->buffers[i].handle == handle) {
-            buf = &pdev->window->buffers[i];
-            break;
-        }
-    }
-
-    if (!buf) {
-        assert(created_buffers < NUM_BUFFERS);
-
+        buf = (struct buffer *)calloc(1, sizeof *buf);
         int stride = property_get_int32("anbox.layer.stride", width);
         int format = property_get_int32("anbox.layer.format", HAL_PIXEL_FORMAT_RGBA_8888);
         if (pdev->display->gtype == GRALLOC_ANDROID) {
-            ret = create_android_wl_buffer(pdev->display, &pdev->window->buffers[created_buffers], width, height, format, stride, handle);
+            ret = create_android_wl_buffer(pdev->display, buf, width, height, format, stride, handle);
         } else if (pdev->display->gtype == GRALLOC_GBM) {
             struct gralloc_handle_t *drm_handle = (struct gralloc_handle_t *) handle;
-            ret = create_dmabuf_wl_buffer(pdev->display, &pdev->window->buffers[created_buffers], drm_handle->width, drm_handle->height, drm_handle->format, drm_handle->prime_fd, drm_handle->stride, drm_handle->modifier, handle);
+            ret = create_dmabuf_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, drm_handle->prime_fd, drm_handle->stride, drm_handle->modifier);
         }
 
         if (ret) {
             ALOGE("failed to create a wayland buffer");
             return NULL;
         }
-        buf = &pdev->window->buffers[created_buffers];
-        created_buffers++;
+        pdev->window->buffer_map[handle] = buf;
     }
 
-    return buf;
+    return pdev->window->buffer_map[handle];
 }
 
 static long time_to_sleep_to_next_vsync(struct timespec *rt, uint64_t last_vsync_ns, unsigned vsync_period_ns)
@@ -459,11 +449,11 @@ static int hwc_get_display_attributes(struct hwc_composer_device_1* dev __unused
 static int hwc_close(hw_device_t* dev) {
     struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)dev;
 
-    for (unsigned i = 0; i < NUM_BUFFERS; i++) {
-        if (pdev->window->buffers[i].handle) {
-            wl_buffer_destroy(pdev->window->buffers[i].buffer);
-        }
+    for (std::map<buffer_handle_t, struct buffer *>::iterator it = pdev->window->buffer_map.begin(); it != pdev->window->buffer_map.end(); it++)
+    {
+        wl_buffer_destroy(it->second->buffer);
     }
+    pdev->window->buffer_map.clear();
 
     destroy_display(pdev->display);
 
