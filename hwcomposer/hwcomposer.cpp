@@ -215,7 +215,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                    hwc_display_contents_1_t** displays) {
 
     struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)dev;
-    struct wl_region *region;
     int width, height;
 
     if (!numDisplays || !displays) {
@@ -294,11 +293,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         wl_surface_damage(surface, 0, 0, buf->width, buf->height);
         if (pdev->display->scale > 1)
             wl_surface_set_buffer_scale(surface, pdev->display->scale);
-
-        region = wl_compositor_create_region(pdev->display->compositor);
-        wl_region_add(region, 0, 0, buf->width, buf->height);
-        wl_surface_set_opaque_region(surface, region);
-        wl_region_destroy(region);
 
         struct wp_presentation *pres = pdev->window->display->presentation;
         if (pres) {
