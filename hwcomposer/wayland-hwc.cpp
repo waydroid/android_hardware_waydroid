@@ -229,7 +229,7 @@ static const struct xdg_surface_listener xdg_surface_listener = {
 };
 
 struct window *
-create_window(struct display *display, int width, int height)
+create_window(struct display *display)
 {
     struct window *window = new struct window();
     if (!window)
@@ -237,8 +237,6 @@ create_window(struct display *display, int width, int height)
 
     window->callback = NULL;
     window->display = display;
-    window->width = width;
-    window->height = height;
     window->surface = wl_compositor_create_surface(display->compositor);
 
     if (display->wm_base) {
@@ -757,6 +755,7 @@ output_handle_mode(void *data, struct wl_output *,
 
     d->width = width;
     d->height = height;
+    d->cv.notify_one();
 }
 
 static void

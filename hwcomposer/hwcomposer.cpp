@@ -24,6 +24,7 @@
 #include <wayland-client.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <string>
 
 #include <log/log.h>
 #include <cutils/properties.h>
@@ -390,28 +391,43 @@ static int hwc_get_display_configs(struct hwc_composer_device_1* dev __unused,
 static int32_t hwc_attribute(struct anbox_hwc_composer_device_1* pdev,
                              const uint32_t attribute) {
     char property[PROPERTY_VALUE_MAX];
-    int width = 0;
-    int height = 0;
-    int density = 0;
+    int width = pdev->display->width;
+    int height = pdev->display->height;
+    int density = 120;
 
     switch(attribute) {
         case HWC_DISPLAY_VSYNC_PERIOD:
             return pdev->vsync_period_ns;
         case HWC_DISPLAY_WIDTH:
-            if (property_get("anbox.display_width", property, nullptr) > 0) {
-                width = atoi(property);
+            if (property_get("anbox.display_width", property, nullptr) > 0)
+                return atoi(property);
+            if (width <= 0) {
+                std::unique_lock<std::mutex> lck(pdev->display->mtx);
+                pdev->display->cv.wait(lck);
+                width = pdev->display->width;
             }
+            if (property_get("anbox.display_width_padding", property, nullptr) > 0)
+                width -= atoi(property);
+            property_set("anbox.display_width", std::to_string(width).c_str());
             return width;
         case HWC_DISPLAY_HEIGHT:
-            if (property_get("anbox.display_height", property, nullptr) > 0) {
-                height = atoi(property);
+            if (property_get("anbox.display_height", property, nullptr) > 0)
+                return atoi(property);
+            if (height <= 0) {
+                std::unique_lock<std::mutex> lck(pdev->display->mtx);
+                pdev->display->cv.wait(lck);
+                height = pdev->display->height;
             }
+            if (property_get("anbox.display_height_padding", property, nullptr) > 0)
+                height -= atoi(property);
+            property_set("anbox.display_height", std::to_string(height).c_str());
             return height;
         case HWC_DISPLAY_DPI_X:
         case HWC_DISPLAY_DPI_Y:
-            if (property_get("ro.sf.lcd_density", property, nullptr) > 0) {
+            if (property_get("ro.sf.lcd_density", property, nullptr) > 0)
                 density = atoi(property);
-            }
+            else
+                property_set("ro.sf.lcd_density", std::to_string(density).c_str());
             return density * 1000;
         case HWC_DISPLAY_COLOR_TRANSFORM:
             return HAL_COLOR_TRANSFORM_IDENTITY;
@@ -482,8 +498,6 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
                     struct hw_device_t** device) {
     int ret = 0;
     char property[PROPERTY_VALUE_MAX];
-    int width = 0;
-    int height = 0;
 
     if (strcmp(name, HWC_HARDWARE_COMPOSER)) {
         ALOGE("%s called with bad name %s", __FUNCTION__, name);
@@ -530,15 +544,7 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     }
     ALOGE("wayland display %p", pdev->display);
 
-    if (property_get("anbox.display_width", property, nullptr) > 0) {
-        width = atoi(property);
-    }
-
-    if (property_get("anbox.display_height", property, nullptr) > 0) {
-        height = atoi(property);
-    }
-
-    pdev->window = create_window(pdev->display, width, height);
+    pdev->window = create_window(pdev->display);
     if (!pdev->display) {
         ALOGE("failed to create the wayland window");
         return -ENODEV;

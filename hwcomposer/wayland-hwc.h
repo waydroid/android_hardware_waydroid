@@ -41,6 +41,8 @@
 #include <getopt.h>
 #include <errno.h>
 #include <map>
+#include <mutex>
+#include <condition_variable>
 
 enum {
     INPUT_TOUCH,
@@ -79,6 +81,8 @@ struct display {
     struct xdg_wm_base *wm_base;
     int gtype;
     int scale;
+    std::mutex mtx;
+    std::condition_variable cv;
 
     int input_fd[INPUT_TOTAL];
     int ptrPrvX;
@@ -108,7 +112,6 @@ struct buffer {
 
 struct window {
     struct display *display;
-    int width, height;
     struct wl_surface *surface;
     struct xdg_surface *xdg_surface;
     struct xdg_toplevel *xdg_toplevel;
@@ -132,4 +135,4 @@ void
 destroy_display(struct display *display);
 
 struct window *
-create_window(struct display *display, int width, int height);
+create_window(struct display *display);
