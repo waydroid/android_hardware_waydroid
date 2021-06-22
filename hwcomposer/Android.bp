@@ -34,7 +34,7 @@ cc_library_shared {
     ],
     srcs: [
         "hwcomposer.cpp",
-        "wayland-hwc.c"
+        "wayland-hwc.cpp"
     ],
     header_libs: [
         "libsystem_headers",
@@ -48,8 +48,6 @@ cc_library_shared {
         "-DLOG_TAG=\"hwcomposer\"",
         "-Wall",
         "-Werror",
-        "-Wno-unused-parameter",
-        "-Wno-unused-function",
     ],
     generated_sources: ["wayland_android_client_protocol_sources"],
     generated_headers: ["wayland_android_client_protocol_headers"],

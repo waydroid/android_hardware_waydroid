@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2012 The Android Open Source Project
+ * Copyright (C) 2021 The Anbox Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -56,9 +57,6 @@ struct anbox_hwc_composer_device_1 {
     int next_sync_point;
 };
 
-#define EMIT_VSYNC 0
-#define FENCES 1
-
 static int hwc_prepare(hwc_composer_device_1_t* dev __unused,
                        size_t numDisplays, hwc_display_contents_1_t** displays) {
     if (!numDisplays || !displays) return 0;
@@ -68,7 +66,6 @@ static int hwc_prepare(hwc_composer_device_1_t* dev __unused,
     if (!contents) return 0;
 
     for (size_t i = 0; i < contents->numHwLayers; i++) {
-        //ALOGE("*** %s: contents->hwLayers[i].compositionType %d", __PRETTY_FUNCTION__, contents->hwLayers[i].compositionType);
         if (contents->hwLayers[i].compositionType == HWC_FRAMEBUFFER_TARGET)
             continue;
         if (contents->hwLayers[i].flags & HWC_SKIP_LAYER)
@@ -94,8 +91,6 @@ static struct buffer *get_wl_buffer(struct anbox_hwc_composer_device_1 *pdev, bu
         }
     }
 
-    ///ALOGE("*** %s: %d width %d height %d", __PRETTY_FUNCTION__, 6, width, height);
-
     if (!buf) {
         assert(created_buffers < NUM_BUFFERS);
 
@@ -119,46 +114,13 @@ static struct buffer *get_wl_buffer(struct anbox_hwc_composer_device_1 *pdev, bu
     return buf;
 }
 
-static void
-frame(void *data, struct wl_callback *callback, uint32_t time)
-{
-    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)data;
-    bool vsync_enabled;
-    struct timespec rt;
-
-    pdev->window->callback = 0;
-    if (callback)
-        wl_callback_destroy(callback);
-
-    pthread_mutex_lock(&pdev->vsync_lock);
-    vsync_enabled = pdev->vsync_callback_enabled;
-    pthread_mutex_unlock(&pdev->vsync_lock);
-
-    if (!vsync_enabled)
-        return;
-
-    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
-       ALOGE("%s:%d error in vsync thread clock_gettime: %s",
-            __FILE__, __LINE__, strerror(errno));
-    }
-
-#if EMIT_VSYNC
-    int64_t timestamp = int64_t(rt.tv_sec) * 1e9 + rt.tv_nsec;
-    pdev->procs->vsync(pdev->procs, 0, timestamp);
-#endif
-}
-
-static const struct wl_callback_listener frame_listener = {
-	frame
-};
-
 static long time_to_sleep_to_next_vsync(struct timespec *rt, uint64_t last_vsync_ns, unsigned vsync_period_ns)
 {
-	uint64_t now = (uint64_t)rt->tv_sec * 1e9 + rt->tv_nsec;
-	unsigned frames_since_last_vsync = (now - last_vsync_ns) / vsync_period_ns + 1;
-	uint64_t next_vsync = last_vsync_ns + frames_since_last_vsync * vsync_period_ns;
+    uint64_t now = (uint64_t)rt->tv_sec * 1e9 + rt->tv_nsec;
+    unsigned frames_since_last_vsync = (now - last_vsync_ns) / vsync_period_ns + 1;
+    uint64_t next_vsync = last_vsync_ns + frames_since_last_vsync * vsync_period_ns;
 
-	return next_vsync - now;
+    return next_vsync - now;
 }
 
 static void* hwc_vsync_thread(void* data) {
@@ -181,7 +143,6 @@ static void* hwc_vsync_thread(void* data) {
 
     while (true) {
         ATRACE_BEGIN("hwc_vsync_thread");
-        //ALOGE("%s: sleeping %llu ms until next vsync", __func__, wait_time.tv_nsec / 1e6);
         int err = nanosleep(&wait_time, NULL);
         if (err == -1) {
             if (errno == EINTR) {
@@ -201,9 +162,9 @@ static void* hwc_vsync_thread(void* data) {
                   __FILE__, __LINE__, strerror(errno));
         }
 
-	pthread_mutex_lock(&pdev->vsync_lock);
-	wait_time.tv_nsec = time_to_sleep_to_next_vsync(&rt, pdev->last_vsync_ns, pdev->vsync_period_ns);
-	pthread_mutex_unlock(&pdev->vsync_lock);
+        pthread_mutex_lock(&pdev->vsync_lock);
+        wait_time.tv_nsec = time_to_sleep_to_next_vsync(&rt, pdev->last_vsync_ns, pdev->vsync_period_ns);
+        pthread_mutex_unlock(&pdev->vsync_lock);
 
         if (!vsync_enabled) {
             ATRACE_END();
@@ -219,46 +180,38 @@ static void* hwc_vsync_thread(void* data) {
 }
 
 static void
-feedback_sync_output(void *data,
-		     struct wp_presentation_feedback *presentation_feedback,
-		     struct wl_output *output)
+feedback_sync_output(void *, struct wp_presentation_feedback *,
+             struct wl_output *)
 {
-	/* not interested */
 }
 
 static void
 feedback_presented(void *data,
-		   struct wp_presentation_feedback *presentation_feedback,
-		   uint32_t tv_sec_hi,
-		   uint32_t tv_sec_lo,
-		   uint32_t tv_nsec,
-		   uint32_t refresh_nsec,
-		   uint32_t seq_hi,
-		   uint32_t seq_lo,
-		   uint32_t flags)
+           struct wp_presentation_feedback *,
+           uint32_t tv_sec_hi,
+           uint32_t tv_sec_lo,
+           uint32_t tv_nsec,
+           uint32_t,
+           uint32_t,
+           uint32_t,
+           uint32_t)
 {
-        struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)data;
+    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)data;
 
-        pthread_mutex_lock(&pdev->vsync_lock);
-	pdev->last_vsync_ns = (((uint64_t)tv_sec_hi << 32) + tv_sec_lo) * 1e9 + tv_nsec;
-        pthread_mutex_unlock(&pdev->vsync_lock);
+    pthread_mutex_lock(&pdev->vsync_lock);
+    pdev->last_vsync_ns = (((uint64_t)tv_sec_hi << 32) + tv_sec_lo) * 1e9 + tv_nsec;
+    pthread_mutex_unlock(&pdev->vsync_lock);
 }
 
 static void
-feedback_discarded(void *data,
-		   struct wp_presentation_feedback *presentation_feedback)
+feedback_discarded(void *, struct wp_presentation_feedback *)
 {
-	//struct feedback *feedback = data;
-
-	printf("discarded\n");
-
-	//destroy_feedback(feedback);
 }
 
 static const struct wp_presentation_feedback_listener feedback_listener = {
-	feedback_sync_output,
-	feedback_presented,
-	feedback_discarded
+    feedback_sync_output,
+    feedback_presented,
+    feedback_discarded
 };
 
 inline void getLayerResolution(const hwc_layer_1_t* layer,
@@ -272,15 +225,13 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                    hwc_display_contents_1_t** displays) {
 
     struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)dev;
-	struct wl_region *region;
+    struct wl_region *region;
     int width, height;
 
-    //ALOGE("*** %s: %d", __PRETTY_FUNCTION__, 1);
     if (!numDisplays || !displays) {
         return 0;
     }
 
-    //ALOGE("*** %s: %d", __PRETTY_FUNCTION__, 2);
     hwc_display_contents_1_t* contents = displays[HWC_DISPLAY_PRIMARY];
     contents->retireFenceFd = sw_sync_fence_create(pdev->timeline_fd, "hwc_contents_release", pdev->next_sync_point);
 
@@ -288,13 +239,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     for (size_t layer = 0; layer < contents->numHwLayers; layer++) {
         hwc_layer_1_t* fb_layer = &contents->hwLayers[layer];
         getLayerResolution(fb_layer, width, height);
-#if 0
-        ALOGE("*** %s: composition %d %dx%d flags %x hints %x transform %x blending %x", __PRETTY_FUNCTION__, fb_layer->compositionType,
-              width, height,
-              fb_layer->flags, fb_layer->hints, fb_layer->transform, fb_layer->blending);
-#endif
-
-        //ALOGE("*** %s: %d", __PRETTY_FUNCTION__, 4);
 
         if (fb_layer->flags & HWC_SKIP_LAYER) {
             if (fb_layer->acquireFenceFd != -1) {
@@ -317,7 +261,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             continue;
         }
 
-        //ALOGE("*** %s: %d handle %d", __PRETTY_FUNCTION__, 5, fb_layer->handle->data[0]);
         struct buffer *buf = get_wl_buffer(pdev, fb_layer->handle, width, height);
         if (!buf) {
             ALOGE("Failed to get wayland buffer");
@@ -343,7 +286,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         {
             /* To be signaled when the compositor releases the buffer */
             fb_layer->releaseFenceFd = sw_sync_fence_create(pdev->timeline_fd, "wayland_release", pdev->next_sync_point++);
-            //ALOGE("%s(): fb_layer->releaseFenceFd=%d   fence-sync-point=%d", __func__, fb_layer->releaseFenceFd, pdev->next_sync_point-1);
             buf->release_fence_fd = fb_layer->releaseFenceFd;
         } else {
             buf->release_fence_fd = -1;
@@ -352,12 +294,12 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
         struct wl_surface *surface = pdev->window->surface;
         if (!surface) {
-             ALOGE("Failed to get surface");
-             continue;
+            ALOGE("Failed to get surface");
+            continue;
         }
 
         buf->busy = true;
-		
+
         wl_surface_attach(surface, buf->buffer, 0, 0);
         wl_surface_damage(surface, 0, 0, buf->width, buf->height);
         if (pdev->display->scale > 1)
@@ -372,20 +314,19 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         if (pres) {
             buf->feedback = wp_presentation_feedback(pres, surface);
             wp_presentation_feedback_add_listener(buf->feedback,
-					          &feedback_listener, pdev);
+                              &feedback_listener, pdev);
         }
 
         wl_surface_commit(surface);
 
         const int kAcquireWarningMS = 100;
-        int err = sync_wait(fb_layer->acquireFenceFd, kAcquireWarningMS);
+        err = sync_wait(fb_layer->acquireFenceFd, kAcquireWarningMS);
         if (err < 0 && errno == ETIME) {
-          ALOGE("hwcomposer waited on fence %d for %d ms",
+            ALOGE("hwcomposer waited on fence %d for %d ms",
                 fb_layer->acquireFenceFd, kAcquireWarningMS);
         }
         close(fb_layer->acquireFenceFd);
 
-        //ALOGE("*** %s: Committing buffer %p with fence %d timeline_fd %d next_sync_point %d", __func__, buf, fb_layer->releaseFenceFd, pdev->timeline_fd, pdev->next_sync_point);
         wl_display_flush(pdev->display->display);
     }
 
@@ -404,7 +345,6 @@ static int hwc_query(struct hwc_composer_device_1* dev, int what, int* value) {
     struct anbox_hwc_composer_device_1* pdev =
             (struct anbox_hwc_composer_device_1*)dev;
 
-    ALOGE("*** %s: %d", __PRETTY_FUNCTION__, 1);
     switch (what) {
         case HWC_VSYNC_PERIOD:
             value[0] = pdev->vsync_period_ns;
@@ -435,14 +375,8 @@ static int hwc_event_control(struct hwc_composer_device_1* dev, int dpy __unused
     return ret;
 }
 
-static int hwc_blank(struct hwc_composer_device_1* dev __unused, int disp,
+static int hwc_blank(struct hwc_composer_device_1* dev __unused, int disp __unused,
                      int blank __unused) {
-    ALOGE("*** %s: %d", __PRETTY_FUNCTION__, 1);
-#if 0
-    if (disp != HWC_DISPLAY_PRIMARY) {
-        return -EINVAL;
-    }
-#endif
     return 0;
 }
 
@@ -455,7 +389,6 @@ static void hwc_dump(hwc_composer_device_1* dev __unused, char* buff __unused,
 
 static int hwc_get_display_configs(struct hwc_composer_device_1* dev __unused,
                                    int disp, uint32_t* configs, size_t* numConfigs) {
-    ALOGE("*** %s: %d", __PRETTY_FUNCTION__, 1);
     if (*numConfigs == 0) {
         return 0;
     }
@@ -476,8 +409,6 @@ static int32_t hwc_attribute(struct anbox_hwc_composer_device_1* pdev,
     int width = 0;
     int height = 0;
     int density = 0;
-
-    ALOGE("*** %s: %d", __PRETTY_FUNCTION__, 1);
 
     switch(attribute) {
         case HWC_DISPLAY_VSYNC_PERIOD:
@@ -510,7 +441,6 @@ static int hwc_get_display_attributes(struct hwc_composer_device_1* dev __unused
                                       int disp, uint32_t config __unused,
                                       const uint32_t* attributes, int32_t* values) {
     struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)dev;
-    ALOGE("*** %s: %d", __PRETTY_FUNCTION__, 1);
     for (int i = 0; attributes[i] != HWC_DISPLAY_NO_ATTRIBUTE; i++) {
         if (disp == HWC_DISPLAY_PRIMARY) {
             values[i] = hwc_attribute(pdev, attributes[i]);
@@ -527,8 +457,6 @@ static int hwc_get_display_attributes(struct hwc_composer_device_1* dev __unused
 }
 
 static int hwc_close(hw_device_t* dev) {
-    ALOGE("*** %s: %d", __PRETTY_FUNCTION__, 1);
-
     struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)dev;
 
     for (unsigned i = 0; i < NUM_BUFFERS; i++) {
@@ -549,8 +477,6 @@ static int hwc_close(hw_device_t* dev) {
 static void* hwc_wayland_thread(void* data) {
     struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)data;
     int ret = 0;
-
-    ALOGE("*** %s: %d", __PRETTY_FUNCTION__, 1);
 
     setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
 
@@ -636,9 +562,6 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
 
     /* Here we retrieve objects if executed without immed, or error */
     wl_display_roundtrip(pdev->display->display);
-	
-    pdev->window->callback = wl_surface_frame(pdev->window->surface);
-    wl_callback_add_listener(pdev->window->callback, &frame_listener, pdev);
     wl_surface_commit(pdev->window->surface);
 
     pthread_mutex_init(&pdev->vsync_lock, NULL);
@@ -653,10 +576,10 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     pdev->last_vsync_ns = int64_t(rt.tv_sec) * 1e9 + rt.tv_nsec;
 
     if (!pdev->vsync_thread) {
-	    ret = pthread_create (&pdev->vsync_thread, NULL, hwc_vsync_thread, pdev);
-	    if (ret) {
-		    ALOGE("anbox_hw_composer could not start vsync_thread\n");
-	    }
+        ret = pthread_create (&pdev->vsync_thread, NULL, hwc_vsync_thread, pdev);
+        if (ret) {
+            ALOGE("anbox_hw_composer could not start vsync_thread\n");
+        }
     }
 
     ret = pthread_create (&pdev->wayland_thread, NULL, hwc_wayland_thread, pdev);
