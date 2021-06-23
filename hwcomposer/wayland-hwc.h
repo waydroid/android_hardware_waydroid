@@ -65,6 +65,11 @@ enum {
 
 #define MAX_TOUCHPOINTS 10
 
+struct layerFrame {
+    int x;
+    int y;
+};
+
 struct display {
     struct wl_display *display;
     struct wl_registry *registry;
@@ -88,16 +93,19 @@ struct display {
     int ptrPrvX;
     int ptrPrvY;
     int touch_id[MAX_TOUCHPOINTS];
+    std::map<struct wl_surface *, struct layerFrame> layers;
+    std::map<int, struct wl_surface *> touch_surfaces;
+    struct wl_surface *pointer_surface;
 
     int width;
     int height;
     uint32_t *formats;
     int formats_count;
+    bool geo_changed;
 };
 
 struct buffer {
     struct wl_buffer *buffer;
-    int busy;
     struct wp_presentation_feedback *feedback;
 
     buffer_handle_t handle;
@@ -116,6 +124,8 @@ struct window {
     struct xdg_surface *xdg_surface;
     struct xdg_toplevel *xdg_toplevel;
     std::map<buffer_handle_t, struct buffer *> buffer_map;
+    std::map<size_t, struct wl_surface *> surfaces;
+    std::map<size_t, struct wl_subsurface *> subsurfaces;
     struct wl_callback *callback;
 };
 

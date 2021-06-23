@@ -56,15 +56,21 @@ struct anbox_hwc_composer_device_1 {
 
     int timeline_fd;
     int next_sync_point;
+    bool use_subsurface;
 };
 
-static int hwc_prepare(hwc_composer_device_1_t* dev __unused,
+static int hwc_prepare(hwc_composer_device_1_t* dev,
                        size_t numDisplays, hwc_display_contents_1_t** displays) {
+    struct anbox_hwc_composer_device_1 *pdev = (struct anbox_hwc_composer_device_1 *)dev;
+
     if (!numDisplays || !displays) return 0;
 
     hwc_display_contents_1_t* contents = displays[HWC_DISPLAY_PRIMARY];
 
     if (!contents) return 0;
+
+    if (contents->flags & HWC_GEOMETRY_CHANGED)
+        pdev->display->geo_changed = true;
 
     for (size_t i = 0; i < contents->numHwLayers; i++) {
         if (contents->hwLayers[i].compositionType == HWC_FRAMEBUFFER_TARGET)
@@ -72,8 +78,10 @@ static int hwc_prepare(hwc_composer_device_1_t* dev __unused,
         if (contents->hwLayers[i].flags & HWC_SKIP_LAYER)
             continue;
 
-        if (contents->hwLayers[i].compositionType == HWC_OVERLAY)
-            contents->hwLayers[i].compositionType = HWC_FRAMEBUFFER;
+        if (contents->hwLayers[i].compositionType ==
+            (pdev->use_subsurface ? HWC_FRAMEBUFFER : HWC_OVERLAY))
+            contents->hwLayers[i].compositionType =
+                (pdev->use_subsurface ? HWC_OVERLAY : HWC_FRAMEBUFFER);
     }
 
     return 0;
@@ -81,28 +89,71 @@ static int hwc_prepare(hwc_composer_device_1_t* dev __unused,
 
 static struct buffer *get_wl_buffer(struct anbox_hwc_composer_device_1 *pdev, buffer_handle_t handle, int width, int height)
 {
-    if (pdev->window->buffer_map.find(handle) == pdev->window->buffer_map.end()) {
-        struct buffer *buf;
-        int ret = 0;
-
-        buf = (struct buffer *)calloc(1, sizeof *buf);
-        int stride = property_get_int32("anbox.layer.stride", width);
-        int format = property_get_int32("anbox.layer.format", HAL_PIXEL_FORMAT_RGBA_8888);
-        if (pdev->display->gtype == GRALLOC_ANDROID) {
-            ret = create_android_wl_buffer(pdev->display, buf, width, height, format, stride, handle);
-        } else if (pdev->display->gtype == GRALLOC_GBM) {
-            struct gralloc_handle_t *drm_handle = (struct gralloc_handle_t *) handle;
-            ret = create_dmabuf_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, drm_handle->prime_fd, drm_handle->stride, drm_handle->modifier);
+    auto it = pdev->window->buffer_map.find(handle);
+    if (it != pdev->window->buffer_map.end()) {
+        if (!pdev->display->geo_changed)
+            return it->second;
+        else {
+            if (it->second->buffer)
+                wl_buffer_destroy(it->second->buffer);
+            delete (it->second);
+            pdev->window->buffer_map.erase(it);
         }
-
-        if (ret) {
-            ALOGE("failed to create a wayland buffer");
-            return NULL;
-        }
-        pdev->window->buffer_map[handle] = buf;
     }
 
+    struct buffer *buf;
+    int ret = 0;
+
+    buf = (struct buffer *)calloc(1, sizeof *buf);
+    int stride = property_get_int32("anbox.layer.stride", width);
+    int format = property_get_int32("anbox.layer.format", HAL_PIXEL_FORMAT_RGBA_8888);
+    if (pdev->display->gtype == GRALLOC_ANDROID) {
+        ret = create_android_wl_buffer(pdev->display, buf, width, height, format, stride, handle);
+    } else if (pdev->display->gtype == GRALLOC_GBM) {
+        struct gralloc_handle_t *drm_handle = (struct gralloc_handle_t *) handle;
+        ret = create_dmabuf_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, drm_handle->prime_fd, drm_handle->stride, drm_handle->modifier);
+    }
+
+    if (ret) {
+        ALOGE("failed to create a wayland buffer");
+        return NULL;
+    }
+    pdev->window->buffer_map[handle] = buf;
+
     return pdev->window->buffer_map[handle];
+}
+
+static struct wl_surface *get_surface(struct anbox_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, size_t pos)
+{
+    if (pos == 0 || layer->compositionType == HWC_FRAMEBUFFER_TARGET)
+        return pdev->window->surface;
+
+    struct wl_surface *surface = NULL;
+    struct wl_subsurface *subsurface = NULL;
+    int left = layer->displayFrame.left;
+    int top = layer->displayFrame.top;
+
+    if (pdev->window->surfaces.find(pos) == pdev->window->surfaces.end()) {
+        surface = wl_compositor_create_surface(pdev->display->compositor);
+        subsurface = wl_subcompositor_get_subsurface(pdev->display->subcompositor,
+                                                     surface,
+                                                     pdev->window->surface);
+        pdev->window->surfaces[pos] = surface;
+        pdev->window->subsurfaces[pos] = subsurface;
+    }
+
+    if (pdev->display->scale > 1) {
+        left /= pdev->display->scale;
+        top /= pdev->display->scale;
+    }
+
+    wl_subsurface_set_position(pdev->window->subsurfaces[pos], left, top);
+    wl_subsurface_set_desync(pdev->window->subsurfaces[pos]);
+
+    pdev->display->layers[pdev->window->surfaces[pos]] = {
+        .x = layer->displayFrame.left,
+        .y = layer->displayFrame.top };
+    return pdev->window->surfaces[pos];
 }
 
 static long time_to_sleep_to_next_vsync(struct timespec *rt, uint64_t last_vsync_ns, unsigned vsync_period_ns)
@@ -226,6 +277,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     contents->retireFenceFd = sw_sync_fence_create(pdev->timeline_fd, "hwc_contents_release", pdev->next_sync_point);
 
     int err = 0;
+    int lastLayer = 0;
     for (size_t layer = 0; layer < contents->numHwLayers; layer++) {
         hwc_layer_1_t* fb_layer = &contents->hwLayers[layer];
         getLayerResolution(fb_layer, width, height);
@@ -237,7 +289,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             continue;
         }
 
-        if (fb_layer->compositionType != HWC_FRAMEBUFFER_TARGET) {
+        if (fb_layer->compositionType != 
+            (pdev->use_subsurface ? HWC_OVERLAY : HWC_FRAMEBUFFER_TARGET)) {
             if (fb_layer->acquireFenceFd != -1) {
                 close(fb_layer->acquireFenceFd);
             }
@@ -260,13 +313,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             continue;
         }
 
-        if (buf->busy) {
-            if (fb_layer->acquireFenceFd != -1) {
-                close(fb_layer->acquireFenceFd);
-            }
-            continue;
-        }
-
         /* These layers do not require a releaseFenceFD to be created:
          * HWC_FRAMEBUFFER, HWC_SIDEBAND
          * https://android.googlesource.com/platform/hardware/libhardware/+/master/include/hardware/hwcomposer.h#216
@@ -282,13 +328,12 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
         buf->timeline_fd = pdev->timeline_fd;
 
-        struct wl_surface *surface = pdev->window->surface;
+        struct wl_surface *surface = get_surface(pdev, fb_layer, layer);
         if (!surface) {
             ALOGE("Failed to get surface");
             continue;
         }
-
-        buf->busy = true;
+        lastLayer = layer;
 
         wl_surface_attach(surface, buf->buffer, 0, 0);
         wl_surface_damage(surface, 0, 0, buf->width, buf->height);
@@ -303,6 +348,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
 
         wl_surface_commit(surface);
+        if (surface != pdev->window->surface)
+            wl_surface_commit(pdev->window->surface);
 
         const int kAcquireWarningMS = 100;
         err = sync_wait(fb_layer->acquireFenceFd, kAcquireWarningMS);
@@ -311,9 +358,22 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                 fb_layer->acquireFenceFd, kAcquireWarningMS);
         }
         close(fb_layer->acquireFenceFd);
-
-        wl_display_flush(pdev->display->display);
     }
+    if (pdev->display->geo_changed) {
+        for (int l = lastLayer; l > 0; l--)
+            if (pdev->window->subsurfaces[l])
+                wl_subsurface_place_above(pdev->window->subsurfaces[l], pdev->window->surface);
+        wl_surface_commit(pdev->window->surface);
+        for (int l = lastLayer + 1; l <= pdev->window->surfaces.size(); l++) {
+            if (pdev->window->surfaces[l]) {
+                wl_surface_attach(pdev->window->surfaces[l], NULL, 0, 0);
+                wl_surface_commit(pdev->window->surfaces[l]);
+                wl_surface_commit(pdev->window->surface);
+            }
+        }
+        pdev->display->geo_changed = false;
+    }
+    wl_display_flush(pdev->display->display);
 
     /* TODO: According to[1] the contents->retireFenceFd is the responsibility
      * of SurfaceFlinger to close, but leaving it open is causing a graphical
@@ -534,6 +594,9 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     }
     if (property_get("anbox.wayland_display", property, "wayland-0") > 0) {
         setenv("WAYLAND_DISPLAY", property, 1);
+    }
+    if (property_get_bool("anbox.use_subsurface", false)) {
+        pdev->use_subsurface = true;
     }
     if (property_get("ro.hardware.gralloc", property, "default") > 0) {
         pdev->display = create_display(property);

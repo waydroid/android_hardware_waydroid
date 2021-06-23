@@ -68,7 +68,6 @@ buffer_release(void *data, struct wl_buffer *)
 {
     struct buffer *mybuf = (struct buffer*)data;
 
-    mybuf->busy = false;
     sw_sync_timeline_inc(mybuf->timeline_fd, 1);
     close(mybuf->release_fence_fd);
     mybuf->release_fence_fd = -1;
@@ -347,16 +346,20 @@ static const struct wl_keyboard_listener keyboard_listener = {
 };
 
 static void
-pointer_handle_enter(void *, struct wl_pointer *,
-                     uint32_t, struct wl_surface *,
+pointer_handle_enter(void *data, struct wl_pointer *,
+                     uint32_t, struct wl_surface *surface,
                      wl_fixed_t, wl_fixed_t)
 {
+    struct display *display = (struct display *)data;
+    display->pointer_surface = surface;
 }
 
 static void
-pointer_handle_leave(void *, struct wl_pointer *,
+pointer_handle_leave(void *data, struct wl_pointer *,
                      uint32_t, struct wl_surface *)
 {
+    struct display *display = (struct display *)data;
+    display->pointer_surface = NULL;
 }
 
 static void
@@ -371,6 +374,9 @@ pointer_handle_motion(void *data, struct wl_pointer *,
     if (ensure_pipe(display, INPUT_POINTER))
         return;
 
+    if (!display->pointer_surface)
+        return;
+
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
         ALOGE("%s:%d error in touch clock_gettime: %s",
               __FILE__, __LINE__, strerror(errno));
@@ -381,6 +387,8 @@ pointer_handle_motion(void *data, struct wl_pointer *,
         x *= display->scale;
         y *= display->scale;
     }
+    x += display->layers[display->pointer_surface].x;
+    y += display->layers[display->pointer_surface].y;
 
     ADD_EVENT(EV_ABS, ABS_X, x);
     ADD_EVENT(EV_ABS, ABS_Y, y);
@@ -508,7 +516,7 @@ flush_touch_id(struct display *display, int id)
 
 static void
 touch_handle_down(void *data, struct wl_touch *,
-          uint32_t, uint32_t, struct wl_surface *,
+          uint32_t, uint32_t, struct wl_surface *surface,
           int32_t id, wl_fixed_t x_w, wl_fixed_t y_w)
 {
     struct display* display = (struct display*)data;
@@ -518,6 +526,8 @@ touch_handle_down(void *data, struct wl_touch *,
 
     if (ensure_pipe(display, INPUT_TOUCH))
         return;
+
+    display->touch_surfaces[id] = surface;
 
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
        ALOGE("%s:%d error in touch clock_gettime: %s",
@@ -529,6 +539,8 @@ touch_handle_down(void *data, struct wl_touch *,
         x *= display->scale;
         y *= display->scale;
     }
+    x += display->layers[surface].x;
+    y += display->layers[surface].y;
 
     ADD_EVENT(EV_ABS, ABS_MT_SLOT, get_touch_id(display, id));
     ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, get_touch_id(display, id));
@@ -558,6 +570,8 @@ touch_handle_up(void *data, struct wl_touch *,
        ALOGE("%s:%d error in touch clock_gettime: %s",
             __FILE__, __LINE__, strerror(errno));
     }
+    display->touch_surfaces[id] = NULL;
+
     ADD_EVENT(EV_ABS, ABS_MT_SLOT, flush_touch_id(display, id));
     ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, -1);
     ADD_EVENT(EV_SYN, SYN_REPORT, 0);
@@ -589,6 +603,8 @@ touch_handle_motion(void *data, struct wl_touch *,
         x *= display->scale;
         y *= display->scale;
     }
+    x += display->layers[display->touch_surfaces[id]].x;
+    y += display->layers[display->touch_surfaces[id]].y;
 
     ADD_EVENT(EV_ABS, ABS_MT_SLOT, get_touch_id(display, id));
     ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, get_touch_id(display, id));
@@ -870,9 +886,7 @@ get_gralloc_type(const char *gralloc)
 struct display *
 create_display(const char *gralloc)
 {
-    struct display *display;
-
-    display = (struct display*)calloc(1, sizeof *display);
+    struct display *display = new struct display();
     if (display == NULL) {
         fprintf(stderr, "out of memory\n");
         return NULL;
