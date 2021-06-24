@@ -881,6 +881,7 @@ create_display(const char *gralloc)
     display->display = wl_display_connect(NULL);
     assert(display->display);
 
+    mkdir("/dev/input", S_IRWXO | S_IRWXG | S_IRWXU);
     display->registry = wl_display_get_registry(display->display);
     wl_registry_add_listener(display->registry,
                  &registry_listener, display);
