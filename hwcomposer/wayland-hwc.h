@@ -70,6 +70,11 @@ struct layerFrame {
     int y;
 };
 
+struct handleExt {
+    uint32_t format;
+    uint32_t stride;
+};
+
 struct display {
     struct wl_display *display;
     struct wl_registry *registry;
@@ -102,6 +107,9 @@ struct display {
     uint32_t *formats;
     int formats_count;
     bool geo_changed;
+    std::map<uint32_t, const char*> layer_names;
+    std::map<uint32_t, struct handleExt> layer_handles_ext;
+    struct handleExt target_layer_handle_ext;
 };
 
 struct buffer {

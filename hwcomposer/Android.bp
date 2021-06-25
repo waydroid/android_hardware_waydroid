@@ -23,9 +23,11 @@ cc_library_shared {
         "libutils",
         "libcutils",
         "libhardware",
+        "libhidlbase",
         "libsync",
         "libui",
         "libdrm",
+        "vendor.anbox.display@1.0",
     ],
     static_libs: [
         "libwayland_client",
@@ -33,6 +35,7 @@ cc_library_shared {
         "libwayland_extension_client_protocols",
     ],
     srcs: [
+        "extension.cpp",
         "hwcomposer.cpp",
         "wayland-hwc.cpp"
     ],

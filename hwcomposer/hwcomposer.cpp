@@ -39,13 +39,24 @@
 #include <cutils/trace.h>
 #include <utils/Trace.h>
 
-#include "wayland-hwc.h"
+#include "extension.h"
+
+using ::android::hardware::configureRpcThreadpool;
+using ::android::hardware::joinRpcThreadpool;
+
+using ::vendor::anbox::display::V1_0::IAnboxDisplay;
+using ::vendor::anbox::display::V1_0::implementation::AnboxDisplay;
+
+using ::android::OK;
+using ::android::sp;
+using ::android::status_t;
 
 struct anbox_hwc_composer_device_1 {
     hwc_composer_device_1_t base; // constant after init
     const hwc_procs_t *procs;     // constant after init
     pthread_t wayland_thread;     // constant after init
     pthread_t vsync_thread;       // constant after init
+    pthread_t extension_thread;   // constant after init
     int32_t vsync_period_ns;      // constant after init
     struct display *display;      // constant after init
     struct window *window;        // constant after init
@@ -548,6 +559,36 @@ static void* hwc_wayland_thread(void* data) {
     return NULL;
 }
 
+static void* hwc_extension_thread(void* data) {
+    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)data;
+    sp<IAnboxDisplay> anboxDisplay;
+    status_t status;
+
+    setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
+
+    anboxDisplay = new AnboxDisplay(pdev->display);
+    if (anboxDisplay == nullptr) {
+        ALOGE("Can not create an instance of Anbox Display HAL, exiting.");
+        goto shutdown;
+    }
+
+    configureRpcThreadpool(1, true /*callerWillJoin*/);
+
+    status = anboxDisplay->registerAsService();
+    if (status != OK) {
+        ALOGE("Could not register service for Anbox Display HAL (%d).", status);
+    }
+
+    ALOGI("Anbox Display HAL thread is ready.");
+    joinRpcThreadpool();
+    // Should not pass this line
+
+shutdown:
+    // In normal operation, we don't expect the thread pool to shutdown
+    ALOGE("Anbox Display HAL service is shutting down.");
+    return NULL;
+}
+
 static void hwc_register_procs(struct hwc_composer_device_1* dev,
                                hwc_procs_t const* procs) {
     struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)dev;
@@ -638,6 +679,11 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     ret = pthread_create (&pdev->wayland_thread, NULL, hwc_wayland_thread, pdev);
     if (ret) {
         ALOGE("anbox_hw_composer could not start wayland_thread\n");
+    }
+
+    ret = pthread_create (&pdev->extension_thread, NULL, hwc_extension_thread, pdev);
+    if (ret) {
+        ALOGE("anbox_hw_composer could not start extension_thread\n");
     }
 
     *device = &pdev->base.common;
