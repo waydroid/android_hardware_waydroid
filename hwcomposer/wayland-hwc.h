@@ -31,7 +31,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
+#include <string>
 #include <stdbool.h>
 #include <assert.h>
 #include <unistd.h>
@@ -107,7 +107,7 @@ struct display {
     uint32_t *formats;
     int formats_count;
     bool geo_changed;
-    std::map<uint32_t, const char*> layer_names;
+    std::map<uint32_t, std::string> layer_names;
     std::map<uint32_t, struct handleExt> layer_handles_ext;
     struct handleExt target_layer_handle_ext;
 };

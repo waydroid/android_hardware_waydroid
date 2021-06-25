@@ -17,7 +17,6 @@
 #include <errno.h>
 #include <pthread.h>
 #include <stdlib.h>
-#include <string.h>
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <unistd.h>
@@ -98,9 +97,9 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
     return 0;
 }
 
-static struct buffer *get_wl_buffer(struct anbox_hwc_composer_device_1 *pdev, buffer_handle_t handle, int width, int height)
+static struct buffer *get_wl_buffer(struct anbox_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, size_t pos)
 {
-    auto it = pdev->window->buffer_map.find(handle);
+    auto it = pdev->window->buffer_map.find(layer->handle);
     if (it != pdev->window->buffer_map.end()) {
         if (!pdev->display->geo_changed)
             return it->second;
@@ -116,12 +115,21 @@ static struct buffer *get_wl_buffer(struct anbox_hwc_composer_device_1 *pdev, bu
     int ret = 0;
 
     buf = (struct buffer *)calloc(1, sizeof *buf);
-    int stride = property_get_int32("anbox.layer.stride", width);
-    int format = property_get_int32("anbox.layer.format", HAL_PIXEL_FORMAT_RGBA_8888);
     if (pdev->display->gtype == GRALLOC_ANDROID) {
-        ret = create_android_wl_buffer(pdev->display, buf, width, height, format, stride, handle);
+        int width = layer->displayFrame.right - layer->displayFrame.left;
+        int height = layer->displayFrame.bottom - layer->displayFrame.top;
+        uint32_t format = HAL_PIXEL_FORMAT_RGBA_8888;
+        uint32_t stride = width;
+        if (layer->compositionType == HWC_FRAMEBUFFER_TARGET) {
+            format = pdev->display->target_layer_handle_ext.format;
+            stride = pdev->display->target_layer_handle_ext.stride;
+        } else {
+            format = pdev->display->layer_handles_ext[pos].format;
+            stride = pdev->display->layer_handles_ext[pos].stride;
+        }
+        ret = create_android_wl_buffer(pdev->display, buf, width, height, format, stride, layer->handle);
     } else if (pdev->display->gtype == GRALLOC_GBM) {
-        struct gralloc_handle_t *drm_handle = (struct gralloc_handle_t *) handle;
+        struct gralloc_handle_t *drm_handle = (struct gralloc_handle_t *) layer->handle;
         ret = create_dmabuf_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, drm_handle->prime_fd, drm_handle->stride, drm_handle->modifier);
     }
 
@@ -129,9 +137,9 @@ static struct buffer *get_wl_buffer(struct anbox_hwc_composer_device_1 *pdev, bu
         ALOGE("failed to create a wayland buffer");
         return NULL;
     }
-    pdev->window->buffer_map[handle] = buf;
+    pdev->window->buffer_map[layer->handle] = buf;
 
-    return pdev->window->buffer_map[handle];
+    return pdev->window->buffer_map[layer->handle];
 }
 
 static struct wl_surface *get_surface(struct anbox_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, size_t pos)
@@ -267,18 +275,10 @@ static const struct wp_presentation_feedback_listener feedback_listener = {
     feedback_discarded
 };
 
-inline void getLayerResolution(const hwc_layer_1_t* layer,
-                               int& width, int& height) {
-    hwc_rect_t displayFrame  = layer->displayFrame;
-    width = displayFrame.right - displayFrame.left;
-    height = displayFrame.bottom - displayFrame.top;
-}
-
 static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                    hwc_display_contents_1_t** displays) {
 
     struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)dev;
-    int width, height;
 
     if (!numDisplays || !displays) {
         return 0;
@@ -291,7 +291,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     int lastLayer = 0;
     for (size_t layer = 0; layer < contents->numHwLayers; layer++) {
         hwc_layer_1_t* fb_layer = &contents->hwLayers[layer];
-        getLayerResolution(fb_layer, width, height);
 
         if (fb_layer->flags & HWC_SKIP_LAYER) {
             if (fb_layer->acquireFenceFd != -1) {
@@ -315,7 +314,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             continue;
         }
 
-        struct buffer *buf = get_wl_buffer(pdev, fb_layer->handle, width, height);
+        struct buffer *buf = get_wl_buffer(pdev, fb_layer, layer);
         if (!buf) {
             ALOGE("Failed to get wayland buffer");
             if (fb_layer->acquireFenceFd != -1) {

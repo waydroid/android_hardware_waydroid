@@ -29,7 +29,7 @@ AnboxDisplay::AnboxDisplay(struct display *display)
 
 // Methods from ::vendor::anbox::display::V1_0::IAnboxDisplay follow.
 Return<Error> AnboxDisplay::setLayerName(uint32_t layer, const hidl_string &name) {
-    mDisplay->layer_names[layer] = std::string(name).c_str();
+    mDisplay->layer_names[layer] = std::string(name);
     return Error::NONE;
 }
 Return<Error> AnboxDisplay::setLayerHandleInfo(uint32_t layer, uint32_t format, uint32_t stride) {
