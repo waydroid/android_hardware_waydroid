@@ -24,6 +24,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <string>
+#include <sstream>
 
 #include <log/log.h>
 #include <cutils/properties.h>
@@ -58,7 +59,7 @@ struct anbox_hwc_composer_device_1 {
     pthread_t extension_thread;   // constant after init
     int32_t vsync_period_ns;      // constant after init
     struct display *display;      // constant after init
-    struct window *window;        // constant after init
+    std::map<std::string, struct window *> windows;
 
     pthread_mutex_t vsync_lock;
     bool vsync_callback_enabled; // protected by this->vsync_lock
@@ -79,7 +80,7 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
 
     if (!contents) return 0;
 
-    if (contents->flags & HWC_GEOMETRY_CHANGED)
+    if ((contents->flags & HWC_GEOMETRY_CHANGED) && pdev->use_subsurface)
         pdev->display->geo_changed = true;
 
     for (size_t i = 0; i < contents->numHwLayers; i++) {
@@ -99,15 +100,15 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
 
 static struct buffer *get_wl_buffer(struct anbox_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, size_t pos)
 {
-    auto it = pdev->window->buffer_map.find(layer->handle);
-    if (it != pdev->window->buffer_map.end()) {
+    auto it = pdev->display->buffer_map.find(layer->handle);
+    if (it != pdev->display->buffer_map.end()) {
         if (!pdev->display->geo_changed)
             return it->second;
         else {
             if (it->second->buffer)
                 wl_buffer_destroy(it->second->buffer);
             delete (it->second);
-            pdev->window->buffer_map.erase(it);
+            pdev->display->buffer_map.erase(it);
         }
     }
 
@@ -137,28 +138,25 @@ static struct buffer *get_wl_buffer(struct anbox_hwc_composer_device_1 *pdev, hw
         ALOGE("failed to create a wayland buffer");
         return NULL;
     }
-    pdev->window->buffer_map[layer->handle] = buf;
+    pdev->display->buffer_map[layer->handle] = buf;
 
-    return pdev->window->buffer_map[layer->handle];
+    return pdev->display->buffer_map[layer->handle];
 }
 
-static struct wl_surface *get_surface(struct anbox_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, size_t pos)
+static struct wl_surface *get_surface(struct anbox_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, struct window *window)
 {
-    if (pos == 0 || layer->compositionType == HWC_FRAMEBUFFER_TARGET)
-        return pdev->window->surface;
-
     struct wl_surface *surface = NULL;
     struct wl_subsurface *subsurface = NULL;
     int left = layer->displayFrame.left;
     int top = layer->displayFrame.top;
 
-    if (pdev->window->surfaces.find(pos) == pdev->window->surfaces.end()) {
+    if (window->surfaces.find(window->lastLayer) == window->surfaces.end()) {
         surface = wl_compositor_create_surface(pdev->display->compositor);
         subsurface = wl_subcompositor_get_subsurface(pdev->display->subcompositor,
                                                      surface,
-                                                     pdev->window->surface);
-        pdev->window->surfaces[pos] = surface;
-        pdev->window->subsurfaces[pos] = subsurface;
+                                                     window->surface);
+        window->surfaces[window->lastLayer] = surface;
+        window->subsurfaces[window->lastLayer] = subsurface;
     }
 
     if (pdev->display->scale > 1) {
@@ -166,13 +164,13 @@ static struct wl_surface *get_surface(struct anbox_hwc_composer_device_1 *pdev, 
         top /= pdev->display->scale;
     }
 
-    wl_subsurface_set_position(pdev->window->subsurfaces[pos], left, top);
-    wl_subsurface_set_desync(pdev->window->subsurfaces[pos]);
+    wl_subsurface_set_position(window->subsurfaces[window->lastLayer], left, top);
+    wl_subsurface_set_desync(window->subsurfaces[window->lastLayer]);
 
-    pdev->display->layers[pdev->window->surfaces[pos]] = {
+    pdev->display->layers[window->surfaces[window->lastLayer]] = {
         .x = layer->displayFrame.left,
         .y = layer->displayFrame.top };
-    return pdev->window->surfaces[pos];
+    return window->surfaces[window->lastLayer];
 }
 
 static long time_to_sleep_to_next_vsync(struct timespec *rt, uint64_t last_vsync_ns, unsigned vsync_period_ns)
@@ -277,7 +275,7 @@ static const struct wp_presentation_feedback_listener feedback_listener = {
 
 static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                    hwc_display_contents_1_t** displays) {
-
+    char property[PROPERTY_VALUE_MAX];
     struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)dev;
 
     if (!numDisplays || !displays) {
@@ -287,8 +285,132 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     hwc_display_contents_1_t* contents = displays[HWC_DISPLAY_PRIMARY];
     contents->retireFenceFd = sw_sync_fence_create(pdev->timeline_fd, "hwc_contents_release", pdev->next_sync_point);
 
+    /*
+     * In prop "persist.anbox.multi_windows" we detect HWC let SF rander layers 
+     * And just show the target client layer (single windows mode) or
+     * render each layers in wayland surface and subsurfaces.
+     * In prop "anbox.active_apps" we select apps that needed to be shown in window
+     * and here if HWC is in single mode we show the screen only if needed apps are in screen
+     * and in multi windows mode we group layers with same APP ID in a wayland window.
+     * 
+     * "anbox.active_apps" prop can be: 
+     * "none": No windows
+     * "full": Shows android screen in a single window
+     * "AppID1:AppID2:AppID3:...": Shows this selected apps in related windows as explained above
+     */
+    property_get("anbox.active_apps", property, "none");
+    std::string active_apps = std::string(property);
+    if (active_apps == "none") {
+        // Clear all open windows
+        for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
+            if (it->second)
+                destroy_window(it->second);
+        }
+        pdev->windows.clear();
+        for (size_t layer = 0; layer < contents->numHwLayers; layer++) {
+            hwc_layer_1_t* fb_layer = &contents->hwLayers[layer];
+            if (fb_layer->acquireFenceFd != -1)
+                close(fb_layer->acquireFenceFd);
+            close(contents->retireFenceFd);
+            contents->retireFenceFd = -1;
+        }
+        close(contents->retireFenceFd);
+        contents->retireFenceFd = -1;
+
+        return 0;
+    } else if (active_apps == "full") {
+        // Clear all open windows if there's any and just keep "full"
+        if ((pdev->windows.find(active_apps) != pdev->windows.end())) {
+            if (pdev->windows.size() > 1) {
+                for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
+                    if (it->second)
+                        destroy_window(it->second);
+                }
+                pdev->windows.clear();
+            } else {
+                pdev->windows[active_apps]->lastLayer = 0;
+            }
+        }
+    } else if (!pdev->use_subsurface) {
+        // Single window mode, detecting if selected apps are in android screen 
+        bool foundApp = false;
+        std::istringstream iss(active_apps);
+        std::string app;
+        while (std::getline(iss, app, ':')) {
+            for (int l = 0; l < contents->numHwLayers; l++) {
+                std::string layer_name = pdev->display->layer_names[l];
+                std::string AppID;
+                std::istringstream issApp(layer_name);
+                std::getline(issApp, AppID, '/');
+                if (AppID == app) {
+                    foundApp = true;
+                    break;
+                }
+            }
+        }
+        // None of selected apps found, so clear all open windows
+        if (!foundApp) {
+            for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
+                if (it->second)
+                    destroy_window(it->second);
+            }
+            pdev->windows.clear();
+            for (size_t layer = 0; layer < contents->numHwLayers; layer++) {
+                hwc_layer_1_t* fb_layer = &contents->hwLayers[layer];
+                if (fb_layer->acquireFenceFd != -1)
+                    close(fb_layer->acquireFenceFd);
+                close(contents->retireFenceFd);
+                contents->retireFenceFd = -1;
+            }
+            close(contents->retireFenceFd);
+            contents->retireFenceFd = -1;
+
+            return 0;
+        }
+    } else {
+        // Multi window mode
+        // Checking current open windows to detect and kill obsolete ones
+        for (auto it = pdev->windows.cbegin(); it != pdev->windows.cend();) {
+            bool foundApp = false;
+            std::istringstream iss(active_apps);
+            std::string app;
+            while (std::getline(iss, app, ':')) {
+                if (app == it->first) {
+                    it->second->lastLayer = 0;
+                    foundApp = true;
+                    break;
+                }
+            }
+            // This window ID doesn't match with any selected app IDs from prop, so kill it
+            if (!foundApp) {
+                if (it->second)
+                    destroy_window(it->second);
+                pdev->windows.erase(it++);
+            } else {
+                // Checking this window ID with open layers in android screen
+                bool foundAppLayer = false;
+                for (int l = 0; l < contents->numHwLayers; l++) {
+                    std::string layer_name = pdev->display->layer_names[l];
+                    std::string AppID;
+                    std::istringstream issApp(layer_name);
+                    std::getline(issApp, AppID, '/');
+                    if (AppID == it->first) {
+                        foundAppLayer = true;
+                        break;
+                    }
+                }
+                // This window ID doesn't match with any open apps in android screen, so kill it
+                if (!foundAppLayer) {
+                    if (it->second)
+                        destroy_window(it->second);
+                    pdev->windows.erase(it++);
+                } else
+                    ++it;
+            }
+        }
+    }
+
     int err = 0;
-    int lastLayer = 0;
     for (size_t layer = 0; layer < contents->numHwLayers; layer++) {
         hwc_layer_1_t* fb_layer = &contents->hwLayers[layer];
 
@@ -308,6 +430,62 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
 
         if (!fb_layer->handle) {
+            if (fb_layer->acquireFenceFd != -1) {
+                close(fb_layer->acquireFenceFd);
+            }
+            continue;
+        }
+
+        struct window *window = NULL;
+        std::string layer_name = pdev->display->layer_names[layer];
+
+        if (active_apps == "full" || !pdev->use_subsurface) {
+            // Show everything in a single window
+            if (pdev->windows.find("full") == pdev->windows.end()) {
+                pdev->windows["full"] = create_window(pdev->display);
+            }
+            window = pdev->windows["full"];
+        } else {
+            // Create windows based on App ID in layer name
+            std::string AppID;
+            std::istringstream issApp(layer_name);
+            std::getline(issApp, AppID, '/');
+            if (pdev->windows.find(AppID) == pdev->windows.end()) {
+                std::istringstream issAA(active_apps);
+                std::string app;
+                while (std::getline(issAA, app, ':')) {
+                    if (app == AppID)
+                        pdev->windows[AppID] = create_window(pdev->display);
+                }
+            }
+            if (pdev->windows.find(AppID) != pdev->windows.end())
+                window = pdev->windows[AppID];
+        }
+
+        // Detecting cursor layer
+        if (pdev->display->pointer_surface && !window) {
+            std::string LayerRawName;
+            std::istringstream issLayer(layer_name);
+            std::getline(issLayer, LayerRawName, '#');
+            if (LayerRawName == "Sprite") {
+                for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
+                    if (it->second) {
+                        if (it->second->surface == pdev->display->pointer_surface) {
+                            window = it->second;
+                            break;
+                        }
+                        for (auto itt = it->second->surfaces.begin(); itt != it->second->surfaces.end(); itt++) {
+                            if (itt->second == pdev->display->pointer_surface) {
+                                window = it->second;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!window) {
             if (fb_layer->acquireFenceFd != -1) {
                 close(fb_layer->acquireFenceFd);
             }
@@ -338,19 +516,19 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
         buf->timeline_fd = pdev->timeline_fd;
 
-        struct wl_surface *surface = get_surface(pdev, fb_layer, layer);
+        struct wl_surface *surface = get_surface(pdev, fb_layer, window);
         if (!surface) {
             ALOGE("Failed to get surface");
             continue;
         }
-        lastLayer = layer;
+        window->lastLayer++;
 
         wl_surface_attach(surface, buf->buffer, 0, 0);
         wl_surface_damage(surface, 0, 0, buf->width, buf->height);
         if (pdev->display->scale > 1)
             wl_surface_set_buffer_scale(surface, pdev->display->scale);
 
-        struct wp_presentation *pres = pdev->window->display->presentation;
+        struct wp_presentation *pres = window->display->presentation;
         if (pres) {
             buf->feedback = wp_presentation_feedback(pres, surface);
             wp_presentation_feedback_add_listener(buf->feedback,
@@ -358,8 +536,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
 
         wl_surface_commit(surface);
-        if (surface != pdev->window->surface)
-            wl_surface_commit(pdev->window->surface);
+        wl_surface_commit(window->surface);
 
         const int kAcquireWarningMS = 100;
         err = sync_wait(fb_layer->acquireFenceFd, kAcquireWarningMS);
@@ -369,16 +546,21 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
         close(fb_layer->acquireFenceFd);
     }
+    // Layers order is changed from SF so we rearrange wayland surfaces
     if (pdev->display->geo_changed) {
-        for (int l = lastLayer; l > 0; l--)
-            if (pdev->window->subsurfaces[l])
-                wl_subsurface_place_above(pdev->window->subsurfaces[l], pdev->window->surface);
-        wl_surface_commit(pdev->window->surface);
-        for (int l = lastLayer + 1; l <= pdev->window->surfaces.size(); l++) {
-            if (pdev->window->surfaces[l]) {
-                wl_surface_attach(pdev->window->surfaces[l], NULL, 0, 0);
-                wl_surface_commit(pdev->window->surfaces[l]);
-                wl_surface_commit(pdev->window->surface);
+        for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
+            if (it->second) {
+                // This window has no changes in layers, leaving it
+                if (!it->second->lastLayer)
+                    continue;
+                // Neutralize unused surfaces
+                for (int l = it->second->lastLayer; l < it->second->surfaces.size(); l++) {
+                    if (it->second->surfaces.find(l) != it->second->surfaces.end()) {
+                        wl_surface_attach(it->second->surfaces[l], NULL, 0, 0);
+                        wl_surface_commit(it->second->surfaces[l]);
+                        wl_surface_commit(it->second->surface);
+                    }
+                }
             }
         }
         pdev->display->geo_changed = false;
@@ -529,11 +711,11 @@ static int hwc_get_display_attributes(struct hwc_composer_device_1* dev __unused
 static int hwc_close(hw_device_t* dev) {
     struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)dev;
 
-    for (std::map<buffer_handle_t, struct buffer *>::iterator it = pdev->window->buffer_map.begin(); it != pdev->window->buffer_map.end(); it++)
+    for (std::map<buffer_handle_t, struct buffer *>::iterator it = pdev->display->buffer_map.begin(); it != pdev->display->buffer_map.end(); it++)
     {
         wl_buffer_destroy(it->second->buffer);
     }
-    pdev->window->buffer_map.clear();
+    pdev->display->buffer_map.clear();
 
     destroy_display(pdev->display);
 
@@ -635,9 +817,6 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     if (property_get("anbox.wayland_display", property, "wayland-0") > 0) {
         setenv("WAYLAND_DISPLAY", property, 1);
     }
-    if (property_get_bool("anbox.use_subsurface", false)) {
-        pdev->use_subsurface = true;
-    }
     if (property_get("ro.hardware.gralloc", property, "default") > 0) {
         pdev->display = create_display(property);
     }
@@ -646,16 +825,7 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
         return -ENODEV;
     }
     ALOGE("wayland display %p", pdev->display);
-
-    pdev->window = create_window(pdev->display);
-    if (!pdev->display) {
-        ALOGE("failed to create the wayland window");
-        return -ENODEV;
-    }
-
-    /* Here we retrieve objects if executed without immed, or error */
-    wl_display_roundtrip(pdev->display->display);
-    wl_surface_commit(pdev->window->surface);
+    pdev->use_subsurface = property_get_bool("persist.anbox.multi_windows", false);
 
     pthread_mutex_init(&pdev->vsync_lock, NULL);
     pdev->vsync_callback_enabled = true;

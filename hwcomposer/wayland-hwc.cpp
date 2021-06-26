@@ -46,6 +46,7 @@
 #include <linux/input.h>
 #include <drm_fourcc.h>
 #include <system/graphics.h>
+#include <syscall.h>
 
 #include <libsync/sw_sync.h>
 #include <sync/sync.h>
@@ -227,6 +228,24 @@ static const struct xdg_surface_listener xdg_surface_listener = {
     xdg_surface_handle_configure,
 };
 
+void
+destroy_window(struct window *window)
+{
+	if (window->callback)
+		wl_callback_destroy(window->callback);
+
+    for (auto it = window->surfaces.begin(); it != window->surfaces.end(); it++) {
+        wl_subsurface_destroy(window->subsurfaces[it->first]);
+        wl_surface_destroy(it->second);
+    }
+    if (window->xdg_toplevel)
+		xdg_toplevel_destroy(window->xdg_toplevel);
+	if (window->xdg_surface)
+		xdg_surface_destroy(window->xdg_surface);
+	wl_surface_destroy(window->surface);
+	free(window);
+}
+
 struct window *
 create_window(struct display *display)
 {
@@ -247,11 +266,36 @@ create_window(struct display *display)
                                      &xdg_surface_listener, window);
 
         window->xdg_toplevel = xdg_surface_get_toplevel(window->xdg_surface);
-
         assert(window->xdg_toplevel);
-
+        xdg_toplevel_set_maximized(window->xdg_toplevel);
         xdg_toplevel_set_title(window->xdg_toplevel, "Anbox");
         wl_surface_commit(window->surface);
+
+        /* Here we retrieve objects if executed without immed, or error */
+        wl_display_roundtrip(display->display);
+        wl_surface_commit(window->surface);
+
+        /*
+         * We should create a dummy transparent 1x1 buffer in 0x0 location
+         * This allows us to set initial location of windows by setting them as subsurface
+         * and ovarally helps is moving surfaces
+         * 
+         * TODO: Drop this hack
+         */
+        int fd = syscall(SYS_memfd_create, "buffer", 0);
+        ftruncate(fd, 4);
+        void *shm_data = mmap(NULL, 4, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (shm_data == MAP_FAILED) {
+            fprintf(stderr, "mmap failed: %m\n");
+            close(fd);
+            exit(1);
+        }
+        struct wl_shm_pool *pool = wl_shm_create_pool(display->shm, fd, 4);
+        struct wl_buffer *buffer_shm = wl_shm_pool_create_buffer(pool, 0, 1, 1, 4, WL_SHM_FORMAT_ARGB8888);
+        wl_shm_pool_destroy(pool);
+        wl_surface_attach(window->surface, buffer_shm, 0, 0);
+        wl_surface_damage(window->surface, 0, 0, 1, 1);
+
     } else {
         assert(0);
     }
@@ -838,6 +882,9 @@ registry_handle_global(void *data, struct wl_registry *registry,
         d->seat = (struct wl_seat*)wl_registry_bind(registry, id,
                 &wl_seat_interface, 1);
         wl_seat_add_listener(d->seat, &seat_listener, d);
+    } else if (strcmp(interface, "wl_shm") == 0) {
+		d->shm = (struct wl_shm *)wl_registry_bind(registry, id,
+                &wl_shm_interface, 1);
     } else if (strcmp(interface, "wl_output") == 0) {
         d->output = (struct wl_output*)wl_registry_bind(registry, id,
                 &wl_output_interface, version);

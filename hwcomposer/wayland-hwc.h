@@ -81,6 +81,7 @@ struct display {
     struct wl_compositor *compositor;
     struct wl_subcompositor *subcompositor;
     struct wl_seat *seat;
+    struct wl_shm *shm;
     struct wl_pointer *pointer;
     struct wl_keyboard *keyboard;
     struct wl_touch *touch;
@@ -110,6 +111,7 @@ struct display {
     std::map<uint32_t, std::string> layer_names;
     std::map<uint32_t, struct handleExt> layer_handles_ext;
     struct handleExt target_layer_handle_ext;
+    std::map<buffer_handle_t, struct buffer *> buffer_map;
 };
 
 struct buffer {
@@ -131,10 +133,10 @@ struct window {
     struct wl_surface *surface;
     struct xdg_surface *xdg_surface;
     struct xdg_toplevel *xdg_toplevel;
-    std::map<buffer_handle_t, struct buffer *> buffer_map;
     std::map<size_t, struct wl_surface *> surfaces;
     std::map<size_t, struct wl_subsurface *> subsurfaces;
     struct wl_callback *callback;
+    int lastLayer;
 };
 
 int
@@ -152,5 +154,7 @@ create_display(const char* gralloc);
 void
 destroy_display(struct display *display);
 
+void
+destroy_window(struct window *window);
 struct window *
 create_window(struct display *display);
