@@ -143,8 +143,15 @@ static struct buffer *get_wl_buffer(struct anbox_hwc_composer_device_1 *pdev, hw
     return pdev->display->buffer_map[layer->handle];
 }
 
-static struct wl_surface *get_surface(struct anbox_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, struct window *window)
+static struct wl_surface *get_surface(struct anbox_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, struct window *window, bool multi)
 {
+    if (!multi) {
+        pdev->display->layers[window->surface] = {
+            .x = layer->displayFrame.left,
+            .y = layer->displayFrame.top };
+        return window->surface;
+    }
+
     struct wl_surface *surface = NULL;
     struct wl_subsurface *subsurface = NULL;
     int left = layer->displayFrame.left;
@@ -442,7 +449,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         if (active_apps == "full" || !pdev->use_subsurface) {
             // Show everything in a single window
             if (pdev->windows.find("full") == pdev->windows.end()) {
-                pdev->windows["full"] = create_window(pdev->display);
+                pdev->windows["full"] = create_window(pdev->display, pdev->use_subsurface);
             }
             window = pdev->windows["full"];
         } else {
@@ -455,7 +462,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                 std::string app;
                 while (std::getline(issAA, app, ':')) {
                     if (app == AppID)
-                        pdev->windows[AppID] = create_window(pdev->display);
+                        pdev->windows[AppID] = create_window(pdev->display, pdev->use_subsurface);
                 }
             }
             if (pdev->windows.find(AppID) != pdev->windows.end())
@@ -516,7 +523,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
         buf->timeline_fd = pdev->timeline_fd;
 
-        struct wl_surface *surface = get_surface(pdev, fb_layer, window);
+        struct wl_surface *surface = get_surface(pdev, fb_layer, window, pdev->use_subsurface);
         if (!surface) {
             ALOGE("Failed to get surface");
             continue;
@@ -536,7 +543,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
 
         wl_surface_commit(surface);
-        wl_surface_commit(window->surface);
+        if (pdev->use_subsurface)
+            wl_surface_commit(window->surface);
 
         const int kAcquireWarningMS = 100;
         err = sync_wait(fb_layer->acquireFenceFd, kAcquireWarningMS);

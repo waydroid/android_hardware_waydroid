@@ -247,7 +247,7 @@ destroy_window(struct window *window)
 }
 
 struct window *
-create_window(struct display *display)
+create_window(struct display *display, bool with_dummy)
 {
     struct window *window = new struct window();
     if (!window)
@@ -282,20 +282,21 @@ create_window(struct display *display)
          * 
          * TODO: Drop this hack
          */
-        int fd = syscall(SYS_memfd_create, "buffer", 0);
-        ftruncate(fd, 4);
-        void *shm_data = mmap(NULL, 4, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-        if (shm_data == MAP_FAILED) {
-            fprintf(stderr, "mmap failed: %m\n");
-            close(fd);
-            exit(1);
+        if (with_dummy) {
+            int fd = syscall(SYS_memfd_create, "buffer", 0);
+            ftruncate(fd, 4);
+            void *shm_data = mmap(NULL, 4, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+            if (shm_data == MAP_FAILED) {
+                fprintf(stderr, "mmap failed: %m\n");
+                close(fd);
+                exit(1);
+            }
+            struct wl_shm_pool *pool = wl_shm_create_pool(display->shm, fd, 4);
+            struct wl_buffer *buffer_shm = wl_shm_pool_create_buffer(pool, 0, 1, 1, 4, WL_SHM_FORMAT_ARGB8888);
+            wl_shm_pool_destroy(pool);
+            wl_surface_attach(window->surface, buffer_shm, 0, 0);
+            wl_surface_damage(window->surface, 0, 0, 1, 1);
         }
-        struct wl_shm_pool *pool = wl_shm_create_pool(display->shm, fd, 4);
-        struct wl_buffer *buffer_shm = wl_shm_pool_create_buffer(pool, 0, 1, 1, 4, WL_SHM_FORMAT_ARGB8888);
-        wl_shm_pool_destroy(pool);
-        wl_surface_attach(window->surface, buffer_shm, 0, 0);
-        wl_surface_damage(window->surface, 0, 0, 1, 1);
-
     } else {
         assert(0);
     }

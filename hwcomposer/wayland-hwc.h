@@ -157,4 +157,4 @@ destroy_display(struct display *display);
 void
 destroy_window(struct window *window);
 struct window *
-create_window(struct display *display);
+create_window(struct display *display, bool with_dummy);
