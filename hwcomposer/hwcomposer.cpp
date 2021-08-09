@@ -296,17 +296,20 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
      * In prop "persist.anbox.multi_windows" we detect HWC let SF rander layers 
      * And just show the target client layer (single windows mode) or
      * render each layers in wayland surface and subsurfaces.
-     * In prop "anbox.active_apps" we select apps that needed to be shown in window
-     * and here if HWC is in single mode we show the screen only if needed apps are in screen
-     * and in multi windows mode we group layers with same APP ID in a wayland window.
+     * In prop "anbox.active_apps" we choose what to be shown in window
+     * and here if HWC is in single mode we show the screen only if any task are in screen
+     * and in multi windows mode we group layers with same task ID in a wayland window.
+     * And in prop "anbox.blacklist_apps" we select apps to not show in display.
      * 
      * "anbox.active_apps" prop can be: 
      * "none": No windows
-     * "full": Shows android screen in a single window
-     * "AppID1:AppID2:AppID3:...": Shows this selected apps in related windows as explained above
+     * "Waydroid": Shows android screen in a single window
+     * "AppID": Shows apps in related windows as explained above
      */
     property_get("anbox.active_apps", property, "none");
     std::string active_apps = std::string(property);
+    property_get("anbox.blacklist_apps", property, "com.android.launcher3");
+    std::string blacklist_apps = std::string(property);
     if (active_apps == "none") {
         // Clear all open windows
         for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
@@ -325,8 +328,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         contents->retireFenceFd = -1;
 
         return 0;
-    } else if (active_apps == "full") {
-        // Clear all open windows if there's any and just keep "full"
+    } else if (active_apps == "Waydroid") {
+        // Clear all open windows if there's any and just keep "Waydroid"
         if ((pdev->windows.find(active_apps) != pdev->windows.end())) {
             if (pdev->windows.size() > 1) {
                 for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
@@ -339,24 +342,26 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             }
         }
     } else if (!pdev->use_subsurface) {
-        // Single window mode, detecting if selected apps are in android screen 
-        bool foundApp = false;
-        std::istringstream iss(active_apps);
-        std::string app;
-        while (std::getline(iss, app, ':')) {
-            for (int l = 0; l < contents->numHwLayers; l++) {
-                std::string layer_name = pdev->display->layer_names[l];
-                std::string AppID;
-                std::istringstream issApp(layer_name);
-                std::getline(issApp, AppID, '/');
-                if (AppID == app) {
-                    foundApp = true;
-                    break;
+        // Single window mode, detecting if any unblacklisted app is on screen
+        bool showWindow = false;
+        for (int l = 0; l < contents->numHwLayers; l++) {
+            std::string layer_name = pdev->display->layer_names[l];
+            if (layer_name.substr(0, 4) == "TID:") {
+                std::string layer_aid = layer_name.substr(layer_name.find('#') + 1, layer_name.find('/') - layer_name.find('#') - 1);
+                
+                std::istringstream iss(blacklist_apps);
+                std::string app;
+                while (std::getline(iss, app, ':')) {
+                    if (app == layer_aid) {
+                        showWindow = false;
+                        break;
+                    } else
+                        showWindow = true;
                 }
             }
         }
-        // None of selected apps found, so clear all open windows
-        if (!foundApp) {
+        // Nothing to show on screen, so clear all open windows
+        if (!showWindow) {
             for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
                 if (it->second)
                     destroy_window(it->second);
@@ -379,13 +384,15 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         // Checking current open windows to detect and kill obsolete ones
         for (auto it = pdev->windows.cbegin(); it != pdev->windows.cend();) {
             bool foundApp = false;
-            std::istringstream iss(active_apps);
-            std::string app;
-            while (std::getline(iss, app, ':')) {
-                if (app == it->first) {
-                    it->second->lastLayer = 0;
-                    foundApp = true;
-                    break;
+            for (int l = 0; l < contents->numHwLayers; l++) {
+                std::string layer_name = pdev->display->layer_names[l];
+                if (layer_name.substr(0, 4) == "TID:") {
+                    std::string layer_tid = layer_name.substr(4, layer_name.find('#') - 4);
+                    if (layer_tid == it->first) {
+                        it->second->lastLayer = 0;
+                        foundApp = true;
+                        break;
+                    }
                 }
             }
             // This window ID doesn't match with any selected app IDs from prop, so kill it
@@ -394,25 +401,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                     destroy_window(it->second);
                 pdev->windows.erase(it++);
             } else {
-                // Checking this window ID with open layers in android screen
-                bool foundAppLayer = false;
-                for (int l = 0; l < contents->numHwLayers; l++) {
-                    std::string layer_name = pdev->display->layer_names[l];
-                    std::string AppID;
-                    std::istringstream issApp(layer_name);
-                    std::getline(issApp, AppID, '/');
-                    if (AppID == it->first) {
-                        foundAppLayer = true;
-                        break;
-                    }
-                }
-                // This window ID doesn't match with any open apps in android screen, so kill it
-                if (!foundAppLayer) {
-                    if (it->second)
-                        destroy_window(it->second);
-                    pdev->windows.erase(it++);
-                } else
-                    ++it;
+                ++it;
             }
         }
     }
@@ -446,27 +435,36 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         struct window *window = NULL;
         std::string layer_name = pdev->display->layer_names[layer];
 
-        if (active_apps == "full" || !pdev->use_subsurface) {
+        if (active_apps == "Waydroid" || !pdev->use_subsurface) {
             // Show everything in a single window
-            if (pdev->windows.find("full") == pdev->windows.end()) {
-                pdev->windows["full"] = create_window(pdev->display, pdev->use_subsurface);
+            if (pdev->windows.find("Waydroid") == pdev->windows.end()) {
+                pdev->windows["Waydroid"] = create_window(pdev->display, pdev->use_subsurface, active_apps, "0");
             }
-            window = pdev->windows["full"];
+            window = pdev->windows["Waydroid"];
         } else {
-            // Create windows based on App ID in layer name
-            std::string AppID;
-            std::istringstream issApp(layer_name);
-            std::getline(issApp, AppID, '/');
-            if (pdev->windows.find(AppID) == pdev->windows.end()) {
-                std::istringstream issAA(active_apps);
+            // Create windows based on Task ID in layer name
+            if (layer_name.substr(0, 4) == "TID:") {
+                std::string layer_tid = layer_name.substr(4, layer_name.find('#') - 4);
+                std::string layer_aid = layer_name.substr(layer_name.find('#') + 1, layer_name.find('/') - layer_name.find('#') - 1);
+
+                bool showWindow = false;
+                std::istringstream iss(blacklist_apps);
                 std::string app;
-                while (std::getline(issAA, app, ':')) {
-                    if (app == AppID)
-                        pdev->windows[AppID] = create_window(pdev->display, pdev->use_subsurface);
+                while (std::getline(iss, app, ':')) {
+                    if (app == layer_aid) {
+                        showWindow = false;
+                        break;
+                    } else
+                        showWindow = true;
+                }
+
+                if (showWindow) {
+                    if (pdev->windows.find(layer_tid) == pdev->windows.end())
+                        pdev->windows[layer_tid] = create_window(pdev->display, pdev->use_subsurface, layer_aid, layer_tid);
+                    if (pdev->windows.find(layer_tid) != pdev->windows.end())
+                        window = pdev->windows[layer_tid];
                 }
             }
-            if (pdev->windows.find(AppID) != pdev->windows.end())
-                window = pdev->windows[AppID];
         }
 
         // Detecting cursor layer

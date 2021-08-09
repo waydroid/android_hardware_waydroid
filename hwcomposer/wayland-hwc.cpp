@@ -31,7 +31,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <stdbool.h>
 #include <assert.h>
 #include <unistd.h>
@@ -247,7 +246,7 @@ destroy_window(struct window *window)
 }
 
 struct window *
-create_window(struct display *display, bool with_dummy)
+create_window(struct display *display, bool with_dummy, std::string appID, std::string taskID)
 {
     struct window *window = new struct window();
     if (!window)
@@ -256,6 +255,8 @@ create_window(struct display *display, bool with_dummy)
     window->callback = NULL;
     window->display = display;
     window->surface = wl_compositor_create_surface(display->compositor);
+    window->appID = appID;
+    window->taskID = taskID;
 
     if (display->wm_base) {
         window->xdg_surface =
