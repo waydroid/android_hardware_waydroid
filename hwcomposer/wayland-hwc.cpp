@@ -264,12 +264,14 @@ xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
             mActivityTaskManager = android::interface_cast<IActivityTaskManager>(binderTask);
     }
     if (mActivityTaskManager != nullptr) {
-        if (window->taskID == "0") {
-            property_set("anbox.active_apps", "none");
-            mActivityTaskManager->removeAllVisibleRecentTasks();
-        } else {
-            bool ret;
-            mActivityTaskManager->removeTask(stoi(window->taskID), &ret);
+        if (window->taskID != "none") {
+            if (window->taskID == "0") {
+                property_set("anbox.active_apps", "none");
+                mActivityTaskManager->removeAllVisibleRecentTasks();
+            } else {
+                bool ret;
+                mActivityTaskManager->removeTask(stoi(window->taskID), &ret);
+            }
         }
     }
 }
@@ -328,7 +330,7 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
             if (binderPlatform != nullptr)
                 mPlatform = android::interface_cast<IPlatform>(binderPlatform);
         }
-        android::String16 AppName = android::String16("Waydroid");
+        android::String16 AppName = android::String16(appID.c_str());
         if (mPlatform != nullptr)
             mPlatform->getAppName(android::String16(appID.c_str()), &AppName);
         android::String8 AppName8 = android::String8(AppName);

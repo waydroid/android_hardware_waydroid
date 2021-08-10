@@ -393,6 +393,15 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                         foundApp = true;
                         break;
                     }
+                } else {
+                    std::string LayerRawName;
+                    std::istringstream issLayer(layer_name);
+                    std::getline(issLayer, LayerRawName, '#');
+                    if (LayerRawName == it->first) {
+                        it->second->lastLayer = 0;
+                        foundApp = true;
+                        break;
+                    }
                 }
             }
             // This window ID doesn't match with any selected app IDs from prop, so kill it
@@ -468,11 +477,11 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
 
         // Detecting cursor layer
-        if (pdev->display->pointer_surface && !window) {
+        if (!window) {
             std::string LayerRawName;
             std::istringstream issLayer(layer_name);
             std::getline(issLayer, LayerRawName, '#');
-            if (LayerRawName == "Sprite") {
+            if (LayerRawName == "Sprite" && pdev->display->pointer_surface) {
                 for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
                     if (it->second) {
                         if (it->second->surface == pdev->display->pointer_surface) {
@@ -487,6 +496,12 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                         }
                     }
                 }
+            }
+            if (LayerRawName == "InputMethod") {
+                if (pdev->windows.find(LayerRawName) == pdev->windows.end())
+                    pdev->windows[LayerRawName] = create_window(pdev->display, pdev->use_subsurface, LayerRawName, "none");
+                if (pdev->windows.find(LayerRawName) != pdev->windows.end())
+                    window = pdev->windows[LayerRawName];
             }
         }
 
