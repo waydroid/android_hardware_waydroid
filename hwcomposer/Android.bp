@@ -21,6 +21,7 @@ cc_library_shared {
     shared_libs: [
         "liblog",
         "libutils",
+        "libbinder",
         "libcutils",
         "libhardware",
         "libhidlbase",
@@ -37,7 +38,9 @@ cc_library_shared {
     srcs: [
         "extension.cpp",
         "hwcomposer.cpp",
-        "wayland-hwc.cpp"
+        "wayland-hwc.cpp",
+        "interfaces/IActivityTaskManager.cpp",
+        "interfaces/IPlatform.cpp"
     ],
     header_libs: [
         "libsystem_headers",
@@ -46,6 +49,9 @@ cc_library_shared {
         "system/core",
         "system/core/libsync",
         "system/core/libsync/include"
+    ],
+    local_include_dirs: [
+        "interfaces/include"
     ],
     cflags: [
         "-DLOG_TAG=\"hwcomposer\"",
