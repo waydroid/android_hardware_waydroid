@@ -666,7 +666,7 @@ static int32_t hwc_attribute(struct anbox_hwc_composer_device_1* pdev,
     char property[PROPERTY_VALUE_MAX];
     int width = pdev->display->width;
     int height = pdev->display->height;
-    int density = 120;
+    int density = 180;
 
     switch(attribute) {
         case HWC_DISPLAY_VSYNC_PERIOD:
@@ -674,6 +674,8 @@ static int32_t hwc_attribute(struct anbox_hwc_composer_device_1* pdev,
         case HWC_DISPLAY_WIDTH:
             if (property_get("anbox.display_width", property, nullptr) > 0)
                 return atoi(property);
+            if (property_get("persist.anbox.window_width", property, nullptr) > 0)
+                width = atoi(property);
             if (width <= 0) {
                 std::unique_lock<std::mutex> lck(pdev->display->mtx);
                 pdev->display->cv.wait(lck);
@@ -686,6 +688,8 @@ static int32_t hwc_attribute(struct anbox_hwc_composer_device_1* pdev,
         case HWC_DISPLAY_HEIGHT:
             if (property_get("anbox.display_height", property, nullptr) > 0)
                 return atoi(property);
+            if (property_get("persist.anbox.window_height", property, nullptr) > 0)
+                height = atoi(property);
             if (height <= 0) {
                 std::unique_lock<std::mutex> lck(pdev->display->mtx);
                 pdev->display->cv.wait(lck);
@@ -699,8 +703,11 @@ static int32_t hwc_attribute(struct anbox_hwc_composer_device_1* pdev,
         case HWC_DISPLAY_DPI_Y:
             if (property_get("ro.sf.lcd_density", property, nullptr) > 0)
                 density = atoi(property);
-            else
+            else {
+                if (property_get("anbox.display_scale", property, nullptr) > 0)
+                    density *= atoi(property);
                 property_set("ro.sf.lcd_density", std::to_string(density).c_str());
+            }
             return density * 1000;
         case HWC_DISPLAY_COLOR_TRANSFORM:
             return HAL_COLOR_TRANSFORM_IDENTITY;

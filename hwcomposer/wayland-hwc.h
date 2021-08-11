@@ -112,6 +112,8 @@ struct display {
     std::map<uint32_t, struct handleExt> layer_handles_ext;
     struct handleExt target_layer_handle_ext;
     std::map<buffer_handle_t, struct buffer *> buffer_map;
+
+    bool isWinResSet;
 };
 
 struct buffer {

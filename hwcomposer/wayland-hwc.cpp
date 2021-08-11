@@ -245,10 +245,22 @@ static const struct xdg_surface_listener xdg_surface_listener = {
 };
 
 static void
-xdg_toplevel_handle_configure(void *, struct xdg_toplevel *,
-                              int32_t, int32_t,
+xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
+                              int32_t width, int32_t height,
                               struct wl_array *)
 {
+    struct window *window = (struct window *)data;
+
+    if (! window->display->isWinResSet) {
+        if (window->display->scale > 1) {
+            width *= window->display->scale;
+            height *= window->display->scale;
+        }
+        property_set("persist.anbox.window_width", std::to_string(width).c_str());
+        property_set("persist.anbox.window_height", std::to_string(height).c_str());
+
+        window->display->isWinResSet = true;
+    }
 }
 
 static void
@@ -908,6 +920,7 @@ output_handle_scale(void *data, struct wl_output *,
     struct display *d = (struct display*)data;
 
     d->scale = scale;
+    property_set("anbox.display_scale", std::to_string(scale).c_str());
 }
 
 static const struct wl_output_listener output_listener = {
