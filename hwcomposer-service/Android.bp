@@ -1,0 +1,17 @@
+cc_binary {
+    name: "android.hardware.graphics.composer@2.1-service.anbox",
+    defaults: ["hidl_defaults"],
+    vendor: true,
+    relative_install_path: "hw",
+    srcs: ["service.cpp"],
+    init_rc: ["android.hardware.graphics.composer@2.1-service.anbox.rc"],
+    shared_libs: [
+        "android.hardware.graphics.composer@2.1",
+        "libbinder",
+        "libhidlbase",
+        "libhidltransport",
+        "liblog",
+        "libsync",
+        "libutils",
+    ],
+}
