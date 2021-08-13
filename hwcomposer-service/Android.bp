@@ -5,6 +5,7 @@ cc_binary {
     relative_install_path: "hw",
     srcs: ["service.cpp"],
     init_rc: ["android.hardware.graphics.composer@2.1-service.waydroid.rc"],
+    vintf_fragments: ["android.hardware.graphics.composer@2.1-service.waydroid.xml"],
     shared_libs: [
         "android.hardware.graphics.composer@2.1",
         "libbinder",
