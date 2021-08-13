@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "android.hardware.light@2.0-service.anbox"
+#define LOG_TAG "android.hardware.light@2.0-service.waydroid"
 
 #include <android-base/logging.h>
 #include <hidl/HidlTransportSupport.h>
@@ -41,7 +41,7 @@ int main() {
         return 1;
     }
 
-    LOG(INFO) << "Anbox light HAL service ready.";
+    LOG(INFO) << "Waydroid light HAL service ready.";
 
     joinRpcThreadpool();
 

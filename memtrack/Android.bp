@@ -1,5 +1,5 @@
 cc_library_shared {
-    name: "memtrack.anbox",
+    name: "memtrack.waydroid",
     relative_install_path: "hw",
     proprietary: true,
     srcs: ["memtrack.c"],

@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2021 The LineageOS Project
- * Copyright (C) 2021 Anbox Project
+ * Copyright (C) 2021 Waydroid Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@
 #ifndef ANDROID_HARDWARE_SENSORS_V1_0_SENSORS_H_
 #define ANDROID_HARDWARE_SENSORS_V1_0_SENSORS_H_
 
-#define LOG_TAG "android.hardware.sensors@1.0-service.anbox"
+#define LOG_TAG "android.hardware.sensors@1.0-service.waydroid"
 //#define LOG_NDEBUG 0
 
 #include <android/hardware/sensors/1.0/ISensors.h>

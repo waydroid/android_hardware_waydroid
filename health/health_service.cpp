@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#define LOG_TAG "android.hardware.health@2.0-service.anbox"
+#define LOG_TAG "android.hardware.health@2.0-service.waydroid"
 
 #include <health2/Health.h>
 #include <health2/service.h>

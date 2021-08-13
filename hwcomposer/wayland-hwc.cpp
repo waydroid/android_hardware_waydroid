@@ -2,7 +2,7 @@
  * Copyright © 2011 Benjamin Franzke
  * Copyright © 2010 Intel Corporation
  * Copyright © 2014 Collabora Ltd.
- * Copyright © 2021 Anbox Project.
+ * Copyright © 2021 Waydroid Project.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -256,8 +256,8 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
             width *= window->display->scale;
             height *= window->display->scale;
         }
-        property_set("persist.anbox.window_width", std::to_string(width).c_str());
-        property_set("persist.anbox.window_height", std::to_string(height).c_str());
+        property_set("persist.waydroid.window_width", std::to_string(width).c_str());
+        property_set("persist.waydroid.window_height", std::to_string(height).c_str());
 
         window->display->isWinResSet = true;
     }
@@ -278,7 +278,7 @@ xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
     if (mActivityTaskManager != nullptr) {
         if (window->taskID != "none") {
             if (window->taskID == "0") {
-                property_set("anbox.active_apps", "none");
+                property_set("waydroid.active_apps", "none");
                 mActivityTaskManager->removeAllVisibleRecentTasks();
             } else {
                 bool ret;
@@ -920,7 +920,7 @@ output_handle_scale(void *data, struct wl_output *,
     struct display *d = (struct display*)data;
 
     d->scale = scale;
-    property_set("anbox.display_scale", std::to_string(scale).c_str());
+    property_set("waydroid.display_scale", std::to_string(scale).c_str());
 }
 
 static const struct wl_output_listener output_listener = {

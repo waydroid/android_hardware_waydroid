@@ -19,8 +19,8 @@ include $(CLEAR_VARS)
 LOCAL_VENDOR_MODULE := true
 LOCAL_MODULE_RELATIVE_PATH := hw
 
-LOCAL_MODULE := android.hardware.power@1.0-service.anbox
-LOCAL_INIT_RC := android.hardware.power@1.0-service.anbox.rc
+LOCAL_MODULE := android.hardware.power@1.0-service.waydroid
+LOCAL_INIT_RC := android.hardware.power@1.0-service.waydroid.rc
 LOCAL_SRC_FILES := service.cpp Power.cpp
 
 LOCAL_HEADER_LIBRARIES := libhardware_headers

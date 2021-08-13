@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2012 The Android Open Source Project
- * Copyright (C) 2021 The Anbox Project
+ * Copyright (C) 2021 The Waydroid Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,14 +44,14 @@
 using ::android::hardware::configureRpcThreadpool;
 using ::android::hardware::joinRpcThreadpool;
 
-using ::vendor::anbox::display::V1_0::IAnboxDisplay;
-using ::vendor::anbox::display::V1_0::implementation::AnboxDisplay;
+using ::vendor::waydroid::display::V1_0::IWaydroidDisplay;
+using ::vendor::waydroid::display::V1_0::implementation::WaydroidDisplay;
 
 using ::android::OK;
 using ::android::sp;
 using ::android::status_t;
 
-struct anbox_hwc_composer_device_1 {
+struct waydroid_hwc_composer_device_1 {
     hwc_composer_device_1_t base; // constant after init
     const hwc_procs_t *procs;     // constant after init
     pthread_t wayland_thread;     // constant after init
@@ -72,7 +72,7 @@ struct anbox_hwc_composer_device_1 {
 
 static int hwc_prepare(hwc_composer_device_1_t* dev,
                        size_t numDisplays, hwc_display_contents_1_t** displays) {
-    struct anbox_hwc_composer_device_1 *pdev = (struct anbox_hwc_composer_device_1 *)dev;
+    struct waydroid_hwc_composer_device_1 *pdev = (struct waydroid_hwc_composer_device_1 *)dev;
 
     if (!numDisplays || !displays) return 0;
 
@@ -98,7 +98,7 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
     return 0;
 }
 
-static struct buffer *get_wl_buffer(struct anbox_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, size_t pos)
+static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, size_t pos)
 {
     auto it = pdev->display->buffer_map.find(layer->handle);
     if (it != pdev->display->buffer_map.end()) {
@@ -143,7 +143,7 @@ static struct buffer *get_wl_buffer(struct anbox_hwc_composer_device_1 *pdev, hw
     return pdev->display->buffer_map[layer->handle];
 }
 
-static struct wl_surface *get_surface(struct anbox_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, struct window *window, bool multi)
+static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, struct window *window, bool multi)
 {
     if (!multi) {
         pdev->display->layers[window->surface] = {
@@ -190,7 +190,7 @@ static long time_to_sleep_to_next_vsync(struct timespec *rt, uint64_t last_vsync
 }
 
 static void* hwc_vsync_thread(void* data) {
-    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)data;
+    struct waydroid_hwc_composer_device_1* pdev = (struct waydroid_hwc_composer_device_1*)data;
     setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
 
     struct timespec rt;
@@ -262,7 +262,7 @@ feedback_presented(void *data,
            uint32_t,
            uint32_t)
 {
-    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)data;
+    struct waydroid_hwc_composer_device_1* pdev = (struct waydroid_hwc_composer_device_1*)data;
 
     pthread_mutex_lock(&pdev->vsync_lock);
     pdev->last_vsync_ns = (((uint64_t)tv_sec_hi << 32) + tv_sec_lo) * 1e9 + tv_nsec;
@@ -283,7 +283,7 @@ static const struct wp_presentation_feedback_listener feedback_listener = {
 static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                    hwc_display_contents_1_t** displays) {
     char property[PROPERTY_VALUE_MAX];
-    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)dev;
+    struct waydroid_hwc_composer_device_1* pdev = (struct waydroid_hwc_composer_device_1*)dev;
 
     if (!numDisplays || !displays) {
         return 0;
@@ -293,22 +293,22 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     contents->retireFenceFd = sw_sync_fence_create(pdev->timeline_fd, "hwc_contents_release", pdev->next_sync_point);
 
     /*
-     * In prop "persist.anbox.multi_windows" we detect HWC let SF rander layers 
+     * In prop "persist.waydroid.multi_windows" we detect HWC let SF rander layers 
      * And just show the target client layer (single windows mode) or
      * render each layers in wayland surface and subsurfaces.
-     * In prop "anbox.active_apps" we choose what to be shown in window
+     * In prop "waydroid.active_apps" we choose what to be shown in window
      * and here if HWC is in single mode we show the screen only if any task are in screen
      * and in multi windows mode we group layers with same task ID in a wayland window.
-     * And in prop "anbox.blacklist_apps" we select apps to not show in display.
+     * And in prop "waydroid.blacklist_apps" we select apps to not show in display.
      * 
-     * "anbox.active_apps" prop can be: 
+     * "waydroid.active_apps" prop can be: 
      * "none": No windows
      * "Waydroid": Shows android screen in a single window
      * "AppID": Shows apps in related windows as explained above
      */
-    property_get("anbox.active_apps", property, "none");
+    property_get("waydroid.active_apps", property, "none");
     std::string active_apps = std::string(property);
-    property_get("anbox.blacklist_apps", property, "com.android.launcher3");
+    property_get("waydroid.blacklist_apps", property, "com.android.launcher3");
     std::string blacklist_apps = std::string(property);
     if (active_apps == "none") {
         // Clear all open windows
@@ -600,8 +600,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 }
 
 static int hwc_query(struct hwc_composer_device_1* dev, int what, int* value) {
-    struct anbox_hwc_composer_device_1* pdev =
-            (struct anbox_hwc_composer_device_1*)dev;
+    struct waydroid_hwc_composer_device_1* pdev =
+            (struct waydroid_hwc_composer_device_1*)dev;
 
     switch (what) {
         case HWC_VSYNC_PERIOD:
@@ -617,8 +617,8 @@ static int hwc_query(struct hwc_composer_device_1* dev, int what, int* value) {
 
 static int hwc_event_control(struct hwc_composer_device_1* dev, int dpy __unused,
                              int event, int enabled) {
-    struct anbox_hwc_composer_device_1* pdev =
-            (struct anbox_hwc_composer_device_1*)dev;
+    struct waydroid_hwc_composer_device_1* pdev =
+            (struct waydroid_hwc_composer_device_1*)dev;
     int ret = -EINVAL;
 
     // enabled can only be 0 or 1
@@ -661,7 +661,7 @@ static int hwc_get_display_configs(struct hwc_composer_device_1* dev __unused,
 }
 
 
-static int32_t hwc_attribute(struct anbox_hwc_composer_device_1* pdev,
+static int32_t hwc_attribute(struct waydroid_hwc_composer_device_1* pdev,
                              const uint32_t attribute) {
     char property[PROPERTY_VALUE_MAX];
     int width = pdev->display->width;
@@ -672,39 +672,39 @@ static int32_t hwc_attribute(struct anbox_hwc_composer_device_1* pdev,
         case HWC_DISPLAY_VSYNC_PERIOD:
             return pdev->vsync_period_ns;
         case HWC_DISPLAY_WIDTH:
-            if (property_get("anbox.display_width", property, nullptr) > 0)
+            if (property_get("waydroid.display_width", property, nullptr) > 0)
                 return atoi(property);
-            if (property_get("persist.anbox.window_width", property, nullptr) > 0)
+            if (property_get("persist.waydroid.window_width", property, nullptr) > 0)
                 width = atoi(property);
             if (width <= 0) {
                 std::unique_lock<std::mutex> lck(pdev->display->mtx);
                 pdev->display->cv.wait(lck);
                 width = pdev->display->width;
             }
-            if (property_get("anbox.display_width_padding", property, nullptr) > 0)
+            if (property_get("waydroid.display_width_padding", property, nullptr) > 0)
                 width -= atoi(property);
-            property_set("anbox.display_width", std::to_string(width).c_str());
+            property_set("waydroid.display_width", std::to_string(width).c_str());
             return width;
         case HWC_DISPLAY_HEIGHT:
-            if (property_get("anbox.display_height", property, nullptr) > 0)
+            if (property_get("waydroid.display_height", property, nullptr) > 0)
                 return atoi(property);
-            if (property_get("persist.anbox.window_height", property, nullptr) > 0)
+            if (property_get("persist.waydroid.window_height", property, nullptr) > 0)
                 height = atoi(property);
             if (height <= 0) {
                 std::unique_lock<std::mutex> lck(pdev->display->mtx);
                 pdev->display->cv.wait(lck);
                 height = pdev->display->height;
             }
-            if (property_get("anbox.display_height_padding", property, nullptr) > 0)
+            if (property_get("waydroid.display_height_padding", property, nullptr) > 0)
                 height -= atoi(property);
-            property_set("anbox.display_height", std::to_string(height).c_str());
+            property_set("waydroid.display_height", std::to_string(height).c_str());
             return height;
         case HWC_DISPLAY_DPI_X:
         case HWC_DISPLAY_DPI_Y:
             if (property_get("ro.sf.lcd_density", property, nullptr) > 0)
                 density = atoi(property);
             else {
-                if (property_get("anbox.display_scale", property, nullptr) > 0)
+                if (property_get("waydroid.display_scale", property, nullptr) > 0)
                     density *= atoi(property);
                 property_set("ro.sf.lcd_density", std::to_string(density).c_str());
             }
@@ -720,7 +720,7 @@ static int32_t hwc_attribute(struct anbox_hwc_composer_device_1* pdev,
 static int hwc_get_display_attributes(struct hwc_composer_device_1* dev __unused,
                                       int disp, uint32_t config __unused,
                                       const uint32_t* attributes, int32_t* values) {
-    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)dev;
+    struct waydroid_hwc_composer_device_1* pdev = (struct waydroid_hwc_composer_device_1*)dev;
     for (int i = 0; attributes[i] != HWC_DISPLAY_NO_ATTRIBUTE; i++) {
         if (disp == HWC_DISPLAY_PRIMARY) {
             values[i] = hwc_attribute(pdev, attributes[i]);
@@ -737,7 +737,7 @@ static int hwc_get_display_attributes(struct hwc_composer_device_1* dev __unused
 }
 
 static int hwc_close(hw_device_t* dev) {
-    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)dev;
+    struct waydroid_hwc_composer_device_1* pdev = (struct waydroid_hwc_composer_device_1*)dev;
 
     for (std::map<buffer_handle_t, struct buffer *>::iterator it = pdev->display->buffer_map.begin(); it != pdev->display->buffer_map.end(); it++)
     {
@@ -755,7 +755,7 @@ static int hwc_close(hw_device_t* dev) {
 }
 
 static void* hwc_wayland_thread(void* data) {
-    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)data;
+    struct waydroid_hwc_composer_device_1* pdev = (struct waydroid_hwc_composer_device_1*)data;
     int ret = 0;
 
     setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
@@ -769,38 +769,38 @@ static void* hwc_wayland_thread(void* data) {
 }
 
 static void* hwc_extension_thread(void* data) {
-    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)data;
-    sp<IAnboxDisplay> anboxDisplay;
+    struct waydroid_hwc_composer_device_1* pdev = (struct waydroid_hwc_composer_device_1*)data;
+    sp<IWaydroidDisplay> waydroidDisplay;
     status_t status;
 
     setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
 
-    anboxDisplay = new AnboxDisplay(pdev->display);
-    if (anboxDisplay == nullptr) {
-        ALOGE("Can not create an instance of Anbox Display HAL, exiting.");
+    waydroidDisplay = new WaydroidDisplay(pdev->display);
+    if (waydroidDisplay == nullptr) {
+        ALOGE("Can not create an instance of Waydroid Display HAL, exiting.");
         goto shutdown;
     }
 
     configureRpcThreadpool(1, true /*callerWillJoin*/);
 
-    status = anboxDisplay->registerAsService();
+    status = waydroidDisplay->registerAsService();
     if (status != OK) {
-        ALOGE("Could not register service for Anbox Display HAL (%d).", status);
+        ALOGE("Could not register service for Waydroid Display HAL (%d).", status);
     }
 
-    ALOGI("Anbox Display HAL thread is ready.");
+    ALOGI("Waydroid Display HAL thread is ready.");
     joinRpcThreadpool();
     // Should not pass this line
 
 shutdown:
     // In normal operation, we don't expect the thread pool to shutdown
-    ALOGE("Anbox Display HAL service is shutting down.");
+    ALOGE("Waydroid Display HAL service is shutting down.");
     return NULL;
 }
 
 static void hwc_register_procs(struct hwc_composer_device_1* dev,
                                hwc_procs_t const* procs) {
-    struct anbox_hwc_composer_device_1* pdev = (struct anbox_hwc_composer_device_1*)dev;
+    struct waydroid_hwc_composer_device_1* pdev = (struct waydroid_hwc_composer_device_1*)dev;
     pdev->procs = procs;
 }
 
@@ -814,7 +814,7 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
         return -EINVAL;
     }
 
-    anbox_hwc_composer_device_1 *pdev = new anbox_hwc_composer_device_1();
+    waydroid_hwc_composer_device_1 *pdev = new waydroid_hwc_composer_device_1();
     if (!pdev) {
         ALOGE("%s failed to allocate dev", __FUNCTION__);
         return -ENOMEM;
@@ -839,10 +839,10 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     pdev->timeline_fd = sw_sync_timeline_create();
     pdev->next_sync_point = 1;
 
-    if (property_get("anbox.xdg_runtime_dir", property, "/run/user/1000") > 0) {
+    if (property_get("waydroid.xdg_runtime_dir", property, "/run/user/1000") > 0) {
         setenv("XDG_RUNTIME_DIR", property, 1);
     }
-    if (property_get("anbox.wayland_display", property, "wayland-0") > 0) {
+    if (property_get("waydroid.wayland_display", property, "wayland-0") > 0) {
         setenv("WAYLAND_DISPLAY", property, 1);
     }
     if (property_get("ro.hardware.gralloc", property, "default") > 0) {
@@ -853,7 +853,7 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
         return -ENODEV;
     }
     ALOGE("wayland display %p", pdev->display);
-    pdev->use_subsurface = property_get_bool("persist.anbox.multi_windows", false);
+    pdev->use_subsurface = property_get_bool("persist.waydroid.multi_windows", false);
 
     pthread_mutex_init(&pdev->vsync_lock, NULL);
     pdev->vsync_callback_enabled = true;
@@ -869,18 +869,18 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     if (!pdev->vsync_thread) {
         ret = pthread_create (&pdev->vsync_thread, NULL, hwc_vsync_thread, pdev);
         if (ret) {
-            ALOGE("anbox_hw_composer could not start vsync_thread\n");
+            ALOGE("waydroid_hw_composer could not start vsync_thread\n");
         }
     }
 
     ret = pthread_create (&pdev->wayland_thread, NULL, hwc_wayland_thread, pdev);
     if (ret) {
-        ALOGE("anbox_hw_composer could not start wayland_thread\n");
+        ALOGE("waydroid_hw_composer could not start wayland_thread\n");
     }
 
     ret = pthread_create (&pdev->extension_thread, NULL, hwc_extension_thread, pdev);
     if (ret) {
-        ALOGE("anbox_hw_composer could not start extension_thread\n");
+        ALOGE("waydroid_hw_composer could not start extension_thread\n");
     }
 
     *device = &pdev->base.common;
@@ -899,7 +899,7 @@ hwc_module_t HAL_MODULE_INFO_SYM = {
         .module_api_version = HWC_MODULE_API_VERSION_0_1,
         .hal_api_version = HARDWARE_HAL_API_VERSION,
         .id = HWC_HARDWARE_MODULE_ID,
-        .name = "Anbox hwcomposer module",
+        .name = "Waydroid hwcomposer module",
         .author = "The Android Open Source Project",
         .methods = &hwc_module_methods,
     }

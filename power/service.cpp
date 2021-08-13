@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "android.hardware.power@1.0-service.anbox"
+#define LOG_TAG "android.hardware.power@1.0-service.waydroid"
 
 #include <android/log.h>
 #include <hidl/HidlTransportSupport.h>
@@ -37,7 +37,7 @@ int main() {
     status_t status;
     android::sp<IPower> service = nullptr;
 
-    ALOGI("Power HAL Service 1.0 for Anbox is starting.");
+    ALOGI("Power HAL Service 1.0 for Waydroid is starting.");
 
     service = new Power();
     if (service == nullptr) {

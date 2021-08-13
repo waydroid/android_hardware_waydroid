@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 The Anbox Project
+ * Copyright (C) 2021 The Waydroid Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,11 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package vendor.anbox.display@1.0;
+package vendor.waydroid.display@1.0;
 
 import android.hardware.graphics.composer@2.1::types;
 
-interface IAnboxDisplay {
+interface IWaydroidDisplay {
     setLayerName(uint32_t layer, string name) generates (Error error);
     setLayerHandleInfo(uint32_t layer, uint32_t format, uint32_t stride) generates (Error error);
     setTargetLayerHandleInfo(uint32_t format, uint32_t stride) generates (Error error);

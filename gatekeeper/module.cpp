@@ -16,7 +16,7 @@
 
 #include <hardware/hardware.h>
 #include <hardware/gatekeeper.h>
-#define LOG_TAG "AnboxGatekeeper"
+#define LOG_TAG "WaydroidGatekeeper"
 #include <log/log.h>
 
 #include <string.h>
@@ -26,14 +26,14 @@
 #include "SoftGateKeeper.h"
 #include "SoftGateKeeperDevice.h"
 
-using anbox::SoftGateKeeperDevice;
+using waydroid::SoftGateKeeperDevice;
 
-struct anbox_gatekeeper_device {
+struct waydroid_gatekeeper_device {
     gatekeeper_device device;
     SoftGateKeeperDevice *s_gatekeeper;
 };
 
-static anbox_gatekeeper_device s_device;
+static waydroid_gatekeeper_device s_device;
 
 static int enroll(const struct gatekeeper_device *dev __unused, uint32_t uid,
             const uint8_t *current_password_handle, uint32_t current_password_handle_length,
@@ -41,7 +41,7 @@ static int enroll(const struct gatekeeper_device *dev __unused, uint32_t uid,
             const uint8_t *desired_password, uint32_t desired_password_length,
             uint8_t **enrolled_password_handle, uint32_t *enrolled_password_handle_length) {
 
-    SoftGateKeeperDevice *s_gatekeeper = ((anbox_gatekeeper_device*)(dev))->s_gatekeeper;
+    SoftGateKeeperDevice *s_gatekeeper = ((waydroid_gatekeeper_device*)(dev))->s_gatekeeper;
     ALOGE("called %s with gate keeper %p device %p\n", __func__, s_gatekeeper, dev);
     if (s_gatekeeper == nullptr)  {
         abort();
@@ -59,7 +59,7 @@ static int verify(const struct gatekeeper_device *dev __unused, uint32_t uid, ui
             const uint8_t *enrolled_password_handle, uint32_t enrolled_password_handle_length,
             const uint8_t *provided_password, uint32_t provided_password_length,
             uint8_t **auth_token, uint32_t *auth_token_length, bool *request_reenroll) {
-    SoftGateKeeperDevice *s_gatekeeper = ((anbox_gatekeeper_device*)(dev))->s_gatekeeper;
+    SoftGateKeeperDevice *s_gatekeeper = ((waydroid_gatekeeper_device*)(dev))->s_gatekeeper;
     ALOGE("called %s with gate keeper %p device %p\n", __func__, s_gatekeeper, dev);
     if (s_gatekeeper == nullptr) return -EINVAL;
     return s_gatekeeper->verify(uid, challenge,
@@ -69,7 +69,7 @@ static int verify(const struct gatekeeper_device *dev __unused, uint32_t uid, ui
 }
 
 static int close_device(hw_device_t* dev __unused) {
-    SoftGateKeeperDevice *s_gatekeeper = ((anbox_gatekeeper_device*)(dev))->s_gatekeeper;
+    SoftGateKeeperDevice *s_gatekeeper = ((waydroid_gatekeeper_device*)(dev))->s_gatekeeper;
     if (s_gatekeeper == nullptr) return 0;
     delete s_gatekeeper;
     s_gatekeeper = nullptr;
@@ -77,7 +77,7 @@ static int close_device(hw_device_t* dev __unused) {
     return 0;
 }
 
-static int anbox_gatekeeper_open(const hw_module_t *module, const char *name,
+static int waydroid_gatekeeper_open(const hw_module_t *module, const char *name,
         hw_device_t **device) {
 
     if (strcmp(name, HARDWARE_GATEKEEPER) != 0) {
@@ -109,7 +109,7 @@ static int anbox_gatekeeper_open(const hw_module_t *module, const char *name,
 }
 
 static struct hw_module_methods_t gatekeeper_module_methods = {
-    .open = anbox_gatekeeper_open,
+    .open = waydroid_gatekeeper_open,
 };
 
 struct gatekeeper_module HAL_MODULE_INFO_SYM __attribute__((visibility("default"))) = {
@@ -118,7 +118,7 @@ struct gatekeeper_module HAL_MODULE_INFO_SYM __attribute__((visibility("default"
         .module_api_version = GATEKEEPER_MODULE_API_VERSION_0_1,
         .hal_api_version = HARDWARE_HAL_API_VERSION,
         .id = GATEKEEPER_HARDWARE_MODULE_ID,
-        .name = "Anbox GateKeeper HAL",
+        .name = "Waydroid GateKeeper HAL",
         .author = "The Android Open Source Project",
         .methods = &gatekeeper_module_methods,
         .dso = 0,

@@ -1057,7 +1057,7 @@ static int adev_open(const hw_module_t* module, const char* name,
     struct alsa_audio_device *adev;
     char property[PROPERTY_VALUE_MAX];
 
-    if (property_get("anbox.pulse_runtime_path", property, "/run/user/1000/pulse") > 0) {
+    if (property_get("waydroid.pulse_runtime_path", property, "/run/user/1000/pulse") > 0) {
         setenv("PULSE_RUNTIME_PATH", property, 1);
     }
 
@@ -1110,7 +1110,7 @@ struct audio_module HAL_MODULE_INFO_SYM = {
         .module_api_version = AUDIO_MODULE_API_VERSION_0_1,
         .hal_api_version = HARDWARE_HAL_API_VERSION,
         .id = AUDIO_HARDWARE_MODULE_ID,
-        .name = "Audio HAL for Anbox",
+        .name = "Audio HAL for Waydroid",
         .author = "The Android Open Source Project",
         .methods = &hal_module_methods,
     },

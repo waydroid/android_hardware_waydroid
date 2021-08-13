@@ -1,4 +1,4 @@
-service vendor.hwcomposer-2-1 /vendor/bin/hw/android.hardware.graphics.composer@2.1-service.anbox --desktop_file_hint=unity8.desktop
+service vendor.hwcomposer-2-1 /vendor/bin/hw/android.hardware.graphics.composer@2.1-service.waydroid --desktop_file_hint=unity8.desktop
     class hal animation
     user system
     group graphics drmrpc

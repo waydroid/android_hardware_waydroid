@@ -23,7 +23,7 @@
 
 using namespace gatekeeper;
 
-namespace anbox {
+namespace waydroid {
 
 /**
  * Software based GateKeeper implementation

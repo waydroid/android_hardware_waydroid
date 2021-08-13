@@ -16,7 +16,7 @@
 #include "SoftGateKeeper.h"
 #include "SoftGateKeeperDevice.h"
 
-namespace anbox {
+namespace waydroid {
 
 int SoftGateKeeperDevice::enroll(uint32_t uid,
             const uint8_t *current_password_handle, uint32_t current_password_handle_length,
@@ -113,4 +113,4 @@ int SoftGateKeeperDevice::verify(uint32_t uid,
     return 0;
 }
 
-} // namespace anbox
+} // namespace waydroid

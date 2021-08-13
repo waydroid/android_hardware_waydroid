@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 cc_binary {
-    name: "android.hardware.health@2.0-service.anbox",
-    init_rc: ["android.hardware.health@2.0-service.anbox.rc"],
+    name: "android.hardware.health@2.0-service.waydroid",
+    init_rc: ["android.hardware.health@2.0-service.waydroid.rc"],
     proprietary: true,
     relative_install_path: "hw",
     srcs: [

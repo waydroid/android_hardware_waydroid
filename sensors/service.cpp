@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2018 The LineageOS Project
- * Copyright (C) 2021 Anbox Project
+ * Copyright (C) 2021 Waydroid Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ using android::OK;
 using android::status_t;
 
 int main() {
-    if (!property_get_bool("anbox.stub_sensors_hal", false))
+    if (!property_get_bool("waydroid.stub_sensors_hal", false))
         return 0;
 
     android::sp<ISensors> service = new Sensors();
@@ -43,7 +43,7 @@ int main() {
         return 1;
     }
 
-    ALOGI("Anbox Sensors HAL service ready.");
+    ALOGI("Waydroid Sensors HAL service ready.");
 
     joinRpcThreadpool();
 

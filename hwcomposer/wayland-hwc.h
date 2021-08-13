@@ -2,7 +2,7 @@
  * Copyright © 2011 Benjamin Franzke
  * Copyright © 2010 Intel Corporation
  * Copyright © 2014 Collabora Ltd.
- * Copyright © 2021 Anbox Project.
+ * Copyright © 2021 Waydroid Project.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
