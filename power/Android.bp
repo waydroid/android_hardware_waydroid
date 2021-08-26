@@ -18,7 +18,6 @@ cc_binary {
     defaults: ["hidl_defaults"],
     name: "android.hardware.power@1.0-service.waydroid",
     init_rc: ["android.hardware.power@1.0-service.waydroid.rc"],
-    vintf_fragments: ["android.hardware.power@1.0-service.waydroid.xml"],
     srcs: ["service.cpp", "Power.cpp"],
     vendor: true,
     shared_libs: [

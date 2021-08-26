@@ -18,7 +18,6 @@ cc_binary {
     defaults: ["hidl_defaults"],
     name: "android.hardware.sensors@1.0-service.waydroid",
     init_rc: ["android.hardware.sensors@1.0-service.waydroid.rc"],
-    vintf_fragments: ["android.hardware.sensors@1.0-service.waydroid.xml"],
     srcs: ["service.cpp", "Sensors.cpp"],
     vendor: true,
     shared_libs: [

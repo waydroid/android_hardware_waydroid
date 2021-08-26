@@ -16,7 +16,6 @@
 cc_binary {
     name: "android.hardware.health@2.0-service.waydroid",
     init_rc: ["android.hardware.health@2.0-service.waydroid.rc"],
-    vintf_fragments: ["android.hardware.health@2.0-service.waydroid.xml"],
     proprietary: true,
     relative_install_path: "hw",
     srcs: [
