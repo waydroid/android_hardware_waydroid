@@ -344,7 +344,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     } else if (!pdev->use_subsurface) {
         // Single window mode, detecting if any unblacklisted app is on screen
         bool showWindow = false;
-        for (int l = 0; l < contents->numHwLayers; l++) {
+        for (size_t l = 0; l < contents->numHwLayers; l++) {
             std::string layer_name = pdev->display->layer_names[l];
             if (layer_name.substr(0, 4) == "TID:") {
                 std::string layer_aid = layer_name.substr(layer_name.find('#') + 1, layer_name.find('/') - layer_name.find('#') - 1);
@@ -384,7 +384,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         // Checking current open windows to detect and kill obsolete ones
         for (auto it = pdev->windows.cbegin(); it != pdev->windows.cend();) {
             bool foundApp = false;
-            for (int l = 0; l < contents->numHwLayers; l++) {
+            for (size_t l = 0; l < contents->numHwLayers; l++) {
                 std::string layer_name = pdev->display->layer_names[l];
                 if (layer_name.substr(0, 4) == "TID:") {
                     std::string layer_tid = layer_name.substr(4, layer_name.find('#') - 4);
@@ -575,7 +575,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                 if (!it->second->lastLayer)
                     continue;
                 // Neutralize unused surfaces
-                for (int l = it->second->lastLayer; l < it->second->surfaces.size(); l++) {
+                for (size_t l = it->second->lastLayer; l < it->second->surfaces.size(); l++) {
                     if (it->second->surfaces.find(l) != it->second->surfaces.end()) {
                         wl_surface_attach(it->second->surfaces[l], NULL, 0, 0);
                         wl_surface_commit(it->second->surfaces[l]);

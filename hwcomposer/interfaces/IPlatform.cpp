@@ -44,9 +44,6 @@ BpPlatform::BpPlatform(const ::android::sp<::android::IBinder>& _aidl_impl)
     goto _aidl_error;
   }
   _aidl_ret_status = remote()->transact(::android::IBinder::FIRST_CALL_TRANSACTION + 7 /* getAppName */, _aidl_data, &_aidl_reply);
-  if (UNLIKELY(_aidl_ret_status == ::android::UNKNOWN_TRANSACTION && IPlatform::getDefaultImpl())) {
-     return IPlatform::getDefaultImpl()->getAppName(packageName, _aidl_return);
-  }
   if (((_aidl_ret_status) != (::android::OK))) {
     goto _aidl_error;
   }

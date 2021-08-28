@@ -432,7 +432,7 @@ keyboard_handle_key(void *data, struct wl_keyboard *,
     struct display* display = (struct display*)data;
     struct input_event event[6];
     struct timespec rt;
-    int res, n = 0;
+    unsigned int res, n = 0;
 
     if (ensure_pipe(display, INPUT_KEYBOARD))
         return;
@@ -493,7 +493,8 @@ pointer_handle_motion(void *data, struct wl_pointer *,
     struct display* display = (struct display*)data;
     struct input_event event[6];
     struct timespec rt;
-    int x, y, res, n = 0;
+    int x, y;
+    unsigned int res, n = 0;
 
     if (ensure_pipe(display, INPUT_POINTER))
         return;
@@ -535,7 +536,7 @@ pointer_handle_button(void *data, struct wl_pointer *,
     struct display* display = (struct display*)data;
     struct input_event event[6];
     struct timespec rt;
-    int res, n = 0;
+    unsigned int res, n = 0;
 
     if (ensure_pipe(display, INPUT_POINTER))
         return;
@@ -559,7 +560,7 @@ pointer_handle_axis(void *data, struct wl_pointer *,
     struct display* display = (struct display*)data;
     struct input_event event[6];
     struct timespec rt;
-    int res, n = 0;
+    unsigned int res, n = 0;
 
     if (ensure_pipe(display, INPUT_POINTER))
         return;
@@ -646,7 +647,8 @@ touch_handle_down(void *data, struct wl_touch *,
     struct display* display = (struct display*)data;
     struct input_event event[6];
     struct timespec rt;
-    int x, y, res, n = 0;
+    int x, y;
+    unsigned int res, n = 0;
 
     if (ensure_pipe(display, INPUT_TOUCH))
         return;
@@ -685,7 +687,7 @@ touch_handle_up(void *data, struct wl_touch *,
     struct display* display = (struct display*)data;
     struct input_event event[4];
     struct timespec rt;
-    int res, n = 0;
+    unsigned int res, n = 0;
 
     if (ensure_pipe(display, INPUT_TOUCH))
         return;
@@ -712,7 +714,8 @@ touch_handle_motion(void *data, struct wl_touch *,
     struct display* display = (struct display*)data;
     struct input_event event[6];
     struct timespec rt;
-    int x, y, res, n = 0;
+    int x, y;
+    unsigned int res, n = 0;
 
     if (ensure_pipe(display, INPUT_TOUCH))
         return;
@@ -758,7 +761,7 @@ touch_handle_shape(void *data, struct wl_touch *, int32_t id, wl_fixed_t major, 
     struct display* display = (struct display*)data;
     struct input_event event[6];
     struct timespec rt;
-    int res, n = 0;
+    unsigned int res, n = 0;
 
     if (ensure_pipe(display, INPUT_TOUCH))
         return;

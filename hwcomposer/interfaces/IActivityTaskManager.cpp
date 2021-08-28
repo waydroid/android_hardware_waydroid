@@ -48,9 +48,6 @@ BpActivityTaskManager::BpActivityTaskManager(const ::android::sp<::android::IBin
     goto _aidl_error;
   }
   _aidl_ret_status = remote()->transact(::android::IBinder::FIRST_CALL_TRANSACTION + 29 /* removeTask */, _aidl_data, &_aidl_reply);
-  if (UNLIKELY(_aidl_ret_status == ::android::UNKNOWN_TRANSACTION && IActivityTaskManager::getDefaultImpl())) {
-     return IActivityTaskManager::getDefaultImpl()->removeTask(taskId, _aidl_return);
-  }
   if (((_aidl_ret_status) != (::android::OK))) {
     goto _aidl_error;
   }
@@ -80,9 +77,6 @@ BpActivityTaskManager::BpActivityTaskManager(const ::android::sp<::android::IBin
     goto _aidl_error;
   }
   _aidl_ret_status = remote()->transact(::android::IBinder::FIRST_CALL_TRANSACTION + 30 /* removeAllVisibleRecentTasks */, _aidl_data, &_aidl_reply);
-  if (UNLIKELY(_aidl_ret_status == ::android::UNKNOWN_TRANSACTION && IActivityTaskManager::getDefaultImpl())) {
-     return IActivityTaskManager::getDefaultImpl()->removeAllVisibleRecentTasks();
-  }
   if (((_aidl_ret_status) != (::android::OK))) {
     goto _aidl_error;
   }
