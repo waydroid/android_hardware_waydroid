@@ -55,8 +55,6 @@
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
 #include <cutils/trace.h>
 #include <cutils/properties.h>
-#include <utils/String16.h>
-#include <utils/String8.h>
 
 #include <wayland-client.h>
 #include <wayland-android-client-protocol.h>
@@ -64,19 +62,7 @@
 #include "presentation-time-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
 
-#include <binder/IBinder.h>
-#include <binder/IServiceManager.h>
-#include <android/app/IActivityTaskManager.h>
-#include <lineageos/waydroid/IPlatform.h>
-
-using ::android::app::IActivityTaskManager;
-using ::lineageos::waydroid::IPlatform;
-
-using ::android::IBinder;
-using ::android::IServiceManager;
-using ::android::OK;
-using ::android::sp;
-using ::android::status_t;
+using ::android::hardware::hidl_string;
 
 struct buffer;
 
@@ -273,21 +259,13 @@ xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
 {
     struct window *window = (struct window *)data;
 
-    static sp<IActivityTaskManager> mActivityTaskManager;
-    if (mActivityTaskManager == nullptr) {
-        sp<IServiceManager> sm = android::defaultServiceManager();
-        sp<IBinder> binderTask = sm->getService(android::String16("activity_task"));
-        if (binderTask != nullptr)
-            mActivityTaskManager = android::interface_cast<IActivityTaskManager>(binderTask);
-    }
-    if (mActivityTaskManager != nullptr) {
+    if (window->display->task != nullptr) {
         if (window->taskID != "none") {
             if (window->taskID == "0") {
                 property_set("waydroid.active_apps", "none");
-                mActivityTaskManager->removeAllVisibleRecentTasks();
+                window->display->task->removeAllVisibleRecentTasks();
             } else {
-                bool ret;
-                mActivityTaskManager->removeTask(stoi(window->taskID), &ret);
+                window->display->task->removeTask(stoi(window->taskID));
             }
         }
     }
@@ -340,18 +318,13 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
         assert(window->xdg_toplevel);
         xdg_toplevel_add_listener(window->xdg_toplevel, &xdg_toplevel_listener, window);
         xdg_toplevel_set_maximized(window->xdg_toplevel);
-        static sp<IPlatform> mPlatform;
-        if (mPlatform == nullptr) {
-            sp<IServiceManager> sm = android::defaultServiceManager();
-            sp<IBinder> binderPlatform = sm->getService(android::String16("waydroidplatform"));
-            if (binderPlatform != nullptr)
-                mPlatform = android::interface_cast<IPlatform>(binderPlatform);
-        }
-        android::String16 AppName = android::String16(appID.c_str());
-        if (mPlatform != nullptr)
-            mPlatform->getAppName(android::String16(appID.c_str()), &AppName);
-        android::String8 AppName8 = android::String8(AppName);
-        xdg_toplevel_set_title(window->xdg_toplevel, AppName8.string());
+        const hidl_string appID_hidl(appID);
+        hidl_string appName_hidl(appID);
+        if (display->task)
+            display->task->getAppName(appID_hidl, [&](const hidl_string &value)
+                                      { xdg_toplevel_set_title(window->xdg_toplevel, value.c_str()); });
+        else
+            xdg_toplevel_set_title(window->xdg_toplevel, appID.c_str());
         xdg_toplevel_set_app_id(window->xdg_toplevel, appID.c_str());
         wl_surface_commit(window->surface);
 
@@ -1037,6 +1010,7 @@ create_display(const char *gralloc)
                  &registry_listener, display);
     wl_display_roundtrip(display->display);
 
+    display->task = IWaydroidTask::getService();
     return display;
 }
 

@@ -48,7 +48,6 @@ using ::vendor::waydroid::display::V1_0::IWaydroidDisplay;
 using ::vendor::waydroid::display::V1_0::implementation::WaydroidDisplay;
 
 using ::android::OK;
-using ::android::sp;
 using ::android::status_t;
 
 struct waydroid_hwc_composer_device_1 {

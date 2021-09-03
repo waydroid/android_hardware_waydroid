@@ -1,0 +1,5 @@
+service task-hal-1-0 /system/bin/hw/vendor.waydroid.task@1.0-service
+    interface vendor.waydroid.task@1.0::IWaydroidTask default
+    class hal
+    user system
+    group system

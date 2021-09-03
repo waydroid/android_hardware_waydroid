@@ -26,6 +26,8 @@
  * SOFTWARE.
  */
 
+#pragma once
+
 #include <cutils/native_handle.h>
 
 #include <stdint.h>
@@ -43,6 +45,10 @@
 #include <map>
 #include <mutex>
 #include <condition_variable>
+#include <vendor/waydroid/task/1.0/IWaydroidTask.h>
+
+using ::android::sp;
+using ::vendor::waydroid::task::V1_0::IWaydroidTask;
 
 enum {
     INPUT_TOUCH,
@@ -114,6 +120,7 @@ struct display {
     std::map<buffer_handle_t, struct buffer *> buffer_map;
 
     bool isWinResSet;
+    sp<IWaydroidTask> task;
 };
 
 struct buffer {
