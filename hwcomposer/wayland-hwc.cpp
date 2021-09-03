@@ -251,6 +251,11 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
 {
     struct window *window = (struct window *)data;
 
+    if (width == 0 || height == 0) {
+		/* Compositor is deferring to us */
+		return;
+	}
+
     if (! window->display->isWinResSet) {
         if (window->display->scale > 1) {
             width *= window->display->scale;
