@@ -247,9 +247,9 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
             width *= window->display->scale;
             height *= window->display->scale;
         }
-        property_set("persist.waydroid.window_width", std::to_string(width).c_str());
-        property_set("persist.waydroid.window_height", std::to_string(height).c_str());
-
+        window->display->width = width;
+        window->display->height = height;
+        window->display->cv.notify_one();
         window->display->isWinResSet = true;
     }
 }
@@ -320,7 +320,7 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
         xdg_toplevel_set_maximized(window->xdg_toplevel);
         const hidl_string appID_hidl(appID);
         hidl_string appName_hidl(appID);
-        if (display->task)
+        if (appID != "Waydroid" && display->task)
             display->task->getAppName(appID_hidl, [&](const hidl_string &value)
                                       { xdg_toplevel_set_title(window->xdg_toplevel, value.c_str()); });
         else
@@ -869,14 +869,16 @@ static const struct zwp_linux_dmabuf_v1_listener dmabuf_listener = {
 
 static void
 output_handle_mode(void *data, struct wl_output *,
-           uint32_t, int32_t width, int32_t height,
-           int32_t)
+                   uint32_t, int32_t width, int32_t height,
+                   int32_t refresh)
 {
-    struct display *d = (struct display*)data;
+    struct display *d = (struct display *)data;
 
-    d->width = width;
-    d->height = height;
-    d->cv.notify_one();
+    d->full_width = width;
+    d->full_height = height;
+    d->refresh = refresh;
+    property_set("waydroid.display_width", std::to_string(width).c_str());
+    property_set("waydroid.display_height", std::to_string(height).c_str());
 }
 
 static void
@@ -901,7 +903,7 @@ output_handle_scale(void *data, struct wl_output *,
     struct display *d = (struct display*)data;
 
     d->scale = scale;
-    property_set("waydroid.display_scale", std::to_string(scale).c_str());
+    property_set("persist.waydroid.scale", std::to_string(scale).c_str());
 }
 
 static const struct wl_output_listener output_listener = {

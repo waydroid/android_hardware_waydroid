@@ -111,6 +111,9 @@ struct display {
 
     int width;
     int height;
+    int full_width;
+    int full_height;
+    int refresh;
     uint32_t *formats;
     int formats_count;
     bool geo_changed;
