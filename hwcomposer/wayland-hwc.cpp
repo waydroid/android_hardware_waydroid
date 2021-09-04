@@ -796,6 +796,7 @@ seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t wl_caps)
         d->ptrPrvX = 0;
         d->ptrPrvY = 0;
         mkfifo(INPUT_PIPE_NAME[INPUT_POINTER], S_IRWXO | S_IRWXG | S_IRWXU);
+        chown(INPUT_PIPE_NAME[INPUT_POINTER], 1000, 1000);
         wl_pointer_add_listener(d->pointer, &pointer_listener, d);
     } else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && d->pointer) {
         remove(INPUT_PIPE_NAME[INPUT_POINTER]);
@@ -807,6 +808,7 @@ seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t wl_caps)
         d->keyboard = wl_seat_get_keyboard(seat);
         d->input_fd[INPUT_KEYBOARD] = -1;
         mkfifo(INPUT_PIPE_NAME[INPUT_KEYBOARD], S_IRWXO | S_IRWXG | S_IRWXU);
+        chown(INPUT_PIPE_NAME[INPUT_KEYBOARD], 1000, 1000);
         wl_keyboard_add_listener(d->keyboard, &keyboard_listener, d);
     } else if (!(caps & WL_SEAT_CAPABILITY_KEYBOARD) && d->keyboard) {
         remove(INPUT_PIPE_NAME[INPUT_KEYBOARD]);
@@ -818,6 +820,7 @@ seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t wl_caps)
         d->touch = wl_seat_get_touch(seat);
         d->input_fd[INPUT_TOUCH] = -1;
         mkfifo(INPUT_PIPE_NAME[INPUT_TOUCH], S_IRWXO | S_IRWXG | S_IRWXU);
+        chown(INPUT_PIPE_NAME[INPUT_TOUCH], 1000, 1000);
         for (int i = 0; i < MAX_TOUCHPOINTS; i++)
             d->touch_id[i] = -1;
         wl_touch_set_user_data(d->touch, d);
@@ -1006,7 +1009,9 @@ create_display(const char *gralloc)
     display->display = wl_display_connect(NULL);
     assert(display->display);
 
+    umask(0);
     mkdir("/dev/input", S_IRWXO | S_IRWXG | S_IRWXU);
+    chown("/dev/input", 1000, 1000);
     display->registry = wl_display_get_registry(display->display);
     wl_registry_add_listener(display->registry,
                  &registry_listener, display);
