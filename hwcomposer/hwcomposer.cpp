@@ -672,24 +672,28 @@ static int32_t hwc_attribute(struct waydroid_hwc_composer_device_1* pdev,
         case HWC_DISPLAY_VSYNC_PERIOD:
             return pdev->vsync_period_ns;
         case HWC_DISPLAY_WIDTH:
-            if (property_get("persist.waydroid.width", property, nullptr) > 0)
+            if (property_get("persist.waydroid.width", property, nullptr) > 0) {
+                property_set("waydroid.display_width", property);
                 return atoi(property);
+            }
             if (width <= 0) {
                 width = pdev->display->full_width;
             }
             if (property_get("persist.waydroid.width_padding", property, nullptr) > 0)
                 width -= atoi(property);
-            property_set("waydroid.width", std::to_string(width).c_str());
+            property_set("waydroid.display_width", std::to_string(width).c_str());
             return width;
         case HWC_DISPLAY_HEIGHT:
-            if (property_get("persist.waydroid.height", property, nullptr) > 0)
+            if (property_get("persist.waydroid.height", property, nullptr) > 0) {
+                property_set("waydroid.display_height", property);
                 return atoi(property);
+            }
             if (height <= 0) {
                 height = pdev->display->full_height;
             }
             if (property_get("persist.waydroid.height_padding", property, nullptr) > 0)
                 height -= atoi(property);
-            property_set("waydroid.height", std::to_string(height).c_str());
+            property_set("waydroid.display_height", std::to_string(height).c_str());
             return height;
         case HWC_DISPLAY_DPI_X:
         case HWC_DISPLAY_DPI_Y:

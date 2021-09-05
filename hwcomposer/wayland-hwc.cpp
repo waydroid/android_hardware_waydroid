@@ -880,8 +880,8 @@ output_handle_mode(void *data, struct wl_output *,
     d->full_width = width;
     d->full_height = height;
     d->refresh = refresh;
-    property_set("waydroid.display_width", std::to_string(width).c_str());
-    property_set("waydroid.display_height", std::to_string(height).c_str());
+    property_set("waydroid.full_display_width", std::to_string(width).c_str());
+    property_set("waydroid.full_display_height", std::to_string(height).c_str());
 }
 
 static void
