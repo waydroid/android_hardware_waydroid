@@ -873,7 +873,12 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     pdev->base.getDisplayAttributes = hwc_get_display_attributes;
 
     pdev->vsync_period_ns = 1000*1000*1000/60; // vsync is 60 hz
-    pdev->timeline_fd = sw_sync_timeline_create();
+
+    pdev->use_subsurface = property_get_bool("persist.waydroid.multi_windows", false);
+    if (pdev->use_subsurface)
+        pdev->timeline_fd = -1;
+    else
+        pdev->timeline_fd = sw_sync_timeline_create();
     pdev->next_sync_point = 1;
 
     if (property_get("waydroid.xdg_runtime_dir", property, "/run/user/1000") > 0) {
@@ -890,7 +895,6 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
         return -ENODEV;
     }
     ALOGE("wayland display %p", pdev->display);
-    pdev->use_subsurface = property_get_bool("persist.waydroid.multi_windows", false);
 
     pthread_mutex_init(&pdev->vsync_lock, NULL);
     pthread_mutex_init(&pdev->display->data_mutex, NULL);
