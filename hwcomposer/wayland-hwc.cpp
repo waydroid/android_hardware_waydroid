@@ -233,7 +233,7 @@ static const struct xdg_surface_listener xdg_surface_listener = {
 static void
 xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
                               int32_t width, int32_t height,
-                              struct wl_array *)
+                              struct wl_array *states)
 {
     struct window *window = (struct window *)data;
 
@@ -253,6 +253,22 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
         if (window->display->waiting_for_data)
             pthread_cond_broadcast(&window->display->data_available_cond);
     }
+
+    for (enum xdg_toplevel_state *state = static_cast<xdg_toplevel_state *>(states->data);
+         reinterpret_cast<uint8_t *>(state) < (static_cast<uint8_t *>(states->data) + states->size);
+         state++) {
+        switch (*state) {
+            case XDG_TOPLEVEL_STATE_ACTIVATED:
+                if (window->display->task != nullptr) {
+                    if (window->taskID != "none" && window->taskID != "0") {
+                            window->display->task->setFocusedTask(stoi(window->taskID));
+                    }
+                }
+                break;
+            default:
+                break;
+        }
+    }
 }
 
 static void
@@ -262,6 +278,7 @@ xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
 
     if (window->display->task != nullptr) {
         if (window->taskID != "none") {
+            window->isActive = false;
             if (window->taskID == "0") {
                 property_set("waydroid.active_apps", "none");
                 window->display->task->removeAllVisibleRecentTasks();
@@ -306,6 +323,7 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
     window->display = display;
     window->surface = wl_compositor_create_surface(display->compositor);
     window->taskID = taskID;
+    window->isActive = true;
 
     if (display->wm_base) {
         window->xdg_surface =

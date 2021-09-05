@@ -310,6 +310,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     std::string active_apps = std::string(property);
     property_get("waydroid.blacklist_apps", property, "com.android.launcher3");
     std::string blacklist_apps = std::string(property);
+    std::string single_layer_tid;
+    std::string single_layer_aid;
     if (active_apps == "none") {
         // Clear all open windows
         for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
@@ -347,6 +349,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         for (size_t l = 0; l < contents->numHwLayers; l++) {
             std::string layer_name = pdev->display->layer_names[l];
             if (layer_name.substr(0, 4) == "TID:") {
+                std::string layer_tid = layer_name.substr(4, layer_name.find('#') - 4);
                 std::string layer_aid = layer_name.substr(layer_name.find('#') + 1, layer_name.find('/') - layer_name.find('#') - 1);
                 
                 std::istringstream iss(blacklist_apps);
@@ -355,8 +358,13 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                     if (app == layer_aid) {
                         showWindow = false;
                         break;
-                    } else
+                    } else {
                         showWindow = true;
+                        if (!single_layer_tid.length()) {
+                            single_layer_tid = layer_tid;
+                            single_layer_aid = layer_aid;
+                        }
+                    }
                 }
             }
         }
@@ -378,6 +386,32 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             contents->retireFenceFd = -1;
 
             return 0;
+        }
+        bool showClose = true;
+        for (auto it = pdev->windows.cbegin(); it != pdev->windows.cend();) {
+            if (it->second) {
+                // This window is closed
+                if (!it->second->isActive) {
+                    for (size_t l = 0; l < contents->numHwLayers; l++) {
+                        std::string layer_name = pdev->display->layer_names[l];
+                        if (layer_name.substr(0, 4) == "TID:") {
+                            std::string layer_tid = layer_name.substr(4, layer_name.find('#') - 4);
+                            if (layer_tid == it->first) {
+                                showClose = false;
+                                break;
+                            }
+                        }
+                    }
+                    if (showClose) {
+                        destroy_window(it->second);
+                        pdev->windows.erase(it++);
+                        showClose = true;
+                    } else
+                        ++it;
+                } else
+                    ++it;
+            } else
+                ++it;
         }
     } else {
         // Multi window mode
@@ -444,12 +478,19 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         struct window *window = NULL;
         std::string layer_name = pdev->display->layer_names[layer];
 
-        if (active_apps == "Waydroid" || !pdev->use_subsurface) {
+        if (active_apps == "Waydroid") {
             // Show everything in a single window
-            if (pdev->windows.find("Waydroid") == pdev->windows.end()) {
-                pdev->windows["Waydroid"] = create_window(pdev->display, pdev->use_subsurface, active_apps, "0");
+            if (pdev->windows.find(active_apps) == pdev->windows.end()) {
+                pdev->windows[active_apps] = create_window(pdev->display, pdev->use_subsurface, active_apps, "0");
             }
-            window = pdev->windows["Waydroid"];
+            window = pdev->windows[active_apps];
+        } else if (!pdev->use_subsurface) {
+            if (single_layer_tid.length()) {
+                if (pdev->windows.find(single_layer_tid) == pdev->windows.end()) {
+                    pdev->windows[single_layer_tid] = create_window(pdev->display, pdev->use_subsurface, single_layer_aid, single_layer_tid);
+                }
+                window = pdev->windows[single_layer_tid];
+            }
         } else {
             // Create windows based on Task ID in layer name
             if (layer_name.substr(0, 4) == "TID:") {

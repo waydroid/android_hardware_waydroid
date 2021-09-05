@@ -150,6 +150,7 @@ struct window {
     struct wl_callback *callback;
     int lastLayer;
     std::string taskID;
+    bool isActive;
 };
 
 int
