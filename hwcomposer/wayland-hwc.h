@@ -43,8 +43,7 @@
 #include <getopt.h>
 #include <errno.h>
 #include <map>
-#include <mutex>
-#include <condition_variable>
+#include <pthread.h>
 #include <vendor/waydroid/task/1.0/IWaydroidTask.h>
 
 using ::android::sp;
@@ -98,8 +97,9 @@ struct display {
     struct xdg_wm_base *wm_base;
     int gtype;
     int scale;
-    std::mutex mtx;
-    std::condition_variable cv;
+    pthread_mutex_t data_mutex;
+    pthread_cond_t data_available_cond;
+    bool waiting_for_data;
 
     int input_fd[INPUT_TOTAL];
     int ptrPrvX;

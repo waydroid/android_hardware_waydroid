@@ -249,8 +249,9 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
         }
         window->display->width = width;
         window->display->height = height;
-        window->display->cv.notify_one();
         window->display->isWinResSet = true;
+        if (window->display->waiting_for_data)
+            pthread_cond_broadcast(&window->display->data_available_cond);
     }
 }
 

@@ -852,13 +852,20 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     pdev->use_subsurface = property_get_bool("persist.waydroid.multi_windows", false);
 
     pthread_mutex_init(&pdev->vsync_lock, NULL);
+    pthread_mutex_init(&pdev->display->data_mutex, NULL);
+    pthread_cond_init(&pdev->display->data_available_cond, NULL);
+    pdev->display->waiting_for_data = false;
     pdev->vsync_callback_enabled = true;
+    pthread_mutex_lock(&pdev->display->data_mutex);
     pdev->calib_window = create_window(pdev->display, false, "Waydroid", "0");
     if (!pdev->display->height) {
-        std::unique_lock<std::mutex> lck(pdev->display->mtx);
-        pdev->display->cv.wait(lck);
+        pdev->display->waiting_for_data = true;
+        pthread_cond_wait(&pdev->display->data_available_cond, 
+            &pdev->display->data_mutex);
+        pdev->display->waiting_for_data = false;
     }
     destroy_window(pdev->calib_window);
+    pthread_mutex_unlock(&pdev->display->data_mutex);
     if (pdev->display->refresh)
         pdev->vsync_period_ns = 1000 * 1000 * 1000 / (pdev->display->refresh / 1000);
 
