@@ -14,6 +14,7 @@ class BpActivityTaskManager : public ::android::BpInterface<IActivityTaskManager
 public:
   explicit BpActivityTaskManager(const ::android::sp<::android::IBinder>& _aidl_impl);
   virtual ~BpActivityTaskManager() = default;
+  ::android::binder::Status setFocusedTask(int32_t taskId) override;
   ::android::binder::Status removeTask(int32_t taskId, bool* _aidl_return) override;
   ::android::binder::Status removeAllVisibleRecentTasks() override;
 };  // class BpActivityTaskManager

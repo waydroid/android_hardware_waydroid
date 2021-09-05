@@ -45,8 +45,9 @@ using ::lineageos::waydroid::IPlatform;
 
 struct WaydroidTask : public IWaydroidTask {
     // Methods from ::vendor::waydroid::task::V1_0::IWaydroidTask follow.
-    Return<void> removeAllVisibleRecentTasks() override;
+    Return<void> setFocusedTask(uint32_t taskID) override;
     Return<void> removeTask(uint32_t taskID) override;
+    Return<void> removeAllVisibleRecentTasks() override;
     Return<void> getAppName(const hidl_string& packageName, getAppName_cb _hidl_cb) override;
   private:
     sp<IActivityTaskManager> mActivityTaskManager;

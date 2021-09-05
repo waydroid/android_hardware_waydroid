@@ -16,7 +16,8 @@
 package vendor.waydroid.task@1.0;
 
 interface IWaydroidTask {
-    removeAllVisibleRecentTasks();
+    setFocusedTask(uint32_t taskID);
     removeTask(uint32_t taskID);
+    removeAllVisibleRecentTasks();
     getAppName(string packageName) generates (string name);
 };

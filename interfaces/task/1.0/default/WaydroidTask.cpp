@@ -26,14 +26,14 @@ namespace V1_0 {
 namespace implementation {
 
 // Methods from ::vendor::waydroid::task::V1_0::IWaydroidTask follow.
-Return<void> WaydroidTask::removeAllVisibleRecentTasks() {
+Return<void> WaydroidTask::setFocusedTask(uint32_t taskID) {
     if (mActivityTaskManager == nullptr) {
         sp<IBinder> binderTask = android::defaultServiceManager()->getService(android::String16("activity_task"));
         if (binderTask != nullptr)
             mActivityTaskManager = android::interface_cast<IActivityTaskManager>(binderTask);
     }
     if (mActivityTaskManager != nullptr)
-        mActivityTaskManager->removeAllVisibleRecentTasks();
+        mActivityTaskManager->setFocusedTask(taskID);
     return Void();
 }
 
@@ -46,6 +46,17 @@ Return<void> WaydroidTask::removeTask(uint32_t taskID) {
     }
     if (mActivityTaskManager != nullptr)
         mActivityTaskManager->removeTask(taskID, &ret);
+    return Void();
+}
+
+Return<void> WaydroidTask::removeAllVisibleRecentTasks() {
+    if (mActivityTaskManager == nullptr) {
+        sp<IBinder> binderTask = android::defaultServiceManager()->getService(android::String16("activity_task"));
+        if (binderTask != nullptr)
+            mActivityTaskManager = android::interface_cast<IActivityTaskManager>(binderTask);
+    }
+    if (mActivityTaskManager != nullptr)
+        mActivityTaskManager->removeAllVisibleRecentTasks();
     return Void();
 }
 

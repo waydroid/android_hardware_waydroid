@@ -14,6 +14,7 @@ namespace app {
 class IActivityTaskManager : public ::android::IInterface {
 public:
   DECLARE_META_INTERFACE(ActivityTaskManager)
+  virtual ::android::binder::Status setFocusedTask(int32_t taskId) = 0;
   virtual ::android::binder::Status removeTask(int32_t taskId, bool* _aidl_return) = 0;
   virtual ::android::binder::Status removeAllVisibleRecentTasks() = 0;
 };  // class IActivityTaskManager
@@ -21,6 +22,7 @@ public:
 class IActivityTaskManagerDefault : public IActivityTaskManager {
 public:
   ::android::IBinder* onAsBinder() override;
+  ::android::binder::Status setFocusedTask(int32_t taskId) override;
   ::android::binder::Status removeTask(int32_t taskId, bool* _aidl_return) override;
   ::android::binder::Status removeAllVisibleRecentTasks() override;
 
