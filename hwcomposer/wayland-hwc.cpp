@@ -1025,6 +1025,7 @@ create_display(const char *gralloc)
         return NULL;
     }
     display->gtype = get_gralloc_type(gralloc);
+    display->refresh = 0;
     display->display = wl_display_connect(NULL);
     assert(display->display);
 

@@ -907,7 +907,7 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     }
     destroy_window(pdev->calib_window);
     pthread_mutex_unlock(&pdev->display->data_mutex);
-    if (pdev->display->refresh)
+    if (pdev->display->refresh > 1000 && pdev->display->refresh < 1000000)
         pdev->vsync_period_ns = 1000 * 1000 * 1000 / (pdev->display->refresh / 1000);
 
     struct timespec rt;
