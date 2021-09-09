@@ -108,6 +108,7 @@ struct display {
     std::map<struct wl_surface *, struct layerFrame> layers;
     std::map<int, struct wl_surface *> touch_surfaces;
     struct wl_surface *pointer_surface;
+    struct wl_surface *cursor_surface;
 
     int width;
     int height;
