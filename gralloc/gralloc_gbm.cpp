@@ -77,7 +77,10 @@ static uint32_t get_gbm_format(int format)
 
 	switch (format) {
 	case HAL_PIXEL_FORMAT_RGBA_8888:
-		fmt = GBM_FORMAT_ABGR8888;
+		if (property_get_bool("persist.waydroid.invert_colors", false))
+			fmt = GBM_FORMAT_ARGB8888;
+		else
+			fmt = GBM_FORMAT_ABGR8888;
 		break;
 	case HAL_PIXEL_FORMAT_RGBX_8888:
 		fmt = GBM_FORMAT_XBGR8888;
@@ -89,7 +92,10 @@ static uint32_t get_gbm_format(int format)
 		fmt = GBM_FORMAT_RGB565;
 		break;
 	case HAL_PIXEL_FORMAT_BGRA_8888:
-		fmt = GBM_FORMAT_ARGB8888;
+		if (property_get_bool("persist.waydroid.invert_colors", false))
+			fmt = GBM_FORMAT_ABGR8888;
+		else
+			fmt = GBM_FORMAT_ARGB8888;
 		break;
 	case HAL_PIXEL_FORMAT_YV12:
 		/* YV12 is planar, but must be a single buffer so ask for GR88 */
