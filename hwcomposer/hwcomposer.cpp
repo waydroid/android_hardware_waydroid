@@ -329,6 +329,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         close(contents->retireFenceFd);
         contents->retireFenceFd = -1;
 
+        property_set("waydroid.open_windows", "0");
         return 0;
     } else if (active_apps == "Waydroid") {
         // Clear all open windows if there's any and just keep "Waydroid"
@@ -385,6 +386,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             close(contents->retireFenceFd);
             contents->retireFenceFd = -1;
 
+            property_set("waydroid.open_windows", "0");
             return 0;
         }
         bool showClose = true;
@@ -631,6 +633,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                 }
             }
         }
+        property_set("waydroid.open_windows", std::to_string(pdev->windows.size()).c_str());
         pdev->display->geo_changed = false;
     }
     wl_display_flush(pdev->display->display);
