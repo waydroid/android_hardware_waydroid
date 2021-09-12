@@ -183,7 +183,7 @@ static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pde
 static long time_to_sleep_to_next_vsync(struct timespec *rt, uint64_t last_vsync_ns, unsigned vsync_period_ns)
 {
     uint64_t now = (uint64_t)rt->tv_sec * 1e9 + rt->tv_nsec;
-    unsigned frames_since_last_vsync = (now - last_vsync_ns) / vsync_period_ns + 1;
+    uint64_t frames_since_last_vsync = (now - last_vsync_ns) / vsync_period_ns + 1;
     uint64_t next_vsync = last_vsync_ns + frames_since_last_vsync * vsync_period_ns;
 
     return next_vsync - now;
@@ -216,7 +216,7 @@ static void* hwc_vsync_thread(void* data) {
             }
             ATRACE_END();
             ALOGE("error in vsync thread: %s", strerror(errno));
-            return NULL;
+            continue;
         }
 
         pthread_mutex_lock(&pdev->vsync_lock);
