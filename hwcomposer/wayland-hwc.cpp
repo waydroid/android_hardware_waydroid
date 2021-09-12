@@ -541,6 +541,9 @@ pointer_handle_button(void *data, struct wl_pointer *,
     if (ensure_pipe(display, INPUT_POINTER))
         return;
 
+    if (!display->pointer_surface)
+        return;
+
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
         ALOGE("%s:%d error in touch clock_gettime: %s",
               __FILE__, __LINE__, strerror(errno));
@@ -563,6 +566,9 @@ pointer_handle_axis(void *data, struct wl_pointer *,
     unsigned int res, n = 0;
 
     if (ensure_pipe(display, INPUT_POINTER))
+        return;
+
+    if (!display->pointer_surface)
         return;
 
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
