@@ -344,6 +344,9 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
                                       { xdg_toplevel_set_title(window->xdg_toplevel, value.c_str()); });
         else
             xdg_toplevel_set_title(window->xdg_toplevel, appID.c_str());
+
+        if (appID != "Waydroid")
+            appID = "waydroid." + appID;
         xdg_toplevel_set_app_id(window->xdg_toplevel, appID.c_str());
         wl_surface_commit(window->surface);
 
