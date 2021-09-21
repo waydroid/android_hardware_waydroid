@@ -912,6 +912,12 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     }
     ALOGE("wayland display %p", pdev->display);
 
+    struct timespec timeToWait;
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    timeToWait.tv_sec = now.tv_sec + 5;
+    timeToWait.tv_nsec = (now.tv_usec + 1000UL * 2000) * 1000UL;
+
     pthread_mutex_init(&pdev->vsync_lock, NULL);
     pthread_mutex_init(&pdev->display->data_mutex, NULL);
     pthread_cond_init(&pdev->display->data_available_cond, NULL);
@@ -923,8 +929,8 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
         wl_compositor_create_surface(pdev->display->compositor);
     if (!pdev->display->height) {
         pdev->display->waiting_for_data = true;
-        pthread_cond_wait(&pdev->display->data_available_cond, 
-            &pdev->display->data_mutex);
+        pthread_cond_timedwait(&pdev->display->data_available_cond,
+                               &pdev->display->data_mutex, &timeToWait);
         pdev->display->waiting_for_data = false;
     }
     destroy_window(pdev->calib_window);

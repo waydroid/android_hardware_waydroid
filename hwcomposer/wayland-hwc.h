@@ -86,6 +86,7 @@ struct display {
     struct wl_compositor *compositor;
     struct wl_subcompositor *subcompositor;
     struct wl_seat *seat;
+    struct wl_shell *shell;
     struct wl_shm *shm;
     struct wl_pointer *pointer;
     struct wl_keyboard *keyboard;
@@ -144,6 +145,7 @@ struct buffer {
 struct window {
     struct display *display;
     struct wl_surface *surface;
+    struct wl_shell_surface *shell_surface;
     struct xdg_surface *xdg_surface;
     struct xdg_toplevel *xdg_toplevel;
     std::map<size_t, struct wl_surface *> surfaces;

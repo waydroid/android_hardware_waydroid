@@ -295,21 +295,64 @@ static const struct xdg_toplevel_listener xdg_toplevel_listener = {
 };
 
 void
+shell_surface_ping(void *, struct wl_shell_surface *shell_surface, uint32_t serial)
+{
+    wl_shell_surface_pong(shell_surface, serial);
+}
+
+void
+shell_surface_configure(void *data, struct wl_shell_surface *, uint32_t, int32_t width, int32_t height)
+{
+    struct window *window = (struct window *)data;
+
+    if (width == 0 || height == 0) {
+		/* Compositor is deferring to us */
+		return;
+	}
+
+    if (! window->display->isWinResSet) {
+        if (window->display->scale > 1) {
+            width *= window->display->scale;
+            height *= window->display->scale;
+        }
+        window->display->width = width;
+        window->display->height = height;
+        window->display->isWinResSet = true;
+        if (window->display->waiting_for_data)
+            pthread_cond_broadcast(&window->display->data_available_cond);
+    }
+}
+
+void
+shell_surface_popup_done(void *, struct wl_shell_surface *)
+{
+}
+
+struct wl_shell_surface_listener shell_surface_listener = {
+	&shell_surface_ping,
+	&shell_surface_configure,
+	&shell_surface_popup_done
+};
+
+void
 destroy_window(struct window *window)
 {
-	if (window->callback)
-		wl_callback_destroy(window->callback);
+    if (window->callback)
+        wl_callback_destroy(window->callback);
 
     for (auto it = window->surfaces.begin(); it != window->surfaces.end(); it++) {
         wl_subsurface_destroy(window->subsurfaces[it->first]);
         wl_surface_destroy(it->second);
     }
     if (window->xdg_toplevel)
-		xdg_toplevel_destroy(window->xdg_toplevel);
-	if (window->xdg_surface)
-		xdg_surface_destroy(window->xdg_surface);
-	wl_surface_destroy(window->surface);
-	free(window);
+        xdg_toplevel_destroy(window->xdg_toplevel);
+    if (window->xdg_surface)
+        xdg_surface_destroy(window->xdg_surface);
+    if (window->shell_surface)
+        wl_shell_surface_destroy(window->shell_surface);
+
+    wl_surface_destroy(window->surface);
+    free(window);
 }
 
 struct window *
@@ -353,31 +396,51 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
         /* Here we retrieve objects if executed without immed, or error */
         wl_display_roundtrip(display->display);
         wl_surface_commit(window->surface);
+    } else if (display->shell) {
+        window->shell_surface =
+            wl_shell_get_shell_surface(display->shell, window->surface);
+        assert(window->shell_surface);
 
-        /*
-         * We should create a dummy transparent 1x1 buffer in 0x0 location
-         * This allows us to set initial location of windows by setting them as subsurface
-         * and ovarally helps is moving surfaces
-         * 
-         * TODO: Drop this hack
-         */
-        if (with_dummy) {
-            int fd = syscall(SYS_memfd_create, "buffer", 0);
-            ftruncate(fd, 4);
-            void *shm_data = mmap(NULL, 4, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-            if (shm_data == MAP_FAILED) {
-                fprintf(stderr, "mmap failed: %m\n");
-                close(fd);
-                exit(1);
-            }
-            struct wl_shm_pool *pool = wl_shm_create_pool(display->shm, fd, 4);
-            struct wl_buffer *buffer_shm = wl_shm_pool_create_buffer(pool, 0, 1, 1, 4, WL_SHM_FORMAT_ARGB8888);
-            wl_shm_pool_destroy(pool);
-            wl_surface_attach(window->surface, buffer_shm, 0, 0);
-            wl_surface_damage(window->surface, 0, 0, 1, 1);
-        }
+        wl_shell_surface_add_listener(window->shell_surface, &shell_surface_listener, window);
+        wl_shell_surface_set_toplevel(window->shell_surface);
+        wl_shell_surface_set_maximized(window->shell_surface, display->output);
+        const hidl_string appID_hidl(appID);
+        hidl_string appName_hidl(appID);
+        if (appID != "Waydroid" && display->task)
+            display->task->getAppName(appID_hidl, [&](const hidl_string &value)
+                                      { wl_shell_surface_set_title(window->shell_surface, value.c_str()); });
+        else
+            wl_shell_surface_set_title(window->shell_surface, appID.c_str());
+
+        wl_surface_commit(window->surface);
+
+        /* Here we retrieve objects if executed without immed, or error */
+        wl_display_roundtrip(display->display);
+        wl_surface_commit(window->surface);
     } else {
         assert(0);
+    }
+    /*
+     * We should create a dummy transparent 1x1 buffer in 0x0 location
+     * This allows us to set initial location of windows by setting them as subsurface
+     * and ovarally helps is moving surfaces
+     * 
+     * TODO: Drop this hack
+     */
+    if (with_dummy) {
+        int fd = syscall(SYS_memfd_create, "buffer", 0);
+        ftruncate(fd, 4);
+        void *shm_data = mmap(NULL, 4, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (shm_data == MAP_FAILED) {
+            fprintf(stderr, "mmap failed: %m\n");
+            close(fd);
+            exit(1);
+        }
+        struct wl_shm_pool *pool = wl_shm_create_pool(display->shm, fd, 4);
+        struct wl_buffer *buffer_shm = wl_shm_pool_create_buffer(pool, 0, 1, 1, 4, WL_SHM_FORMAT_ARGB8888);
+        wl_shm_pool_destroy(pool);
+        wl_surface_attach(window->surface, buffer_shm, 0, 0);
+        wl_surface_damage(window->surface, 0, 0, 1, 1);
     }
     return window;
 }
@@ -976,6 +1039,9 @@ registry_handle_global(void *data, struct wl_registry *registry,
         d->wm_base = (struct xdg_wm_base*)wl_registry_bind(registry,
                 id, &xdg_wm_base_interface, 1);
         xdg_wm_base_add_listener(d->wm_base, &xdg_wm_base_listener, d);
+    } else if(strcmp(interface, "wl_shell") == 0) {
+        d->shell = (struct wl_shell *)wl_registry_bind(
+                registry, id, &wl_shell_interface, 1);
     } else if (strcmp(interface, "wl_seat") == 0) {
         d->seat = (struct wl_seat*)wl_registry_bind(registry, id,
                 &wl_seat_interface, 1);
@@ -1058,6 +1124,9 @@ destroy_display(struct display *display)
 {
     if (display->wm_base)
         xdg_wm_base_destroy(display->wm_base);
+
+    if (display->shell)
+        wl_shell_destroy(display->shell);
 
     if (display->compositor)
         wl_compositor_destroy(display->compositor);
