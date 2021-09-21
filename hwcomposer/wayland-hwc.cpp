@@ -43,6 +43,7 @@
 #include <getopt.h>
 #include <errno.h>
 #include <linux/input.h>
+#include <linux/memfd.h>
 #include <drm_fourcc.h>
 #include <system/graphics.h>
 #include <syscall.h>
@@ -215,6 +216,57 @@ create_dmabuf_wl_buffer(struct display *display, struct buffer *buffer,
 
     buffer->buffer = zwp_linux_buffer_params_v1_create_immed(params, buffer->width, buffer->height, buffer->format, 0);
     wl_buffer_add_listener(buffer->buffer, &buffer_listener, buffer);
+
+    return 0;
+}
+
+static int 
+ConvertHalFormatToShm(uint32_t hal_format) {
+    uint32_t fmt;
+
+    switch (hal_format) {
+        case HAL_PIXEL_FORMAT_RGBX_8888:
+            fmt = WL_SHM_FORMAT_XRGB8888;
+            break;
+        case HAL_PIXEL_FORMAT_RGBA_8888:
+            fmt = WL_SHM_FORMAT_ARGB8888;
+            break;
+        default:
+            ALOGE("Cannot convert hal format to shm format %u", hal_format);
+            return -EINVAL;
+    }
+    return fmt;
+}
+
+int
+create_shm_wl_buffer(struct display *display, struct buffer *buffer,
+             int width, int height, int format, int stride, buffer_handle_t target)
+{
+    //stride = width * 4;
+    int size = stride * height;
+
+    buffer->format = ConvertHalFormatToShm(format);
+    assert(buffer->format >= 0);
+    buffer->width = width;
+    buffer->height = height;
+    buffer->stride = stride;
+    buffer->handle = target;
+    buffer->isShm = true;
+
+    int fd = syscall(__NR_memfd_create, "buffer", MFD_ALLOW_SEALING);
+    ftruncate(fd, size);
+    buffer->shm_data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (buffer->shm_data == MAP_FAILED) {
+        ALOGE("mmap failed");
+        close(fd);
+
+        return -1;
+    }
+    struct wl_shm_pool *pool = wl_shm_create_pool(display->shm, fd, size);
+    buffer->buffer = wl_shm_pool_create_buffer(pool, 0, width, height, stride, buffer->format);
+    wl_buffer_add_listener(buffer->buffer, &buffer_listener, buffer);
+    wl_shm_pool_destroy(pool);
+    close(fd);
 
     return 0;
 }
@@ -432,13 +484,14 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
         ftruncate(fd, 4);
         void *shm_data = mmap(NULL, 4, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
         if (shm_data == MAP_FAILED) {
-            fprintf(stderr, "mmap failed: %m\n");
+            ALOGE("mmap failed");
             close(fd);
             exit(1);
         }
         struct wl_shm_pool *pool = wl_shm_create_pool(display->shm, fd, 4);
         struct wl_buffer *buffer_shm = wl_shm_pool_create_buffer(pool, 0, 1, 1, 4, WL_SHM_FORMAT_ARGB8888);
         wl_shm_pool_destroy(pool);
+        close(fd);
         wl_surface_attach(window->surface, buffer_shm, 0, 0);
         wl_surface_damage(window->surface, 0, 0, 1, 1);
     }
@@ -1099,7 +1152,7 @@ create_display(const char *gralloc)
 {
     struct display *display = new struct display();
     if (display == NULL) {
-        fprintf(stderr, "out of memory\n");
+        ALOGE("out of memory");
         return NULL;
     }
     display->gtype = get_gralloc_type(gralloc);

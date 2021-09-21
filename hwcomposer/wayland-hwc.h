@@ -140,6 +140,8 @@ struct buffer {
 
     int timeline_fd;
     int release_fence_fd;
+    bool isShm;
+    void *shm_data;
 };
 
 struct window {
@@ -165,6 +167,10 @@ int
 create_dmabuf_wl_buffer(struct display *display, struct buffer *buffer,
              int width, int height, int format,
              int prime_fd, int stride, uint64_t modifier);
+
+int
+create_shm_wl_buffer(struct display *display, struct buffer *buffer,
+             int width, int height, int format, int stride, buffer_handle_t target);
 
 struct display *
 create_display(const char* gralloc);
