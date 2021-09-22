@@ -130,7 +130,15 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
     int ret = 0;
 
     buf = (struct buffer *)calloc(1, sizeof *buf);
-    if (pdev->display->gtype == GRALLOC_ANDROID) {
+    if (pdev->display->gtype == GRALLOC_GBM) {
+        struct gralloc_handle_t *drm_handle = (struct gralloc_handle_t *)layer->handle;
+        if (pdev->display->dmabuf) {
+            ret = create_dmabuf_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, drm_handle->prime_fd, drm_handle->stride, drm_handle->modifier);
+        } else {
+            ret = create_shm_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, drm_handle->stride, layer->handle);
+            update_shm_buffer(buf);
+        }
+    } else {
         int width = layer->displayFrame.right - layer->displayFrame.left;
         int height = layer->displayFrame.bottom - layer->displayFrame.top;
         uint32_t format = HAL_PIXEL_FORMAT_RGBA_8888;
@@ -142,13 +150,10 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
             format = pdev->display->layer_handles_ext[pos].format;
             stride = pdev->display->layer_handles_ext[pos].stride;
         }
-        ret = create_android_wl_buffer(pdev->display, buf, width, height, format, stride, layer->handle);
-    } else if (pdev->display->gtype == GRALLOC_GBM) {
-        struct gralloc_handle_t *drm_handle = (struct gralloc_handle_t *)layer->handle;
-        if (pdev->display->dmabuf) {
-            ret = create_dmabuf_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, drm_handle->prime_fd, drm_handle->stride, drm_handle->modifier);
+        if (pdev->display->gtype == GRALLOC_ANDROID) {
+            ret = create_android_wl_buffer(pdev->display, buf, width, height, format, stride, layer->handle);
         } else {
-            ret = create_shm_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, drm_handle->stride, layer->handle);
+            ret = create_shm_wl_buffer(pdev->display, buf, width, height, format, stride, layer->handle);
             update_shm_buffer(buf);
         }
     }
