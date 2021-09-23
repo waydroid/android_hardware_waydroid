@@ -242,8 +242,8 @@ int
 create_shm_wl_buffer(struct display *display, struct buffer *buffer,
              int width, int height, int format, int stride, buffer_handle_t target)
 {
-    //stride = width * 4;
-    int size = stride * height;
+    int shm_stride = width * 4;
+    int size = shm_stride * height;
 
     buffer->format = ConvertHalFormatToShm(format);
     assert(buffer->format >= 0);
@@ -263,7 +263,7 @@ create_shm_wl_buffer(struct display *display, struct buffer *buffer,
         return -1;
     }
     struct wl_shm_pool *pool = wl_shm_create_pool(display->shm, fd, size);
-    buffer->buffer = wl_shm_pool_create_buffer(pool, 0, width, height, stride, buffer->format);
+    buffer->buffer = wl_shm_pool_create_buffer(pool, 0, width, height, shm_stride, buffer->format);
     wl_buffer_add_listener(buffer->buffer, &buffer_listener, buffer);
     wl_shm_pool_destroy(pool);
     close(fd);
