@@ -105,7 +105,18 @@ static void update_shm_buffer(struct buffer *buffer)
     void *data;
     android::Rect bounds(buffer->width, buffer->height);
     if (android::GraphicBufferMapper::get().lock(buffer->handle, GRALLOC_USAGE_SW_READ_OFTEN, bounds, &data) == 0) {
-        memcpy(buffer->shm_data, data, buffer->stride * buffer->height);
+        for (int i = 0; i < buffer->height; i++) {
+            uint32_t* source = (uint32_t*)data + (i * buffer->stride);
+            uint32_t* dist = (uint32_t*)buffer->shm_data + (i * buffer->width);
+            uint32_t* end = dist + buffer->width;
+
+            while (dist < end) {
+                uint32_t c = *source;
+                *dist = (c & 0xFF00FF00) | ((c & 0xFF0000) >> 16) | ((c & 0xFF) << 16);
+                source++;
+                dist++;
+            }
+        }
         android::GraphicBufferMapper::get().unlock(buffer->handle);
     }
 }
