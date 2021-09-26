@@ -100,15 +100,23 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
     return 0;
 }
 
-static void update_shm_buffer(struct buffer *buffer)
+static void update_shm_buffer(struct display *display, struct buffer *buffer)
 {
     void *data;
+    int stride, src_stride;
     android::Rect bounds(buffer->width, buffer->height);
     if (android::GraphicBufferMapper::get().lock(buffer->handle, GRALLOC_USAGE_SW_READ_OFTEN, bounds, &data) == 0) {
+        if (display->gtype == GRALLOC_GBM) {
+            stride = buffer->stride / 4;
+            src_stride = buffer->stride / 4;
+        } else {
+            stride = buffer->width;
+            src_stride = buffer->stride;
+        }
         for (int i = 0; i < buffer->height; i++) {
-            uint32_t* source = (uint32_t*)data + (i * buffer->stride);
-            uint32_t* dist = (uint32_t*)buffer->shm_data + (i * buffer->width);
-            uint32_t* end = dist + buffer->width;
+            uint32_t* source = (uint32_t*)data + (i * src_stride);
+            uint32_t* dist = (uint32_t*)buffer->shm_data + (i * stride);
+            uint32_t* end = dist + stride;
 
             while (dist < end) {
                 uint32_t c = *source;
@@ -127,7 +135,7 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
     if (it != pdev->display->buffer_map.end()) {
         if (!pdev->display->geo_changed) {
             if (it->second->isShm)
-                update_shm_buffer(it->second);
+                update_shm_buffer(pdev->display, it->second);
             return it->second;
         } else {
             if (it->second->buffer)
@@ -147,7 +155,7 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
             ret = create_dmabuf_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, drm_handle->prime_fd, drm_handle->stride, drm_handle->modifier);
         } else {
             ret = create_shm_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, drm_handle->stride, layer->handle);
-            update_shm_buffer(buf);
+            update_shm_buffer(pdev->display, buf);
         }
     } else {
         int width = layer->displayFrame.right - layer->displayFrame.left;
@@ -165,7 +173,7 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
             ret = create_android_wl_buffer(pdev->display, buf, width, height, format, stride, layer->handle);
         } else {
             ret = create_shm_wl_buffer(pdev->display, buf, width, height, format, stride, layer->handle);
-            update_shm_buffer(buf);
+            update_shm_buffer(pdev->display, buf);
         }
     }
 
