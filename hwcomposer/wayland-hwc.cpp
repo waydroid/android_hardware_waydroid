@@ -242,7 +242,7 @@ int
 create_shm_wl_buffer(struct display *display, struct buffer *buffer,
              int width, int height, int format, int stride, buffer_handle_t target)
 {
-    int shm_stride = width * 4;
+    int shm_stride = stride * 4;
     if (display->gtype == GRALLOC_GBM)
         shm_stride = stride;
     int size = shm_stride * height;

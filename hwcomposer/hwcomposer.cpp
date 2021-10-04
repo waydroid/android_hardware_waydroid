@@ -110,7 +110,7 @@ static void update_shm_buffer(struct display *display, struct buffer *buffer)
             stride = buffer->stride / 4;
             src_stride = buffer->stride / 4;
         } else {
-            stride = buffer->width;
+            stride = buffer->stride;
             src_stride = buffer->stride;
         }
         for (int i = 0; i < buffer->height; i++) {
@@ -134,9 +134,20 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
     auto it = pdev->display->buffer_map.find(layer->handle);
     if (it != pdev->display->buffer_map.end()) {
         if (!pdev->display->geo_changed) {
-            if (it->second->isShm)
-                update_shm_buffer(pdev->display, it->second);
-            return it->second;
+            if (it->second->isShm) {
+                int width = layer->displayFrame.right - layer->displayFrame.left;
+                int height = layer->displayFrame.bottom - layer->displayFrame.top;
+                if (width != it->second->width || height != it->second->height) {
+                    if (it->second->buffer)
+                        wl_buffer_destroy(it->second->buffer);
+                    delete (it->second);
+                    pdev->display->buffer_map.erase(it);
+                } else {
+                    update_shm_buffer(pdev->display, it->second);
+                    return it->second;
+                }
+            } else
+                return it->second;
         } else {
             if (it->second->buffer)
                 wl_buffer_destroy(it->second->buffer);
