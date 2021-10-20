@@ -332,7 +332,6 @@ xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
 
     if (window->display->task != nullptr) {
         if (window->taskID != "none") {
-            window->isActive = false;
             if (window->taskID == "0") {
                 property_set("waydroid.active_apps", "none");
                 window->display->task->removeAllVisibleRecentTasks();
@@ -341,6 +340,7 @@ xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
             }
         }
     }
+    destroy_window(window, true);
 }
 
 static const struct xdg_toplevel_listener xdg_toplevel_listener = {
@@ -389,24 +389,29 @@ struct wl_shell_surface_listener shell_surface_listener = {
 };
 
 void
-destroy_window(struct window *window)
+destroy_window(struct window *window, bool keep)
 {
-    if (window->callback)
-        wl_callback_destroy(window->callback);
+    if (window->isActive) {
+        if (window->callback)
+            wl_callback_destroy(window->callback);
 
-    for (auto it = window->surfaces.begin(); it != window->surfaces.end(); it++) {
-        wl_subsurface_destroy(window->subsurfaces[it->first]);
-        wl_surface_destroy(it->second);
+        for (auto it = window->surfaces.begin(); it != window->surfaces.end(); it++) {
+            wl_subsurface_destroy(window->subsurfaces[it->first]);
+            wl_surface_destroy(it->second);
+        }
+        if (window->xdg_toplevel)
+            xdg_toplevel_destroy(window->xdg_toplevel);
+        if (window->xdg_surface)
+            xdg_surface_destroy(window->xdg_surface);
+        if (window->shell_surface)
+            wl_shell_surface_destroy(window->shell_surface);
+
+        wl_surface_destroy(window->surface);
     }
-    if (window->xdg_toplevel)
-        xdg_toplevel_destroy(window->xdg_toplevel);
-    if (window->xdg_surface)
-        xdg_surface_destroy(window->xdg_surface);
-    if (window->shell_surface)
-        wl_shell_surface_destroy(window->shell_surface);
-
-    wl_surface_destroy(window->surface);
-    free(window);
+    if (keep)
+        window->isActive = false;
+    else
+        free(window);
 }
 
 struct window *

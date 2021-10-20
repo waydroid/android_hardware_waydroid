@@ -443,25 +443,25 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             property_set("waydroid.open_windows", "0");
             return 0;
         }
-        bool showClose = true;
+        bool shouldCloseLeftover = true;
         for (auto it = pdev->windows.cbegin(); it != pdev->windows.cend();) {
             if (it->second) {
-                // This window is closed
+                // This window is closed, but android is still showing leftover layers, we detect it here
                 if (!it->second->isActive) {
                     for (size_t l = 0; l < contents->numHwLayers; l++) {
                         std::string layer_name = pdev->display->layer_names[l];
                         if (layer_name.substr(0, 4) == "TID:") {
                             std::string layer_tid = layer_name.substr(4, layer_name.find('#') - 4);
                             if (layer_tid == it->first) {
-                                showClose = false;
+                                shouldCloseLeftover = false;
                                 break;
                             }
                         }
                     }
-                    if (showClose) {
+                    if (shouldCloseLeftover) {
                         destroy_window(it->second);
                         pdev->windows.erase(it++);
-                        showClose = true;
+                        shouldCloseLeftover = true;
                         property_set("waydroid.open_windows", std::to_string(pdev->windows.size()).c_str());
                     } else
                         ++it;
@@ -550,6 +550,9 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                     property_set("waydroid.open_windows", std::to_string(pdev->windows.size()).c_str());
                 }
                 window = pdev->windows[single_layer_tid];
+                // Window is closed, don't bother
+                if (!window->isActive)
+                    window = NULL;
             }
         } else {
             // Create windows based on Task ID in layer name
