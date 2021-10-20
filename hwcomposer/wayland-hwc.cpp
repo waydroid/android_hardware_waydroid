@@ -1114,10 +1114,13 @@ registry_handle_global(void *data, struct wl_registry *registry,
                 &wl_output_interface, version);
         wl_output_add_listener(d->output, &output_listener, d);
     } else if (strcmp(interface, "wp_presentation") == 0) {
-        d->presentation = (struct wp_presentation*)wl_registry_bind(registry, id,
-                &wp_presentation_interface, 1);
-        wp_presentation_add_listener(d->presentation,
-                &presentation_listener, d);
+        bool no_presentation = property_get_bool("persist.waydroid.no_presentation", false);
+        if (!no_presentation) {
+            d->presentation = (struct wp_presentation*)wl_registry_bind(registry, id,
+                    &wp_presentation_interface, 1);
+            wp_presentation_add_listener(d->presentation,
+                    &presentation_listener, d);
+        }
     } else if ((d->gtype == GRALLOC_ANDROID) &&
                (strcmp(interface, "android_wlegl") == 0)) {
         d->android_wlegl = (struct android_wlegl*)wl_registry_bind(registry, id,
