@@ -588,26 +588,43 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             std::istringstream issLayer(layer_name);
             std::getline(issLayer, LayerRawName, '#');
             if (LayerRawName == "Sprite" && pdev->display->pointer_surface) {
-                struct buffer *buf = get_wl_buffer(pdev, fb_layer, layer);
-                if (!buf) {
-                    ALOGE("Failed to get wayland buffer");
+                if (pdev->display->cursor_surface) {
+                    struct buffer *buf = get_wl_buffer(pdev, fb_layer, layer);
+                    if (!buf) {
+                        ALOGE("Failed to get wayland buffer");
+                        if (fb_layer->acquireFenceFd != -1) {
+                            close(fb_layer->acquireFenceFd);
+                        }
+                        continue;
+                    }
+
+                    wl_surface_attach(pdev->display->cursor_surface, buf->buffer, 0, 0);
+                    wl_surface_damage(pdev->display->cursor_surface, 0, 0, buf->width, buf->height);
+                    if (pdev->display->scale > 1)
+                        wl_surface_set_buffer_scale(pdev->display->cursor_surface, pdev->display->scale);
+
+                    wl_surface_commit(pdev->display->cursor_surface);
+
                     if (fb_layer->acquireFenceFd != -1) {
                         close(fb_layer->acquireFenceFd);
                     }
                     continue;
+                } else {
+                    for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
+                        if (it->second) {
+                            if (it->second->surface == pdev->display->pointer_surface) {
+                                window = it->second;
+                                break;
+                            }
+                            for (auto itt = it->second->surfaces.begin(); itt != it->second->surfaces.end(); itt++) {
+                                if (itt->second == pdev->display->pointer_surface) {
+                                    window = it->second;
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 }
-
-                wl_surface_attach(pdev->display->cursor_surface, buf->buffer, 0, 0);
-                wl_surface_damage(pdev->display->cursor_surface, 0, 0, buf->width, buf->height);
-                if (pdev->display->scale > 1)
-                    wl_surface_set_buffer_scale(pdev->display->cursor_surface, pdev->display->scale);
-
-                wl_surface_commit(pdev->display->cursor_surface);
-
-                if (fb_layer->acquireFenceFd != -1) {
-                    close(fb_layer->acquireFenceFd);
-                }
-                continue;
             }
             if (LayerRawName == "InputMethod") {
                 if (pdev->windows.find(LayerRawName) == pdev->windows.end()) {
@@ -982,8 +999,9 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     pdev->vsync_callback_enabled = true;
     pthread_mutex_lock(&pdev->display->data_mutex);
     pdev->calib_window = create_window(pdev->display, false, "Waydroid", "0");
-    pdev->display->cursor_surface =
-        wl_compositor_create_surface(pdev->display->compositor);
+    if (!property_get_bool("persist.waydroid.cursor_on_subsurface", false))
+        pdev->display->cursor_surface =
+            wl_compositor_create_surface(pdev->display->compositor);
     if (!pdev->display->height) {
         pdev->display->waiting_for_data = true;
         pthread_cond_timedwait(&pdev->display->data_available_cond,
