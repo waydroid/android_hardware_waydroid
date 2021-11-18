@@ -703,6 +703,10 @@ pointer_handle_axis(void *data, struct wl_pointer *,
         ALOGE("%s:%d error in touch clock_gettime: %s",
               __FILE__, __LINE__, strerror(errno));
     }
+
+    if (!property_get_bool("persist.waydroid.reverse_scrolling", false)) {
+        value = -value;
+    }
     ADD_EVENT(EV_REL, (axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
               ? REL_WHEEL : REL_HWHEEL, wl_fixed_to_double(value) / 10.00f);
     ADD_EVENT(EV_SYN, SYN_REPORT, 0);
