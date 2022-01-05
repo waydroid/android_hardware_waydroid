@@ -566,7 +566,7 @@ keyboard_handle_key(void *data, struct wl_keyboard *,
     }
     ADD_EVENT(EV_KEY, key, state);
 
-    res = write(display->input_fd[INPUT_KEYBOARD], &event, sizeof(event));
+    res = write(display->input_fd[INPUT_KEYBOARD], &event, n * sizeof(struct input_event));
     if (res < sizeof(event))
         ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
 }
