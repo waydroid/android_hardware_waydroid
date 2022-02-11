@@ -553,7 +553,7 @@ keyboard_handle_key(void *data, struct wl_keyboard *,
                     uint32_t state)
 {
     struct display* display = (struct display*)data;
-    struct input_event event[6];
+    struct input_event event[1];
     struct timespec rt;
     unsigned int res, n = 0;
 
@@ -619,7 +619,7 @@ pointer_handle_motion(void *data, struct wl_pointer *,
                       uint32_t, wl_fixed_t sx, wl_fixed_t sy)
 {
     struct display* display = (struct display*)data;
-    struct input_event event[6];
+    struct input_event event[5];
     struct timespec rt;
     int x, y;
     unsigned int res, n = 0;
@@ -662,7 +662,7 @@ pointer_handle_button(void *data, struct wl_pointer *,
                       uint32_t state)
 {
     struct display* display = (struct display*)data;
-    struct input_event event[6];
+    struct input_event event[2];
     struct timespec rt;
     unsigned int res, n = 0;
 
@@ -689,7 +689,7 @@ pointer_handle_axis(void *data, struct wl_pointer *,
                     uint32_t, uint32_t axis, wl_fixed_t value)
 {
     struct display* display = (struct display*)data;
-    struct input_event event[6];
+    struct input_event event[2];
     struct timespec rt;
     unsigned int res, n = 0;
 
@@ -897,7 +897,7 @@ static void
 touch_handle_shape(void *data, struct wl_touch *, int32_t id, wl_fixed_t major, wl_fixed_t minor)
 {
     struct display* display = (struct display*)data;
-    struct input_event event[6];
+    struct input_event event[5];
     struct timespec rt;
     unsigned int res, n = 0;
 
