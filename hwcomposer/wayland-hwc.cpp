@@ -1117,7 +1117,7 @@ registry_handle_global(void *data, struct wl_registry *registry,
                 &wl_shm_interface, 1);
     } else if (strcmp(interface, "wl_output") == 0) {
         d->output = (struct wl_output*)wl_registry_bind(registry, id,
-                &wl_output_interface, version);
+                &wl_output_interface, (version > 3) ? 3 : version);
         wl_output_add_listener(d->output, &output_listener, d);
     } else if (strcmp(interface, "wp_presentation") == 0) {
         bool no_presentation = property_get_bool("persist.waydroid.no_presentation", false);
