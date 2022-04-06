@@ -123,6 +123,7 @@ struct display {
     std::map<uint32_t, struct handleExt> layer_handles_ext;
     struct handleExt target_layer_handle_ext;
     std::map<buffer_handle_t, struct buffer *> buffer_map;
+    std::array<uint8_t, 239> keysDown;
 
     bool isWinResSet;
     sp<IWaydroidTask> task;

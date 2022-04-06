@@ -527,6 +527,34 @@ ensure_pipe(struct display* display, int input_type)
     n++;
 
 static void
+send_key_event(display *data, uint32_t key, wl_keyboard_key_state state)
+{
+    struct display* display = (struct display*)data;
+    struct input_event event[1];
+    struct timespec rt;
+    unsigned int res, n = 0;
+
+    if (key >= display->keysDown.size()) {
+        ALOGE("Invalid key: %u", key);
+        return;
+    }
+
+    if (ensure_pipe(display, INPUT_KEYBOARD))
+        return;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+        ALOGE("%s:%d error in touch clock_gettime: %s",
+              __FILE__, __LINE__, strerror(errno));
+    }
+    ADD_EVENT(EV_KEY, key, state);
+
+    res = write(display->input_fd[INPUT_KEYBOARD], &event, sizeof(event));
+    if (res < sizeof(event))
+        ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+    display->keysDown[(uint8_t)key] = state;
+}
+
+static void
 keyboard_handle_keymap(void *, struct wl_keyboard *,
                uint32_t, int fd, uint32_t)
 {
@@ -542,9 +570,15 @@ keyboard_handle_enter(void *, struct wl_keyboard *,
 }
 
 static void
-keyboard_handle_leave(void *, struct wl_keyboard *,
+keyboard_handle_leave(void *data, struct wl_keyboard *,
                       uint32_t, struct wl_surface *)
 {
+    struct display *display = (struct display *)data;
+    for (size_t i = 0; i < display->keysDown.size(); i++) {
+        if (display->keysDown[i] == WL_KEYBOARD_KEY_STATE_PRESSED) {
+            send_key_event(display, i, WL_KEYBOARD_KEY_STATE_RELEASED);
+        }
+    }
 }
 
 static void
@@ -552,23 +586,7 @@ keyboard_handle_key(void *data, struct wl_keyboard *,
                     uint32_t, uint32_t, uint32_t key,
                     uint32_t state)
 {
-    struct display* display = (struct display*)data;
-    struct input_event event[1];
-    struct timespec rt;
-    unsigned int res, n = 0;
-
-    if (ensure_pipe(display, INPUT_KEYBOARD))
-        return;
-
-    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
-        ALOGE("%s:%d error in touch clock_gettime: %s",
-              __FILE__, __LINE__, strerror(errno));
-    }
-    ADD_EVENT(EV_KEY, key, state);
-
-    res = write(display->input_fd[INPUT_KEYBOARD], &event, sizeof(event));
-    if (res < sizeof(event))
-        ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+    send_key_event((struct display*)data, key, (enum wl_keyboard_key_state)state);
 }
 
 static void
