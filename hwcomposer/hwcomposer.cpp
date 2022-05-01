@@ -131,12 +131,12 @@ static void update_shm_buffer(struct display *display, struct buffer *buffer)
 
 static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, size_t pos)
 {
+    int width = layer->displayFrame.right - layer->displayFrame.left;
+    int height = layer->displayFrame.bottom - layer->displayFrame.top;
     auto it = pdev->display->buffer_map.find(layer->handle);
     if (it != pdev->display->buffer_map.end()) {
         if (!pdev->display->geo_changed) {
             if (it->second->isShm) {
-                int width = layer->displayFrame.right - layer->displayFrame.left;
-                int height = layer->displayFrame.bottom - layer->displayFrame.top;
                 if (width != it->second->width || height != it->second->height) {
                     if (it->second->buffer)
                         wl_buffer_destroy(it->second->buffer);
@@ -163,14 +163,12 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
     if (pdev->display->gtype == GRALLOC_GBM) {
         struct gralloc_handle_t *drm_handle = (struct gralloc_handle_t *)layer->handle;
         if (pdev->display->dmabuf) {
-            ret = create_dmabuf_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, drm_handle->prime_fd, drm_handle->stride, drm_handle->modifier);
+            ret = create_dmabuf_wl_buffer(pdev->display, buf, width, height, drm_handle->format, drm_handle->prime_fd, drm_handle->stride, drm_handle->modifier);
         } else {
             ret = create_shm_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, drm_handle->stride, layer->handle);
             update_shm_buffer(pdev->display, buf);
         }
     } else {
-        int width = layer->displayFrame.right - layer->displayFrame.left;
-        int height = layer->displayFrame.bottom - layer->displayFrame.top;
         uint32_t format = HAL_PIXEL_FORMAT_RGBA_8888;
         uint32_t stride = width;
         if (layer->compositionType == HWC_FRAMEBUFFER_TARGET) {
