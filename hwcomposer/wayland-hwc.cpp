@@ -645,8 +645,8 @@ pointer_handle_motion(void *data, struct wl_pointer *,
 
     ADD_EVENT(EV_ABS, ABS_X, x);
     ADD_EVENT(EV_ABS, ABS_Y, y);
-    ADD_EVENT(EV_REL, REL_X, display->ptrPrvX - x);
-    ADD_EVENT(EV_REL, REL_Y, display->ptrPrvY - y);
+    ADD_EVENT(EV_REL, REL_X, x - display->ptrPrvX);
+    ADD_EVENT(EV_REL, REL_Y, y - display->ptrPrvY);
     ADD_EVENT(EV_SYN, SYN_REPORT, 0);
     display->ptrPrvX = x;
     display->ptrPrvY = y;
