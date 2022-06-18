@@ -583,6 +583,10 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                     if (pdev->windows.find(layer_tid) != pdev->windows.end())
                         window = pdev->windows[layer_tid];
                 }
+
+                // Window is closed, don't bother
+                if (window && !window->isActive)
+                    window = NULL;
             }
         }
 
