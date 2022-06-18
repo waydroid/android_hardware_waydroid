@@ -1006,6 +1006,9 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     if (!property_get_bool("persist.waydroid.cursor_on_subsurface", false))
         pdev->display->cursor_surface =
             wl_compositor_create_surface(pdev->display->compositor);
+    else
+        pdev->display->cursor_surface = nullptr;
+
     if (!pdev->display->height) {
         pdev->display->waiting_for_data = true;
         pthread_cond_timedwait(&pdev->display->data_available_cond,
