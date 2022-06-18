@@ -415,7 +415,7 @@ destroy_window(struct window *window, bool keep)
 }
 
 struct window *
-create_window(struct display *display, bool with_dummy, std::string appID, std::string taskID)
+create_window(struct display *display, bool /*with_dummy*/, std::string appID, std::string taskID)
 {
     struct window *window = new struct window();
     if (!window)
@@ -437,8 +437,6 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
 
         window->xdg_toplevel = xdg_surface_get_toplevel(window->xdg_surface);
         assert(window->xdg_toplevel);
-        xdg_toplevel_add_listener(window->xdg_toplevel, &xdg_toplevel_listener, window);
-        xdg_toplevel_set_maximized(window->xdg_toplevel);
         const hidl_string appID_hidl(appID);
         hidl_string appName_hidl(appID);
         if (appID != "Waydroid" && display->task)
@@ -451,6 +449,9 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
             appID = "waydroid." + appID;
         xdg_toplevel_set_app_id(window->xdg_toplevel, appID.c_str());
         wl_surface_commit(window->surface);
+        xdg_toplevel_add_listener(window->xdg_toplevel, &xdg_toplevel_listener, window);
+        xdg_toplevel_set_maximized(window->xdg_toplevel);
+        wl_surface_commit(window->surface);
 
         /* Here we retrieve objects if executed without immed, or error */
         wl_display_roundtrip(display->display);
@@ -460,9 +461,6 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
             wl_shell_get_shell_surface(display->shell, window->surface);
         assert(window->shell_surface);
 
-        wl_shell_surface_add_listener(window->shell_surface, &shell_surface_listener, window);
-        wl_shell_surface_set_toplevel(window->shell_surface);
-        wl_shell_surface_set_maximized(window->shell_surface, display->output);
         const hidl_string appID_hidl(appID);
         hidl_string appName_hidl(appID);
         if (appID != "Waydroid" && display->task)
@@ -471,6 +469,9 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
         else
             wl_shell_surface_set_title(window->shell_surface, appID.c_str());
 
+        wl_shell_surface_add_listener(window->shell_surface, &shell_surface_listener, window);
+        wl_shell_surface_set_toplevel(window->shell_surface);
+        wl_shell_surface_set_maximized(window->shell_surface, display->output);
         wl_surface_commit(window->surface);
 
         /* Here we retrieve objects if executed without immed, or error */
@@ -479,29 +480,7 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
     } else {
         assert(0);
     }
-    /*
-     * We should create a dummy transparent 1x1 buffer in 0x0 location
-     * This allows us to set initial location of windows by setting them as subsurface
-     * and ovarally helps is moving surfaces
-     * 
-     * TODO: Drop this hack
-     */
-    if (with_dummy) {
-        int fd = syscall(SYS_memfd_create, "buffer", 0);
-        ftruncate(fd, 4);
-        void *shm_data = mmap(NULL, 4, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-        if (shm_data == MAP_FAILED) {
-            ALOGE("mmap failed");
-            close(fd);
-            exit(1);
-        }
-        struct wl_shm_pool *pool = wl_shm_create_pool(display->shm, fd, 4);
-        struct wl_buffer *buffer_shm = wl_shm_pool_create_buffer(pool, 0, 1, 1, 4, WL_SHM_FORMAT_ARGB8888);
-        wl_shm_pool_destroy(pool);
-        close(fd);
-        wl_surface_attach(window->surface, buffer_shm, 0, 0);
-        wl_surface_damage(window->surface, 0, 0, 1, 1);
-    }
+
     return window;
 }
 
