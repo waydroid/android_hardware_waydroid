@@ -156,6 +156,7 @@ struct window {
     int lastLayer;
     std::string taskID;
     bool isActive;
+    std::string appID;
 };
 
 int

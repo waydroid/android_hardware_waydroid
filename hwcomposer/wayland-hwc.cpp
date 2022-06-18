@@ -412,6 +412,11 @@ destroy_window(struct window *window, bool keep)
         window->isActive = false;
     else
         free(window);
+
+    if (!window->appID.empty()) {
+        const std::string prop = std::string("waydroid.open_window.") + window->appID;
+        property_set(prop.c_str(), "0");
+    }
 }
 
 struct window *
@@ -480,6 +485,10 @@ create_window(struct display *display, bool /*with_dummy*/, std::string appID, s
     } else {
         assert(0);
     }
+
+    window->appID = appID;
+    std::string prop = std::string("waydroid.open_window.") + appID;
+    property_set(prop.c_str(), "1");
 
     return window;
 }
