@@ -59,6 +59,7 @@
 
 #include <wayland-client.h>
 #include <wayland-android-client-protocol.h>
+#include <wayland-egl-core.h>
 #include "linux-dmabuf-unstable-v1-client-protocol.h"
 #include "presentation-time-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
@@ -399,6 +400,8 @@ destroy_window(struct window *window, bool keep)
             wl_subsurface_destroy(window->subsurfaces[it->first]);
             wl_surface_destroy(it->second);
         }
+        if (window->egl_window)
+            wl_egl_window_destroy(window->egl_window);
         if (window->xdg_toplevel)
             xdg_toplevel_destroy(window->xdg_toplevel);
         if (window->xdg_surface)
@@ -420,7 +423,7 @@ destroy_window(struct window *window, bool keep)
 }
 
 struct window *
-create_window(struct display *display, bool /*with_dummy*/, std::string appID, std::string taskID)
+create_window(struct display *display, bool with_egl_window, std::string appID, std::string taskID, const int width, const int height)
 {
     struct window *window = new struct window();
     if (!window)
@@ -431,6 +434,7 @@ create_window(struct display *display, bool /*with_dummy*/, std::string appID, s
     window->surface = wl_compositor_create_surface(display->compositor);
     window->taskID = taskID;
     window->isActive = true;
+    window->egl_window = nullptr;
 
     if (display->wm_base) {
         window->xdg_surface =
@@ -442,6 +446,8 @@ create_window(struct display *display, bool /*with_dummy*/, std::string appID, s
 
         window->xdg_toplevel = xdg_surface_get_toplevel(window->xdg_surface);
         assert(window->xdg_toplevel);
+        xdg_toplevel_add_listener(window->xdg_toplevel, &xdg_toplevel_listener, window);
+        xdg_toplevel_set_maximized(window->xdg_toplevel);
         const hidl_string appID_hidl(appID);
         hidl_string appName_hidl(appID);
         if (appID != "Waydroid" && display->task)
@@ -454,9 +460,6 @@ create_window(struct display *display, bool /*with_dummy*/, std::string appID, s
             appID = "waydroid." + appID;
         xdg_toplevel_set_app_id(window->xdg_toplevel, appID.c_str());
         wl_surface_commit(window->surface);
-        xdg_toplevel_add_listener(window->xdg_toplevel, &xdg_toplevel_listener, window);
-        xdg_toplevel_set_maximized(window->xdg_toplevel);
-        wl_surface_commit(window->surface);
 
         /* Here we retrieve objects if executed without immed, or error */
         wl_display_roundtrip(display->display);
@@ -466,6 +469,9 @@ create_window(struct display *display, bool /*with_dummy*/, std::string appID, s
             wl_shell_get_shell_surface(display->shell, window->surface);
         assert(window->shell_surface);
 
+        wl_shell_surface_add_listener(window->shell_surface, &shell_surface_listener, window);
+        wl_shell_surface_set_toplevel(window->shell_surface);
+        wl_shell_surface_set_maximized(window->shell_surface, display->output);
         const hidl_string appID_hidl(appID);
         hidl_string appName_hidl(appID);
         if (appID != "Waydroid" && display->task)
@@ -474,9 +480,6 @@ create_window(struct display *display, bool /*with_dummy*/, std::string appID, s
         else
             wl_shell_surface_set_title(window->shell_surface, appID.c_str());
 
-        wl_shell_surface_add_listener(window->shell_surface, &shell_surface_listener, window);
-        wl_shell_surface_set_toplevel(window->shell_surface);
-        wl_shell_surface_set_maximized(window->shell_surface, display->output);
         wl_surface_commit(window->surface);
 
         /* Here we retrieve objects if executed without immed, or error */
@@ -484,6 +487,10 @@ create_window(struct display *display, bool /*with_dummy*/, std::string appID, s
         wl_surface_commit(window->surface);
     } else {
         assert(0);
+    }
+
+    if (with_egl_window) {
+        window->egl_window = wl_egl_window_create(window->surface, width, height);
     }
 
     window->appID = appID;

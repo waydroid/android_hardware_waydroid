@@ -150,6 +150,7 @@ struct window {
     struct wl_shell_surface *shell_surface;
     struct xdg_surface *xdg_surface;
     struct xdg_toplevel *xdg_toplevel;
+    struct wl_egl_window *egl_window;
     std::map<size_t, struct wl_surface *> surfaces;
     std::map<size_t, struct wl_subsurface *> subsurfaces;
     struct wl_callback *callback;
@@ -181,4 +182,4 @@ destroy_display(struct display *display);
 void
 destroy_window(struct window *window, bool keep = false);
 struct window *
-create_window(struct display *display, bool with_dummy, std::string appID, std::string taskID);
+create_window(struct display *display, bool with_dummy, std::string appID, std::string taskID, const int width = 1, const int height = 1);
