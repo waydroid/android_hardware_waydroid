@@ -38,6 +38,7 @@ cc_library_shared {
         "libwayland_extension_client_protocols",
     ],
     srcs: [
+        "wayland-egl.c",
         "extension.cpp",
         "hwcomposer.cpp",
         "wayland-hwc.cpp"
