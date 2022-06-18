@@ -554,9 +554,12 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                     property_set("waydroid.open_windows", std::to_string(pdev->windows.size()).c_str());
                 }
                 window = pdev->windows[single_layer_tid];
+
                 // Window is closed, don't bother
-                if (!window->isActive)
+                if (window && !window->isActive) {
+                    free(window);
                     window = NULL;
+                }
             }
         } else {
             // Create windows based on Task ID in layer name
@@ -585,8 +588,10 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                 }
 
                 // Window is closed, don't bother
-                if (window && !window->isActive)
+                if (window && !window->isActive) {
+                    free(window);
                     window = NULL;
+                }
             }
         }
 
