@@ -62,6 +62,7 @@
 #include "linux-dmabuf-unstable-v1-client-protocol.h"
 #include "presentation-time-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
+#include "tablet-unstable-v2-client-protocol.h"
 
 using ::android::hardware::hidl_string;
 
@@ -1087,6 +1088,387 @@ static const struct wp_presentation_listener presentation_listener = {
     presentation_clock_id
 };
 
+static void tablet_seat_handle_add_tablet(void *, struct zwp_tablet_seat_v2 *,
+                                          struct zwp_tablet_v2 *)
+{
+}
+
+static void tablet_seat_handle_add_pad(void*, struct zwp_tablet_seat_v2 *,
+                                       struct zwp_tablet_pad_v2 *)
+{
+}
+
+static void
+tablet_tool_receive_type(void *data, struct zwp_tablet_tool_v2 *tool,
+                         uint32_t type)
+{
+    struct display* display = (struct display*)data;
+    uint16_t evt_code;
+    switch(type) {
+        case ZWP_TABLET_TOOL_V2_TYPE_PEN:
+            evt_code = BTN_TOOL_PEN;
+            break;
+        case ZWP_TABLET_TOOL_V2_TYPE_ERASER:
+            evt_code = BTN_TOOL_RUBBER;
+            break;
+        case ZWP_TABLET_TOOL_V2_TYPE_BRUSH:
+            evt_code = BTN_TOOL_BRUSH;
+            break;
+        case ZWP_TABLET_TOOL_V2_TYPE_PENCIL:
+            evt_code = BTN_TOOL_PENCIL;
+            break;
+        case ZWP_TABLET_TOOL_V2_TYPE_AIRBRUSH:
+            evt_code = BTN_TOOL_AIRBRUSH;
+            break;
+        case ZWP_TABLET_TOOL_V2_TYPE_FINGER:
+            evt_code = BTN_TOOL_FINGER;
+            break;
+        case ZWP_TABLET_TOOL_V2_TYPE_MOUSE:
+            evt_code = BTN_TOOL_MOUSE;
+            break;
+        case ZWP_TABLET_TOOL_V2_TYPE_LENS:
+            evt_code = BTN_TOOL_LENS;
+            break;
+        default:
+            evt_code = BTN_DIGI;
+    }
+    display->tablet_tools_evt[tool] = evt_code;
+}
+
+static void
+tablet_tool_receive_hardware_serial(void *, struct zwp_tablet_tool_v2 *,
+                                    uint32_t, uint32_t)
+{
+}
+
+static void
+tablet_tool_receive_hardware_id_wacom(void *, struct zwp_tablet_tool_v2 *,
+                                      uint32_t, uint32_t)
+{
+}
+
+static void
+tablet_tool_receive_capability(void *, struct zwp_tablet_tool_v2 *, uint32_t)
+{
+}
+
+static void
+tablet_tool_receive_done(void *, struct zwp_tablet_tool_v2 *)
+{
+}
+
+static void
+tablet_tool_receive_removed(void *, struct zwp_tablet_tool_v2 *)
+{
+}
+
+static void
+tablet_tool_proximity_in(void *data, struct zwp_tablet_tool_v2 *tool,
+                         uint32_t, struct zwp_tablet_v2 *,
+                         struct wl_surface *surface)
+{
+    struct display* display = (struct display*)data;
+    struct input_event event[2];
+    struct timespec rt;
+    unsigned int res, n = 0;
+
+    if (ensure_pipe(display, INPUT_TABLET))
+        return;
+
+    display->tablet_surface = surface;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+        ALOGE("%s:%d error in touch clock_gettime: %s",
+              __FILE__, __LINE__, strerror(errno));
+    }
+
+    ADD_EVENT(EV_KEY, display->tablet_tools_evt[tool], 1);
+    ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+
+    res = write(display->input_fd[INPUT_TABLET], &event, sizeof(event));
+    if (res < sizeof(event))
+        ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+}
+
+static void
+tablet_tool_proximity_out(void *data, struct zwp_tablet_tool_v2 *tool)
+{
+    struct display* display = (struct display*)data;
+    struct input_event event[2];
+    struct timespec rt;
+    unsigned int res, n = 0;
+
+    if (ensure_pipe(display, INPUT_TABLET))
+        return;
+
+    display->tablet_surface = NULL;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+        ALOGE("%s:%d error in touch clock_gettime: %s",
+              __FILE__, __LINE__, strerror(errno));
+    }
+
+    ADD_EVENT(EV_KEY, display->tablet_tools_evt[tool], 0);
+    ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+
+    res = write(display->input_fd[INPUT_TABLET], &event, sizeof(event));
+    if (res < sizeof(event))
+        ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+}
+
+static void
+tablet_tool_down(void *data, struct zwp_tablet_tool_v2 *, uint32_t)
+{
+    struct display* display = (struct display*)data;
+    struct input_event event[2];
+    struct timespec rt;
+    unsigned int res, n = 0;
+
+    if (ensure_pipe(display, INPUT_TABLET))
+        return;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+        ALOGE("%s:%d error in touch clock_gettime: %s",
+              __FILE__, __LINE__, strerror(errno));
+    }
+
+    ADD_EVENT(EV_KEY, BTN_TOUCH, 1);
+    ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+
+    res = write(display->input_fd[INPUT_TABLET], &event, sizeof(event));
+    if (res < sizeof(event))
+        ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+}
+
+static void
+tablet_tool_up(void *data, struct zwp_tablet_tool_v2 *)
+{
+    struct display* display = (struct display*)data;
+    struct input_event event[2];
+    struct timespec rt;
+    unsigned int res, n = 0;
+
+    if (ensure_pipe(display, INPUT_TABLET))
+        return;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+        ALOGE("%s:%d error in touch clock_gettime: %s",
+              __FILE__, __LINE__, strerror(errno));
+    }
+
+    ADD_EVENT(EV_KEY, BTN_TOUCH, 0);
+    ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+
+    res = write(display->input_fd[INPUT_TABLET], &event, sizeof(event));
+    if (res < sizeof(event))
+        ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+}
+
+static void
+tablet_tool_motion(void *data, struct zwp_tablet_tool_v2 *,
+                   wl_fixed_t x_w, wl_fixed_t y_w)
+{
+    struct display* display = (struct display*)data;
+    struct input_event event[3];
+    struct timespec rt;
+    int x, y;
+    unsigned int res, n = 0;
+
+    if (ensure_pipe(display, INPUT_TABLET))
+        return;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+       ALOGE("%s:%d error in touch clock_gettime: %s",
+            __FILE__, __LINE__, strerror(errno));
+    }
+    x = wl_fixed_to_int(x_w);
+    y = wl_fixed_to_int(y_w);
+    if (display->scale > 1) {
+        x *= display->scale;
+        y *= display->scale;
+    }
+    x += display->layers[display->tablet_surface].x;
+    y += display->layers[display->tablet_surface].y;
+
+    ADD_EVENT(EV_ABS, ABS_X, x);
+    ADD_EVENT(EV_ABS, ABS_Y, y);
+    ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+
+    res = write(display->input_fd[INPUT_TABLET], &event, sizeof(event));
+    if (res < sizeof(event))
+        ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+}
+
+static void
+tablet_tool_pressure(void *data, struct zwp_tablet_tool_v2 *,
+                     uint32_t pressure)
+{
+    struct display* display = (struct display*)data;
+    struct input_event event[2];
+    struct timespec rt;
+    unsigned int res, n = 0;
+
+    if (ensure_pipe(display, INPUT_TABLET))
+        return;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+        ALOGE("%s:%d error in touch clock_gettime: %s",
+              __FILE__, __LINE__, strerror(errno));
+    }
+
+    // wayland value is 16 bits. android expects 8 bits max.
+    pressure >>= 8;
+
+    ADD_EVENT(EV_ABS, ABS_PRESSURE, pressure);
+    ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+
+    res = write(display->input_fd[INPUT_TABLET], &event, sizeof(event));
+    if (res < sizeof(event))
+        ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+}
+
+static void
+tablet_tool_distance(void *data, struct zwp_tablet_tool_v2 *,
+                     uint32_t distance_raw)
+{
+    struct display* display = (struct display*)data;
+    struct input_event event[2];
+    struct timespec rt;
+    unsigned int res, n = 0;
+
+    if (ensure_pipe(display, INPUT_TABLET))
+        return;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+        ALOGE("%s:%d error in touch clock_gettime: %s",
+              __FILE__, __LINE__, strerror(errno));
+    }
+
+    ADD_EVENT(EV_ABS, ABS_DISTANCE, distance_raw);
+    ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+
+    res = write(display->input_fd[INPUT_TABLET], &event, sizeof(event));
+    if (res < sizeof(event))
+        ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+}
+
+static void
+tablet_tool_tilt(void *data, struct zwp_tablet_tool_v2 *,
+                 wl_fixed_t tilt_x, wl_fixed_t tilt_y)
+{
+    struct display* display = (struct display*)data;
+    struct input_event event[3];
+    struct timespec rt;
+    unsigned int res, n = 0;
+
+    if (ensure_pipe(display, INPUT_TABLET))
+        return;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+       ALOGE("%s:%d error in touch clock_gettime: %s",
+            __FILE__, __LINE__, strerror(errno));
+    }
+
+    ADD_EVENT(EV_ABS, ABS_TILT_X, wl_fixed_to_int(tilt_x));
+    ADD_EVENT(EV_ABS, ABS_TILT_Y, wl_fixed_to_int(tilt_y));
+    ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+
+    res = write(display->input_fd[INPUT_TABLET], &event, sizeof(event));
+    if (res < sizeof(event))
+        ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+}
+
+static void
+tablet_tool_rotation(void *, struct zwp_tablet_tool_v2 *, wl_fixed_t)
+{
+}
+
+static void
+tablet_tool_slider(void *, struct zwp_tablet_tool_v2 *, int32_t)
+{
+}
+
+static void
+tablet_tool_wheel(void *, struct zwp_tablet_tool_v2 *, wl_fixed_t, int32_t)
+{
+}
+
+static void
+tablet_tool_button_state(void *data, struct zwp_tablet_tool_v2 *,
+                         uint32_t, uint32_t button, uint32_t state)
+{
+    struct display* display = (struct display*)data;
+    struct input_event event[2];
+    struct timespec rt;
+    unsigned int res, n = 0;
+
+    if (ensure_pipe(display, INPUT_TABLET))
+        return;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+        ALOGE("%s:%d error in touch clock_gettime: %s",
+              __FILE__, __LINE__, strerror(errno));
+    }
+
+    ADD_EVENT(EV_KEY, button, state);
+    ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+
+    res = write(display->input_fd[INPUT_TABLET], &event, sizeof(event));
+    if (res < sizeof(event))
+        ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+}
+
+static void
+tablet_tool_frame(void *, struct zwp_tablet_tool_v2 *, uint32_t)
+{
+}
+
+static const struct zwp_tablet_tool_v2_listener tablet_tool_listener = {
+    .type = tablet_tool_receive_type,
+    .hardware_serial = tablet_tool_receive_hardware_serial,
+    .hardware_id_wacom = tablet_tool_receive_hardware_id_wacom,
+    .capability = tablet_tool_receive_capability,
+    .done = tablet_tool_receive_done,
+    .removed = tablet_tool_receive_removed,
+    .proximity_in = tablet_tool_proximity_in,
+    .proximity_out = tablet_tool_proximity_out,
+    .down = tablet_tool_down,
+    .up = tablet_tool_up,
+    .motion = tablet_tool_motion,
+    .pressure = tablet_tool_pressure,
+    .distance = tablet_tool_distance,
+    .tilt = tablet_tool_tilt,
+    .rotation = tablet_tool_rotation,
+    .slider = tablet_tool_slider,
+    .wheel = tablet_tool_wheel,
+    .button = tablet_tool_button_state,
+    .frame = tablet_tool_frame
+};
+
+static void tablet_seat_handle_add_tool(void *data, struct zwp_tablet_seat_v2 *,
+                            struct zwp_tablet_tool_v2 *tool)
+{
+    struct display *d = (struct display*)data;
+    d->tablet_tools.push_back(tool);
+    zwp_tablet_tool_v2_add_listener(tool, &tablet_tool_listener, d);
+    ALOGI("Added tablet tool");
+}
+
+static const struct zwp_tablet_seat_v2_listener tablet_seat_listener = {
+    tablet_seat_handle_add_tablet,
+    tablet_seat_handle_add_tool,
+    tablet_seat_handle_add_pad
+};
+
+static void add_tablet_seat(struct display *d) {
+    d->input_fd[INPUT_TABLET] = -1;
+    mkfifo(INPUT_PIPE_NAME[INPUT_TABLET], S_IRWXO | S_IRWXG | S_IRWXU);
+    chown(INPUT_PIPE_NAME[INPUT_TABLET], 1000, 1000);
+
+    d->tablet_seat = zwp_tablet_manager_v2_get_tablet_seat(d->tablet_manager, d->seat);
+    zwp_tablet_seat_v2_add_listener(d->tablet_seat, &tablet_seat_listener, d);
+}
+
 static void
 registry_handle_global(void *data, struct wl_registry *registry,
                uint32_t id, const char *interface, uint32_t version)
@@ -1112,6 +1494,8 @@ registry_handle_global(void *data, struct wl_registry *registry,
         d->seat = (struct wl_seat*)wl_registry_bind(registry, id,
                 &wl_seat_interface, 1);
         wl_seat_add_listener(d->seat, &seat_listener, d);
+        if (d->tablet_manager && !d->tablet_seat)
+            add_tablet_seat(d);
     } else if (strcmp(interface, "wl_shm") == 0) {
 		d->shm = (struct wl_shm *)wl_registry_bind(registry, id,
                 &wl_shm_interface, 1);
@@ -1138,6 +1522,11 @@ registry_handle_global(void *data, struct wl_registry *registry,
         d->dmabuf = (struct zwp_linux_dmabuf_v1*)wl_registry_bind(registry, id,
                 &zwp_linux_dmabuf_v1_interface, 3);
         zwp_linux_dmabuf_v1_add_listener(d->dmabuf, &dmabuf_listener, d);
+    } else if (strcmp(interface, "zwp_tablet_manager_v2") == 0) {
+        d->tablet_manager = (struct zwp_tablet_manager_v2 *)wl_registry_bind(registry, id,
+                &zwp_tablet_manager_v2_interface, 1);
+        if (d->tablet_manager && d->seat)
+            add_tablet_seat(d);
     }
 }
 
@@ -1199,6 +1588,14 @@ destroy_display(struct display *display)
 
     if (display->compositor)
         wl_compositor_destroy(display->compositor);
+
+    if (display->tablet_manager) {
+        for (struct zwp_tablet_tool_v2 *t : display->tablet_tools) {
+            zwp_tablet_tool_v2_destroy(t);
+        }
+        zwp_tablet_seat_v2_destroy(display->tablet_seat);
+        zwp_tablet_manager_v2_destroy(display->tablet_manager);
+    }
 
     wl_registry_destroy(display->registry);
     wl_display_flush(display->display);

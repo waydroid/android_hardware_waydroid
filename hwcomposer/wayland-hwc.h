@@ -43,6 +43,7 @@
 #include <getopt.h>
 #include <errno.h>
 #include <map>
+#include <list>
 #include <pthread.h>
 #include <vendor/waydroid/task/1.0/IWaydroidTask.h>
 
@@ -53,13 +54,15 @@ enum {
     INPUT_TOUCH,
     INPUT_KEYBOARD,
     INPUT_POINTER,
+    INPUT_TABLET,
     INPUT_TOTAL
 };
 
 static const char *INPUT_PIPE_NAME[INPUT_TOTAL] = {
     "/dev/input/wl_touch_events",
     "/dev/input/wl_keyboard_events",
-    "/dev/input/wl_pointer_events"
+    "/dev/input/wl_pointer_events",
+    "/dev/input/wl_tablet_events"
 };
 
 enum {
@@ -96,6 +99,8 @@ struct display {
     struct android_wlegl *android_wlegl;
     struct zwp_linux_dmabuf_v1 *dmabuf;
     struct xdg_wm_base *wm_base;
+    struct zwp_tablet_manager_v2* tablet_manager;
+    struct zwp_tablet_seat_v2 *tablet_seat;
     int gtype;
     int scale;
     pthread_mutex_t data_mutex;
@@ -110,6 +115,9 @@ struct display {
     std::map<int, struct wl_surface *> touch_surfaces;
     struct wl_surface *pointer_surface;
     struct wl_surface *cursor_surface;
+    struct wl_surface *tablet_surface;
+    std::list<struct zwp_tablet_tool_v2 *> tablet_tools;
+    std::map<struct zwp_tablet_tool_v2 *, uint16_t> tablet_tools_evt;
 
     int width;
     int height;
