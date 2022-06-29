@@ -264,12 +264,10 @@ struct gbm_bo *gralloc_gbm_bo_from_handle(buffer_handle_t handle)
 	return gbm_bo_handle_map[handle];
 }
 
-static int gbm_map(buffer_handle_t handle, int x, int y, int w, int h,
-		int enable_write, void **addr)
+static int gbm_map(buffer_handle_t handle, int enable_write, void **addr)
 {
 	int err = 0;
 	int flags = GBM_BO_TRANSFER_READ;
-	struct gralloc_gbm_handle_t *gbm_handle = gralloc_handle(handle);
 	struct gbm_bo *bo = gralloc_gbm_bo_from_handle(handle);
 	struct bo_data_t *bo_data = gbm_bo_data(bo);
 	uint32_t stride;
@@ -277,18 +275,12 @@ static int gbm_map(buffer_handle_t handle, int x, int y, int w, int h,
 	if (bo_data->map_data)
 		return -EINVAL;
 
-	if (gbm_handle->format == HAL_PIXEL_FORMAT_YV12) {
-		if (x || y)
-			ALOGE("can't map with offset for planar %p", bo);
-		w /= 2;
-		h += h / 2;
-	}
-
 	if (enable_write)
 		flags |= GBM_BO_TRANSFER_WRITE;
 
-	*addr = gbm_bo_map(bo, 0, 0, x + w, y + h, flags, &stride, &bo_data->map_data);
-	ALOGV("mapped bo %p (%d, %d)-(%d, %d) at %p", bo, x, y, w, h, *addr);
+	*addr = gbm_bo_map(bo, 0, 0, gbm_bo_get_width(bo), gbm_bo_get_height(bo),
+	                   flags, &stride, &bo_data->map_data);
+	ALOGV("mapped bo %p at %p", bo, *addr);
 	if (*addr == NULL)
 		return -ENOMEM;
 
@@ -398,7 +390,7 @@ buffer_handle_t gralloc_gbm_bo_create(struct gbm_device *gbm,
  * Lock a bo.  XXX thread-safety?
  */
 int gralloc_gbm_bo_lock(buffer_handle_t handle,
-		int usage, int x, int y, int w, int h,
+		int usage, int /*x*/, int /*y*/, int /*w*/, int /*h*/,
 		void **addr)
 {
 	struct gralloc_handle_t *gbm_handle = gralloc_handle(handle);
@@ -434,20 +426,11 @@ int gralloc_gbm_bo_lock(buffer_handle_t handle,
 
 	usage |= bo_data->locked_for;
 
-	/*
-	 * Some users will lock with an null crop rect.
-	 * Interpret this as no-crop (full buffer WxH).
-	 */
-	if (w == 0 && h == 0) {
-		w = gbm_handle->width;
-		h = gbm_handle->height;
-	}
-
 	if (usage & (GRALLOC_USAGE_SW_WRITE_MASK |
 		     GRALLOC_USAGE_SW_READ_MASK)) {
 		/* the driver is supposed to wait for the bo */
 		int write = !!(usage & GRALLOC_USAGE_SW_WRITE_MASK);
-		int err = gbm_map(handle, x, y, w, h, write, addr);
+		int err = gbm_map(handle, write, addr);
 		if (err)
 			return err;
 	}
