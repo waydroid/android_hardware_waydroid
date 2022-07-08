@@ -110,6 +110,9 @@ struct display {
     int input_fd[INPUT_TOTAL];
     int ptrPrvX;
     int ptrPrvY;
+    double wheelAccumulatorX;
+    double wheelAccumulatorY;
+    bool wheelEvtIsDiscrete;
     int touch_id[MAX_TOUCHPOINTS];
     std::map<struct wl_surface *, struct layerFrame> layers;
     std::map<int, struct wl_surface *> touch_surfaces;
