@@ -47,6 +47,7 @@
 #include <drm_fourcc.h>
 #include <system/graphics.h>
 #include <syscall.h>
+#include <cmath>
 
 #include <libsync/sw_sync.h>
 #include <sync/sync.h>
@@ -710,7 +711,9 @@ pointer_handle_axis(void *data, struct wl_pointer *,
     struct display* display = (struct display*)data;
     struct input_event event[2];
     struct timespec rt;
-    unsigned int res, n = 0;
+    unsigned int res, move, n = 0;
+    double fVal = wl_fixed_to_double(value) / 10.0f;
+    double step = 1.0f;
 
     if (ensure_pipe(display, INPUT_POINTER))
         return;
@@ -718,16 +721,33 @@ pointer_handle_axis(void *data, struct wl_pointer *,
     if (!display->pointer_surface)
         return;
 
+    if (!property_get_bool("persist.waydroid.reverse_scrolling", false)) {
+        fVal = -fVal;
+    }
+
+    if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL) {
+        display->wheelAccumulatorY += fVal;
+        if (std::abs(display->wheelAccumulatorY) < step)
+            return;
+        move = (int)(display->wheelAccumulatorY / step);
+        display->wheelAccumulatorY = display->wheelEvtIsDiscrete ? 0 :
+                                     std::fmod(display->wheelAccumulatorY, step);
+    } else {
+        display->wheelAccumulatorX += fVal;
+        if (std::abs(display->wheelAccumulatorX) < step)
+            return;
+        move = (int)(display->wheelAccumulatorX / step);
+        display->wheelAccumulatorX = display->wheelEvtIsDiscrete ? 0 :
+                                     std::fmod(display->wheelAccumulatorY, step);
+    }
+
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
         ALOGE("%s:%d error in touch clock_gettime: %s",
               __FILE__, __LINE__, strerror(errno));
     }
 
-    if (!property_get_bool("persist.waydroid.reverse_scrolling", false)) {
-        value = -value;
-    }
     ADD_EVENT(EV_REL, (axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
-              ? REL_WHEEL : REL_HWHEEL, wl_fixed_to_double(value) / 10.00f);
+              ? REL_WHEEL : REL_HWHEEL, move);
     ADD_EVENT(EV_SYN, SYN_REPORT, 0);
 
     res = write(display->input_fd[INPUT_POINTER], &event, sizeof(event));
@@ -736,8 +756,10 @@ pointer_handle_axis(void *data, struct wl_pointer *,
 }
 
 static void
-pointer_handle_axis_source(void *, struct wl_pointer *, uint32_t)
+pointer_handle_axis_source(void *data, struct wl_pointer *, uint32_t source)
 {
+    struct display* display = (struct display*)data;
+    display->wheelEvtIsDiscrete = (source == WL_POINTER_AXIS_SOURCE_WHEEL);
 }
 
 static void
@@ -1510,7 +1532,7 @@ registry_handle_global(void *data, struct wl_registry *registry,
                 registry, id, &wl_shell_interface, 1);
     } else if (strcmp(interface, "wl_seat") == 0) {
         d->seat = (struct wl_seat*)wl_registry_bind(registry, id,
-                &wl_seat_interface, 1);
+                &wl_seat_interface, WL_POINTER_AXIS_SOURCE_SINCE_VERSION);
         wl_seat_add_listener(d->seat, &seat_listener, d);
         if (d->tablet_manager && !d->tablet_seat)
             add_tablet_seat(d);
