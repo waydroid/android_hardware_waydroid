@@ -842,7 +842,7 @@ touch_handle_up(void *data, struct wl_touch *,
         uint32_t, uint32_t, int32_t id)
 {
     struct display* display = (struct display*)data;
-    struct input_event event[4];
+    struct input_event event[3];
     struct timespec rt;
     unsigned int res, n = 0;
 
