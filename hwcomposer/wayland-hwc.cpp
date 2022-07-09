@@ -721,7 +721,7 @@ pointer_handle_axis(void *data, struct wl_pointer *,
     if (!display->pointer_surface)
         return;
 
-    if (!property_get_bool("persist.waydroid.reverse_scrolling", false)) {
+    if (!display->reverseScroll) {
         fVal = -fVal;
     }
 
@@ -996,6 +996,7 @@ seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t wl_caps)
         d->input_fd[INPUT_POINTER] = -1;
         d->ptrPrvX = 0;
         d->ptrPrvY = 0;
+        d->reverseScroll = property_get_bool("persist.waydroid.reverse_scrolling", false);
         mkfifo(INPUT_PIPE_NAME[INPUT_POINTER], S_IRWXO | S_IRWXG | S_IRWXU);
         chown(INPUT_PIPE_NAME[INPUT_POINTER], 1000, 1000);
         wl_pointer_add_listener(d->pointer, &pointer_listener, d);
