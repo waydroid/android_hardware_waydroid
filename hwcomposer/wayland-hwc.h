@@ -113,6 +113,7 @@ struct display {
     double wheelAccumulatorX;
     double wheelAccumulatorY;
     bool wheelEvtIsDiscrete;
+    bool reverseScroll;
     int touch_id[MAX_TOUCHPOINTS];
     std::map<struct wl_surface *, struct layerFrame> layers;
     std::map<int, struct wl_surface *> touch_surfaces;
