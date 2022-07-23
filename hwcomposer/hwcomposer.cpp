@@ -533,26 +533,33 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             continue;
         }
 
+        const hwc_rect_t frame = fb_layer->displayFrame;
+        const int width = frame.right - frame.left;
+        const int height = frame.bottom - frame.top;
+
         struct window *window = NULL;
         std::string layer_name = pdev->display->layer_names[layer];
 
         if (active_apps == "Waydroid") {
             // Show everything in a single window
             if (pdev->windows.find(active_apps) == pdev->windows.end()) {
-                pdev->windows[active_apps] = create_window(pdev->display, pdev->use_subsurface, active_apps, "0");
+                pdev->windows[active_apps] = create_window(pdev->display, pdev->use_subsurface, active_apps, "0", width, height);
                 property_set("waydroid.open_windows", std::to_string(pdev->windows.size()).c_str());
             }
             window = pdev->windows[active_apps];
         } else if (!pdev->use_subsurface) {
             if (single_layer_tid.length()) {
                 if (pdev->windows.find(single_layer_tid) == pdev->windows.end()) {
-                    pdev->windows[single_layer_tid] = create_window(pdev->display, pdev->use_subsurface, single_layer_aid, single_layer_tid);
+                    pdev->windows[single_layer_tid] = create_window(pdev->display, pdev->use_subsurface, single_layer_aid, single_layer_tid, width, height);
                     property_set("waydroid.open_windows", std::to_string(pdev->windows.size()).c_str());
                 }
                 window = pdev->windows[single_layer_tid];
+
                 // Window is closed, don't bother
-                if (!window->isActive)
+                if (window && !window->isActive) {
+                    free(window);
                     window = NULL;
+                }
             }
         } else {
             // Create windows based on Task ID in layer name
@@ -573,11 +580,17 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
                 if (showWindow) {
                     if (pdev->windows.find(layer_tid) == pdev->windows.end()) {
-                        pdev->windows[layer_tid] = create_window(pdev->display, pdev->use_subsurface, layer_aid, layer_tid);
+                        pdev->windows[layer_tid] = create_window(pdev->display, pdev->use_subsurface, layer_aid, layer_tid, width, height);
                         property_set("waydroid.open_windows", std::to_string(pdev->windows.size()).c_str());
                     }
                     if (pdev->windows.find(layer_tid) != pdev->windows.end())
                         window = pdev->windows[layer_tid];
+                }
+
+                // Window is closed, don't bother
+                if (window && !window->isActive) {
+                    free(window);
+                    window = NULL;
                 }
             }
         }
@@ -628,7 +641,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             }
             if (LayerRawName == "InputMethod") {
                 if (pdev->windows.find(LayerRawName) == pdev->windows.end()) {
-                    pdev->windows[LayerRawName] = create_window(pdev->display, pdev->use_subsurface, LayerRawName, "none");
+                    pdev->windows[LayerRawName] = create_window(pdev->display, pdev->use_subsurface, LayerRawName, "none", width, height);
                     property_set("waydroid.open_windows", std::to_string(pdev->windows.size()).c_str());
                 }
                 if (pdev->windows.find(LayerRawName) != pdev->windows.end())
@@ -1002,6 +1015,9 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     if (!property_get_bool("persist.waydroid.cursor_on_subsurface", false))
         pdev->display->cursor_surface =
             wl_compositor_create_surface(pdev->display->compositor);
+    else
+        pdev->display->cursor_surface = nullptr;
+
     if (!pdev->display->height) {
         pdev->display->waiting_for_data = true;
         pthread_cond_timedwait(&pdev->display->data_available_cond,

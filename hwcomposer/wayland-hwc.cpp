@@ -60,6 +60,7 @@
 
 #include <wayland-client.h>
 #include <wayland-android-client-protocol.h>
+#include <wayland-egl-core.h>
 #include "linux-dmabuf-unstable-v1-client-protocol.h"
 #include "presentation-time-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
@@ -401,6 +402,8 @@ destroy_window(struct window *window, bool keep)
             wl_subsurface_destroy(window->subsurfaces[it->first]);
             wl_surface_destroy(it->second);
         }
+        if (window->egl_window)
+            wl_egl_window_destroy(window->egl_window);
         if (window->xdg_toplevel)
             xdg_toplevel_destroy(window->xdg_toplevel);
         if (window->xdg_surface)
@@ -414,10 +417,15 @@ destroy_window(struct window *window, bool keep)
         window->isActive = false;
     else
         free(window);
+
+    if (!window->appID.empty()) {
+        const std::string prop = std::string("waydroid.open_window.") + window->appID;
+        property_set(prop.c_str(), "0");
+    }
 }
 
 struct window *
-create_window(struct display *display, bool with_dummy, std::string appID, std::string taskID)
+create_window(struct display *display, bool with_egl_window, std::string appID, std::string taskID, const int width, const int height)
 {
     struct window *window = new struct window();
     if (!window)
@@ -428,6 +436,7 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
     window->surface = wl_compositor_create_surface(display->compositor);
     window->taskID = taskID;
     window->isActive = true;
+    window->egl_window = nullptr;
 
     if (display->wm_base) {
         window->xdg_surface =
@@ -481,29 +490,15 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
     } else {
         assert(0);
     }
-    /*
-     * We should create a dummy transparent 1x1 buffer in 0x0 location
-     * This allows us to set initial location of windows by setting them as subsurface
-     * and ovarally helps is moving surfaces
-     * 
-     * TODO: Drop this hack
-     */
-    if (with_dummy) {
-        int fd = syscall(SYS_memfd_create, "buffer", 0);
-        ftruncate(fd, 4);
-        void *shm_data = mmap(NULL, 4, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-        if (shm_data == MAP_FAILED) {
-            ALOGE("mmap failed");
-            close(fd);
-            exit(1);
-        }
-        struct wl_shm_pool *pool = wl_shm_create_pool(display->shm, fd, 4);
-        struct wl_buffer *buffer_shm = wl_shm_pool_create_buffer(pool, 0, 1, 1, 4, WL_SHM_FORMAT_ARGB8888);
-        wl_shm_pool_destroy(pool);
-        close(fd);
-        wl_surface_attach(window->surface, buffer_shm, 0, 0);
-        wl_surface_damage(window->surface, 0, 0, 1, 1);
+
+    if (with_egl_window) {
+        window->egl_window = wl_egl_window_create(window->surface, width, height);
     }
+
+    window->appID = appID;
+    std::string prop = std::string("waydroid.open_window.") + appID;
+    property_set(prop.c_str(), "1");
+
     return window;
 }
 
