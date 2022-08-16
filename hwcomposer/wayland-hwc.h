@@ -96,6 +96,7 @@ struct display {
     struct wl_touch *touch;
     struct wl_output *output;
     struct wp_presentation *presentation;
+    struct wp_viewporter *viewporter;
     struct android_wlegl *android_wlegl;
     struct zwp_linux_dmabuf_v1 *dmabuf;
     struct xdg_wm_base *wm_base;
