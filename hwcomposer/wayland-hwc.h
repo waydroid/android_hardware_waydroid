@@ -168,6 +168,7 @@ struct window {
     struct wl_buffer *buffer;
     std::map<size_t, struct wl_surface *> surfaces;
     std::map<size_t, struct wl_subsurface *> subsurfaces;
+    std::map<size_t, struct wp_viewport *> viewports;
     struct wl_callback *callback;
     int lastLayer;
     std::string taskID;

@@ -35,6 +35,7 @@
 #include <sync/sync.h>
 #include <drm_fourcc.h>
 #include <presentation-time-client-protocol.h>
+#include <viewporter-client-protocol.h>
 #include <gralloc_handle.h>
 
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
@@ -157,7 +158,7 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
     if (pdev->display->gtype == GRALLOC_GBM) {
         struct gralloc_handle_t *drm_handle = (struct gralloc_handle_t *)layer->handle;
         if (pdev->display->dmabuf) {
-            ret = create_dmabuf_wl_buffer(pdev->display, buf, width, height, drm_handle->format, drm_handle->prime_fd, drm_handle->stride, drm_handle->modifier);
+            ret = create_dmabuf_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, drm_handle->prime_fd, drm_handle->stride, drm_handle->modifier);
         } else {
             ret = create_shm_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, drm_handle->stride, layer->handle);
             update_shm_buffer(pdev->display, buf);
@@ -200,24 +201,30 @@ static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pde
 
     struct wl_surface *surface = NULL;
     struct wl_subsurface *subsurface = NULL;
-    int left = layer->displayFrame.left;
-    int top = layer->displayFrame.top;
+    struct wp_viewport *viewport = NULL;
 
     if (window->surfaces.find(window->lastLayer) == window->surfaces.end()) {
         surface = wl_compositor_create_surface(pdev->display->compositor);
         subsurface = wl_subcompositor_get_subsurface(pdev->display->subcompositor,
                                                      surface,
                                                      window->surface);
+        viewport = wp_viewporter_get_viewport(pdev->display->viewporter, surface);
         window->surfaces[window->lastLayer] = surface;
         window->subsurfaces[window->lastLayer] = subsurface;
+        window->viewports[window->lastLayer] = viewport;
     }
 
-    if (pdev->display->scale > 1) {
-        left /= pdev->display->scale;
-        top /= pdev->display->scale;
-    }
-
-    wl_subsurface_set_position(window->subsurfaces[window->lastLayer], left, top);
+    wp_viewport_set_source(window->viewports[window->lastLayer],
+                           wl_fixed_from_double(fmax(0, layer->sourceCropi.left / (double)pdev->display->scale)),
+                           wl_fixed_from_double(fmax(0, layer->sourceCropi.top / (double)pdev->display->scale)),
+                           wl_fixed_from_double(fmax(1, (layer->sourceCropi.right - layer->sourceCropi.left) / (double)pdev->display->scale)),
+                           wl_fixed_from_double(fmax(1, (layer->sourceCropi.bottom - layer->sourceCropi.top) / (double)pdev->display->scale)));
+    wp_viewport_set_destination(window->viewports[window->lastLayer],
+                                fmax(1, (layer->displayFrame.right - layer->displayFrame.left) / pdev->display->scale),
+                                fmax(1, (layer->displayFrame.bottom - layer->displayFrame.top) / pdev->display->scale));
+    wl_subsurface_set_position(window->subsurfaces[window->lastLayer],
+                               layer->displayFrame.left / pdev->display->scale,
+                               layer->displayFrame.top / pdev->display->scale);
 
     pdev->display->layers[window->surfaces[window->lastLayer]] = {
         .x = layer->displayFrame.left,

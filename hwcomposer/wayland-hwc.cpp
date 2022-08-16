@@ -399,6 +399,7 @@ destroy_window(struct window *window, bool keep)
             wl_callback_destroy(window->callback);
 
         for (auto it = window->surfaces.begin(); it != window->surfaces.end(); it++) {
+            wp_viewport_destroy(window->viewports[it->first]);
             wl_subsurface_destroy(window->subsurfaces[it->first]);
             wl_surface_destroy(it->second);
         }
