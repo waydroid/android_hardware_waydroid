@@ -61,6 +61,7 @@
 #include <wayland-client.h>
 #include <wayland-android-client-protocol.h>
 #include "linux-dmabuf-unstable-v1-client-protocol.h"
+#include "viewporter-client-protocol.h"
 #include "presentation-time-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
 #include "tablet-unstable-v2-client-protocol.h"
@@ -1552,6 +1553,9 @@ registry_handle_global(void *data, struct wl_registry *registry,
             wp_presentation_add_listener(d->presentation,
                     &presentation_listener, d);
         }
+    } else if (strcmp(interface, "wp_viewporter") == 0) {
+        d->viewporter = (struct wp_viewporter*)wl_registry_bind(registry, id,
+                &wp_viewporter_interface, 1);
     } else if ((d->gtype == GRALLOC_ANDROID) &&
                (strcmp(interface, "android_wlegl") == 0)) {
         d->android_wlegl = (struct android_wlegl*)wl_registry_bind(registry, id,
