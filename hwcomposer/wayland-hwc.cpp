@@ -75,8 +75,8 @@ buffer_release(void *data, struct wl_buffer *)
     struct buffer *mybuf = (struct buffer*)data;
 
     sw_sync_timeline_inc(mybuf->timeline_fd, 1);
-    close(mybuf->release_fence_fd);
-    mybuf->release_fence_fd = -1;
+    close(mybuf->timeline_fd);
+    mybuf->timeline_fd = -1;
 }
 
 static const struct wl_buffer_listener buffer_listener = {
