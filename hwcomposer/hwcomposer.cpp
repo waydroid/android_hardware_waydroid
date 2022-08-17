@@ -224,7 +224,6 @@ static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pde
     }
 
     wl_subsurface_set_position(window->subsurfaces[window->lastLayer], left, top);
-    wl_subsurface_set_desync(window->subsurfaces[window->lastLayer]);
 
     pdev->display->layers[window->surfaces[window->lastLayer]] = {
         .x = layer->displayFrame.left,
@@ -687,8 +686,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
 
         wl_surface_commit(surface);
-        if (pdev->use_subsurface)
-            wl_surface_commit(window->surface);
 
         const int kAcquireWarningMS = 100;
         err = sync_wait(fb_layer->acquireFenceFd, kAcquireWarningMS);
@@ -710,13 +707,16 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                     if (it->second->surfaces.find(l) != it->second->surfaces.end()) {
                         wl_surface_attach(it->second->surfaces[l], NULL, 0, 0);
                         wl_surface_commit(it->second->surfaces[l]);
-                        wl_surface_commit(it->second->surface);
                     }
                 }
             }
         }
         pdev->display->geo_changed = false;
     }
+    if (pdev->use_subsurface)
+        for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++)
+            if (it->second)
+                wl_surface_commit(it->second->surface);
     wl_display_flush(pdev->display->display);
 
     /* TODO: According to[1] the contents->retireFenceFd is the responsibility
