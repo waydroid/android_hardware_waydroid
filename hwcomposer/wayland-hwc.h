@@ -83,6 +83,8 @@ struct handleExt {
     uint32_t stride;
 };
 
+struct window;
+
 struct display {
     struct wl_display *display;
     struct wl_registry *registry;
@@ -116,6 +118,7 @@ struct display {
     bool reverseScroll;
     int touch_id[MAX_TOUCHPOINTS];
     std::map<struct wl_surface *, struct layerFrame> layers;
+    std::map<struct wl_surface *, struct window *> windows;
     std::map<int, struct wl_surface *> touch_surfaces;
     struct wl_surface *pointer_surface;
     struct wl_surface *cursor_surface;
