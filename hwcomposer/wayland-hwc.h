@@ -152,7 +152,6 @@ struct buffer {
     int format;
 
     int timeline_fd;
-    int release_fence_fd;
     bool isShm;
     void *shm_data;
 };
