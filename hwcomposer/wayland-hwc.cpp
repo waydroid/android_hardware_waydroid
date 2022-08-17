@@ -290,7 +290,7 @@ static const struct xdg_surface_listener xdg_surface_listener = {
 static void
 xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
                               int32_t width, int32_t height,
-                              struct wl_array *states)
+                              struct wl_array *)
 {
     struct window *window = (struct window *)data;
 
@@ -309,22 +309,6 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
         window->display->isWinResSet = true;
         if (window->display->waiting_for_data)
             pthread_cond_broadcast(&window->display->data_available_cond);
-    }
-
-    for (enum xdg_toplevel_state *state = static_cast<xdg_toplevel_state *>(states->data);
-         reinterpret_cast<uint8_t *>(state) < (static_cast<uint8_t *>(states->data) + states->size);
-         state++) {
-        switch (*state) {
-            case XDG_TOPLEVEL_STATE_ACTIVATED:
-                if (window->display->task != nullptr) {
-                    if (window->taskID != "none" && window->taskID != "0") {
-                            window->display->task->setFocusedTask(stoi(window->taskID));
-                    }
-                }
-                break;
-            default:
-                break;
-        }
     }
 }
 
@@ -604,10 +588,22 @@ keyboard_handle_keymap(void *, struct wl_keyboard *,
 }
 
 static void
-keyboard_handle_enter(void *, struct wl_keyboard *,
-                      uint32_t, struct wl_surface *,
+keyboard_handle_enter(void *data, struct wl_keyboard *,
+                      uint32_t, struct wl_surface *surface,
                       struct wl_array *)
 {
+    struct display *display = (struct display *)data;
+
+    if (display->windows.find(surface) == display->windows.end())
+        return;
+
+    struct window *window = display->windows[surface];
+
+    if (window->display->task != nullptr) {
+        if (window->taskID != "none" && window->taskID != "0") {
+            window->display->task->setFocusedTask(stoi(window->taskID));
+        }
+    }
 }
 
 static void
