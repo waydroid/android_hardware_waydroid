@@ -502,7 +502,7 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
         wl_shm_pool_destroy(pool);
         close(fd);
         wl_surface_attach(window->surface, buffer_shm, 0, 0);
-        wl_surface_damage(window->surface, 0, 0, 1, 1);
+        wl_surface_damage_buffer(window->surface, 0, 0, 1, 1);
     }
     return window;
 }
