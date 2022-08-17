@@ -135,25 +135,18 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
     int height = layer->displayFrame.bottom - layer->displayFrame.top;
     auto it = pdev->display->buffer_map.find(layer->handle);
     if (it != pdev->display->buffer_map.end()) {
-        if (!pdev->display->geo_changed) {
-            if (it->second->isShm) {
-                if (width != it->second->width || height != it->second->height) {
-                    if (it->second->buffer)
-                        wl_buffer_destroy(it->second->buffer);
-                    delete (it->second);
-                    pdev->display->buffer_map.erase(it);
-                } else {
-                    update_shm_buffer(pdev->display, it->second);
-                    return it->second;
-                }
-            } else
+        if (it->second->isShm) {
+            if (width != it->second->width || height != it->second->height) {
+                if (it->second->buffer)
+                    wl_buffer_destroy(it->second->buffer);
+                delete (it->second);
+                pdev->display->buffer_map.erase(it);
+            } else {
+                update_shm_buffer(pdev->display, it->second);
                 return it->second;
-        } else {
-            if (it->second->buffer)
-                wl_buffer_destroy(it->second->buffer);
-            delete (it->second);
-            pdev->display->buffer_map.erase(it);
-        }
+            }
+        } else
+            return it->second;
     }
 
     struct buffer *buf;
@@ -345,6 +338,17 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
     hwc_display_contents_1_t* contents = displays[HWC_DISPLAY_PRIMARY];
     contents->retireFenceFd = sw_sync_fence_create(pdev->timeline_fd, "hwc_contents_release", pdev->next_sync_point);
+
+    if (pdev->display->geo_changed) {
+        for (auto it = pdev->display->buffer_map.begin(); it != pdev->display->buffer_map.end(); it++) {
+            if (it->second) {
+                if (it->second->buffer)
+                    wl_buffer_destroy(it->second->buffer);
+                delete (it->second);
+            }
+        }
+        pdev->display->buffer_map.clear();
+    }
 
     /*
      * In prop "persist.waydroid.multi_windows" we detect HWC let SF rander layers 
