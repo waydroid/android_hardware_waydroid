@@ -445,6 +445,15 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     std::string single_layer_tid;
     std::string single_layer_aid;
 
+    for (size_t l = 0; l < contents->numHwLayers; l++) {
+        std::string layer_name = pdev->display->layer_names[l];
+        if (layer_name.rfind("BootAnimation#", 0) == 0) {
+            // force single window mode during boot animation
+            active_apps = "Waydroid";
+            break;
+        }
+    }
+
     std::lock_guard<std::mutex> lock(pdev->display->windowsMutex);
     if (active_apps == "none") {
         // Clear all open windows
