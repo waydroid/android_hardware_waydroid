@@ -70,6 +70,7 @@ struct waydroid_hwc_composer_device_1 {
     int timeline_fd;
     int next_sync_point;
     bool use_subsurface;
+    bool multi_windows;
 };
 
 static int hwc_prepare(hwc_composer_device_1_t* dev,
@@ -401,7 +402,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                 pdev->windows[active_apps]->lastLayer = 0;
             }
         }
-    } else if (!pdev->use_subsurface) {
+    } else if (!pdev->multi_windows) {
         // Single window mode, detecting if any unblacklisted app is on screen
         bool showWindow = false;
         for (size_t l = 0; l < contents->numHwLayers; l++) {
@@ -421,6 +422,9 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                         if (!single_layer_tid.length()) {
                             single_layer_tid = layer_tid;
                             single_layer_aid = layer_aid;
+                        }
+                        if (pdev->windows.find(single_layer_tid) != pdev->windows.end()) {
+                            pdev->windows[single_layer_tid]->lastLayer = 0;
                         }
                     }
                 }
@@ -546,7 +550,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                 property_set("waydroid.open_windows", std::to_string(pdev->windows.size()).c_str());
             }
             window = pdev->windows[active_apps];
-        } else if (!pdev->use_subsurface) {
+        } else if (!pdev->multi_windows) {
             if (single_layer_tid.length()) {
                 if (pdev->windows.find(single_layer_tid) == pdev->windows.end()) {
                     pdev->windows[single_layer_tid] = create_window(pdev->display, pdev->use_subsurface, single_layer_aid, single_layer_tid);
@@ -968,7 +972,8 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
 
     pdev->vsync_period_ns = 1000*1000*1000/60; // vsync is 60 hz
 
-    pdev->use_subsurface = property_get_bool("persist.waydroid.multi_windows", false);
+    pdev->multi_windows = property_get_bool("persist.waydroid.multi_windows", false);
+    pdev->use_subsurface = property_get_bool("persist.waydroid.use_subsurface", false) || pdev->multi_windows;
     if (pdev->use_subsurface)
         pdev->timeline_fd = -1;
     else
