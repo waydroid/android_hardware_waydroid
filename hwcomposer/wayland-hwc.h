@@ -45,6 +45,7 @@
 #include <map>
 #include <list>
 #include <pthread.h>
+#include <hardware/hwcomposer.h>
 #include <vendor/waydroid/task/1.0/IWaydroidTask.h>
 
 using ::android::sp;
@@ -163,6 +164,7 @@ struct window {
     struct wl_shell_surface *shell_surface;
     struct xdg_surface *xdg_surface;
     struct xdg_toplevel *xdg_toplevel;
+    struct wp_viewport *viewport;
     std::map<size_t, struct wl_surface *> surfaces;
     std::map<size_t, struct wl_subsurface *> subsurfaces;
     struct wl_callback *callback;
@@ -193,4 +195,4 @@ destroy_display(struct display *display);
 void
 destroy_window(struct window *window, bool keep = false);
 struct window *
-create_window(struct display *display, bool with_dummy, std::string appID, std::string taskID);
+create_window(struct display *display, bool with_dummy, std::string appID, std::string taskID, hwc_color_t color);
