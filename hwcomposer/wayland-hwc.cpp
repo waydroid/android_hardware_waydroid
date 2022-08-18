@@ -1593,6 +1593,12 @@ get_gralloc_type(const char *gralloc)
     }
 }
 
+static void
+wayland_log_handler (const char *format, va_list args)
+{
+    LOG_PRI_VA (ANDROID_LOG_ERROR, "wayland-hwc", format, args);
+}
+
 struct display *
 create_display(const char *gralloc)
 {
@@ -1601,6 +1607,7 @@ create_display(const char *gralloc)
         ALOGE("out of memory");
         return NULL;
     }
+    wl_log_set_handler_client(wayland_log_handler);
     display->gtype = get_gralloc_type(gralloc);
     display->refresh = 0;
     display->display = wl_display_connect(NULL);
