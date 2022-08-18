@@ -513,6 +513,16 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
             wp_viewport_set_source(window->viewport, wl_fixed_from_int(0), wl_fixed_from_int(0), wl_fixed_from_int(1), wl_fixed_from_int(1));
             wp_viewport_set_destination(window->viewport, display->width / display->scale, display->height / display->scale);
         }
+
+        struct wl_region *region = wl_compositor_create_region(display->compositor);
+        if (color.a == 0) {
+            wl_surface_set_input_region(window->surface, region);
+        }
+        if (color.a == 255) {
+            wl_region_add(region, 0, 0, display->width / display->scale, display->height / display->scale);
+            wl_surface_set_opaque_region(window->surface, region);
+        }
+        wl_region_destroy(region);
     }
     return window;
 }
