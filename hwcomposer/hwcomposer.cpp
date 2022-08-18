@@ -537,14 +537,14 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         if (active_apps == "Waydroid") {
             // Show everything in a single window
             if (pdev->windows.find(active_apps) == pdev->windows.end()) {
-                pdev->windows[active_apps] = create_window(pdev->display, pdev->use_subsurface, active_apps, "0");
+                pdev->windows[active_apps] = create_window(pdev->display, pdev->use_subsurface, active_apps, "0", {0, 0, 0, 255});
                 property_set("waydroid.open_windows", std::to_string(pdev->windows.size()).c_str());
             }
             window = pdev->windows[active_apps];
         } else if (!pdev->multi_windows) {
             if (single_layer_tid.length()) {
                 if (pdev->windows.find(single_layer_tid) == pdev->windows.end()) {
-                    pdev->windows[single_layer_tid] = create_window(pdev->display, pdev->use_subsurface, single_layer_aid, single_layer_tid);
+                    pdev->windows[single_layer_tid] = create_window(pdev->display, pdev->use_subsurface, single_layer_aid, single_layer_tid, {0, 0, 0, 255});
                     property_set("waydroid.open_windows", std::to_string(pdev->windows.size()).c_str());
                 }
                 window = pdev->windows[single_layer_tid];
@@ -571,7 +571,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
                 if (showWindow) {
                     if (pdev->windows.find(layer_tid) == pdev->windows.end()) {
-                        pdev->windows[layer_tid] = create_window(pdev->display, pdev->use_subsurface, layer_aid, layer_tid);
+                        pdev->windows[layer_tid] = create_window(pdev->display, pdev->use_subsurface, layer_aid, layer_tid, {0, 0, 0, 0});
                         property_set("waydroid.open_windows", std::to_string(pdev->windows.size()).c_str());
                     }
                     if (pdev->windows.find(layer_tid) != pdev->windows.end())
@@ -626,7 +626,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             }
             if (LayerRawName == "InputMethod") {
                 if (pdev->windows.find(LayerRawName) == pdev->windows.end()) {
-                    pdev->windows[LayerRawName] = create_window(pdev->display, pdev->use_subsurface, LayerRawName, "none");
+                    pdev->windows[LayerRawName] = create_window(pdev->display, pdev->use_subsurface, LayerRawName, "none", {0, 0, 0, 0});
                     property_set("waydroid.open_windows", std::to_string(pdev->windows.size()).c_str());
                 }
                 if (pdev->windows.find(LayerRawName) != pdev->windows.end())
@@ -990,7 +990,7 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     pdev->display->waiting_for_data = false;
     pdev->vsync_callback_enabled = true;
     pthread_mutex_lock(&pdev->display->data_mutex);
-    pdev->calib_window = create_window(pdev->display, false, "Waydroid", "0");
+    pdev->calib_window = create_window(pdev->display, false, "Waydroid", "0", {});
     if (!property_get_bool("persist.waydroid.cursor_on_subsurface", false))
         pdev->display->cursor_surface =
             wl_compositor_create_surface(pdev->display->compositor);
