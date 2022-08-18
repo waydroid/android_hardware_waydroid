@@ -408,6 +408,8 @@ destroy_window(struct window *window, bool keep)
             xdg_surface_destroy(window->xdg_surface);
         if (window->shell_surface)
             wl_shell_surface_destroy(window->shell_surface);
+        if (window->viewport)
+            wp_viewport_destroy(window->viewport);
 
         wl_surface_destroy(window->surface);
     }
@@ -418,7 +420,7 @@ destroy_window(struct window *window, bool keep)
 }
 
 struct window *
-create_window(struct display *display, bool with_dummy, std::string appID, std::string taskID)
+create_window(struct display *display, bool with_dummy, std::string appID, std::string taskID, hwc_color_t color)
 {
     struct window *window = new struct window();
     if (!window)
@@ -429,6 +431,7 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
     window->surface = wl_compositor_create_surface(display->compositor);
     window->taskID = taskID;
     window->isActive = true;
+    window->viewport = NULL;
 
     if (display->wm_base) {
         window->xdg_surface =
@@ -482,13 +485,7 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
     } else {
         assert(0);
     }
-    /*
-     * We should create a dummy transparent 1x1 buffer in 0x0 location
-     * This allows us to set initial location of windows by setting them as subsurface
-     * and ovarally helps is moving surfaces
-     * 
-     * TODO: Drop this hack
-     */
+
     if (with_dummy) {
         int fd = syscall(SYS_memfd_create, "buffer", 0);
         ftruncate(fd, 4);
@@ -498,12 +495,21 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
             close(fd);
             exit(1);
         }
+        uint32_t *buf = (uint32_t*)shm_data;
+        *buf = color.a << 24 | color.r << 16 | color.g << 8 | color.b;
+
         struct wl_shm_pool *pool = wl_shm_create_pool(display->shm, fd, 4);
         struct wl_buffer *buffer_shm = wl_shm_pool_create_buffer(pool, 0, 1, 1, 4, WL_SHM_FORMAT_ARGB8888);
         wl_shm_pool_destroy(pool);
         close(fd);
         wl_surface_attach(window->surface, buffer_shm, 0, 0);
         wl_surface_damage_buffer(window->surface, 0, 0, 1, 1);
+
+        if (display->isWinResSet) {
+            window->viewport = wp_viewporter_get_viewport(display->viewporter, window->surface);
+            wp_viewport_set_source(window->viewport, wl_fixed_from_int(0), wl_fixed_from_int(0), wl_fixed_from_int(1), wl_fixed_from_int(1));
+            wp_viewport_set_destination(window->viewport, display->width / display->scale, display->height / display->scale);
+        }
     }
     return window;
 }
