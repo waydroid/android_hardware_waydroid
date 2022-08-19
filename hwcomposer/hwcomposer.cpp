@@ -214,11 +214,20 @@ static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pde
         window->viewports[window->lastLayer] = viewport;
     }
 
+    hwc_rect_t sourceCrop = layer->sourceCropi;
+
+    if (layer->transform & HWC_TRANSFORM_ROT_90) {
+        sourceCrop.left = layer->sourceCropi.top;
+        sourceCrop.top = layer->sourceCropi.left;
+        sourceCrop.right = layer->sourceCropi.bottom;
+        sourceCrop.bottom = layer->sourceCropi.right;
+    }
+
     wp_viewport_set_source(window->viewports[window->lastLayer],
-                           wl_fixed_from_double(fmax(0, layer->sourceCropi.left / (double)pdev->display->scale)),
-                           wl_fixed_from_double(fmax(0, layer->sourceCropi.top / (double)pdev->display->scale)),
-                           wl_fixed_from_double(fmax(1, (layer->sourceCropi.right - layer->sourceCropi.left) / (double)pdev->display->scale)),
-                           wl_fixed_from_double(fmax(1, (layer->sourceCropi.bottom - layer->sourceCropi.top) / (double)pdev->display->scale)));
+                           wl_fixed_from_double(fmax(0, sourceCrop.left / (double)pdev->display->scale)),
+                           wl_fixed_from_double(fmax(0, sourceCrop.top / (double)pdev->display->scale)),
+                           wl_fixed_from_double(fmax(1, (sourceCrop.right - sourceCrop.left) / (double)pdev->display->scale)),
+                           wl_fixed_from_double(fmax(1, (sourceCrop.bottom - sourceCrop.top) / (double)pdev->display->scale)));
     wp_viewport_set_destination(window->viewports[window->lastLayer],
                                 fmax(1, (layer->displayFrame.right - layer->displayFrame.left) / pdev->display->scale),
                                 fmax(1, (layer->displayFrame.bottom - layer->displayFrame.top) / pdev->display->scale));
@@ -683,6 +692,32 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         wl_surface_damage_buffer(surface, 0, 0, buf->width, buf->height);
         if (pdev->display->scale > 1)
             wl_surface_set_buffer_scale(surface, pdev->display->scale);
+        switch (fb_layer->transform) {
+            case HWC_TRANSFORM_FLIP_H:
+                wl_surface_set_buffer_transform(surface, WL_OUTPUT_TRANSFORM_FLIPPED_180);
+                break;
+            case HWC_TRANSFORM_FLIP_V:
+                wl_surface_set_buffer_transform(surface, WL_OUTPUT_TRANSFORM_FLIPPED);
+                break;
+            case HWC_TRANSFORM_ROT_90:
+                wl_surface_set_buffer_transform(surface, WL_OUTPUT_TRANSFORM_90);
+                break;
+            case HWC_TRANSFORM_ROT_180:
+                wl_surface_set_buffer_transform(surface, WL_OUTPUT_TRANSFORM_180);
+                break;
+            case HWC_TRANSFORM_ROT_270:
+                wl_surface_set_buffer_transform(surface, WL_OUTPUT_TRANSFORM_270);
+                break;
+            case HWC_TRANSFORM_FLIP_H_ROT_90:
+                wl_surface_set_buffer_transform(surface, WL_OUTPUT_TRANSFORM_FLIPPED_270);
+                break;
+            case HWC_TRANSFORM_FLIP_V_ROT_90:
+                wl_surface_set_buffer_transform(surface, WL_OUTPUT_TRANSFORM_FLIPPED_90);
+                break;
+            default:
+                wl_surface_set_buffer_transform(surface, WL_OUTPUT_TRANSFORM_NORMAL);
+                break;
+        }
 
         struct wp_presentation *pres = window->display->presentation;
         if (pres) {
