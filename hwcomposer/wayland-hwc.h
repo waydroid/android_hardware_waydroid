@@ -164,8 +164,10 @@ struct window {
     struct wl_shell_surface *shell_surface;
     struct xdg_surface *xdg_surface;
     struct xdg_toplevel *xdg_toplevel;
-    struct wp_viewport *viewport;
-    struct wl_buffer *buffer;
+    struct wp_viewport *bg_viewport;
+    struct wl_buffer *bg_buffer;
+    struct wl_surface *bg_surface;
+    struct wl_subsurface *bg_subsurface;
     std::map<size_t, struct wl_surface *> surfaces;
     std::map<size_t, struct wl_subsurface *> subsurfaces;
     std::map<size_t, struct wp_viewport *> viewports;
