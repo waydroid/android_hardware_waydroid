@@ -42,8 +42,8 @@ class WaydroidDisplay : public IWaydroidDisplay {
 
     // Methods from ::vendor::waydroid::display::V1_0::IWaydroidDisplay follow.
     Return<Error> setLayerName(uint32_t layer, const hidl_string &name) override;
-    Return<Error> setLayerHandleInfo(uint32_t layer, uint32_t format, uint32_t stride) override;
-    Return<Error> setTargetLayerHandleInfo(uint32_t format, uint32_t stride) override;
+    Return<Error> setLayerHandleInfo(uint32_t layer, uint32_t format, uint32_t stride, uint32_t width, uint32_t height) override;
+    Return<Error> setTargetLayerHandleInfo(uint32_t format, uint32_t stride, uint32_t width, uint32_t height) override;
   private:
     struct display *mDisplay;
 };

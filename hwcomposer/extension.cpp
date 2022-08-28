@@ -32,19 +32,23 @@ Return<Error> WaydroidDisplay::setLayerName(uint32_t layer, const hidl_string &n
     mDisplay->layer_names[layer] = std::string(name);
     return Error::NONE;
 }
-Return<Error> WaydroidDisplay::setLayerHandleInfo(uint32_t layer, uint32_t format, uint32_t stride) {
+Return<Error> WaydroidDisplay::setLayerHandleInfo(uint32_t layer, uint32_t format, uint32_t stride, uint32_t width, uint32_t height) {
     mDisplay->layer_handles_ext[layer] = 
     {
         .format = format,
-        .stride = stride
+        .stride = stride,
+        .width = width,
+        .height = height,
     };
     return Error::NONE;
 }
-Return<Error> WaydroidDisplay::setTargetLayerHandleInfo(uint32_t format, uint32_t stride) {
+Return<Error> WaydroidDisplay::setTargetLayerHandleInfo(uint32_t format, uint32_t stride, uint32_t width, uint32_t height) {
     mDisplay->target_layer_handle_ext = 
     {
         .format = format,
-        .stride = stride
+        .stride = stride,
+        .width = width,
+        .height = height,
     };
     return Error::NONE;
 }

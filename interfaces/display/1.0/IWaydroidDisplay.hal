@@ -19,6 +19,6 @@ import android.hardware.graphics.composer@2.1::types;
 
 interface IWaydroidDisplay {
     setLayerName(uint32_t layer, string name) generates (Error error);
-    setLayerHandleInfo(uint32_t layer, uint32_t format, uint32_t stride) generates (Error error);
-    setTargetLayerHandleInfo(uint32_t format, uint32_t stride) generates (Error error);
+    setLayerHandleInfo(uint32_t layer, uint32_t format, uint32_t stride, uint32_t width, uint32_t height) generates (Error error);
+    setTargetLayerHandleInfo(uint32_t format, uint32_t stride, uint32_t width, uint32_t height) generates (Error error);
 };
