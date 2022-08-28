@@ -33,11 +33,24 @@
 
 #include <hardware/gralloc.h>
 #include <system/graphics.h>
+#include <android/gralloc_handle.h>
+#include <drm/drm_fourcc.h>
 
 #include <gbm.h>
 
 #include "gralloc_drm.h"
 #include "gralloc_gbm_priv.h"
+
+#define CROS_GRALLOC_DRM_GET_BUFFER_INFO 4
+
+struct cros_gralloc0_buffer_info {
+	uint32_t drm_fourcc;
+	int num_fds;
+	int fds[4];
+	uint64_t modifier;
+	int offset[4];
+	int stride[4];
+};
 
 struct gbm_module_t {
 	gralloc_module_t base;
@@ -64,12 +77,38 @@ static int gbm_init(struct gbm_module_t *dmod)
 	return err;
 }
 
+static int get_fourcc(int format)
+{
+	switch (format) {
+	case HAL_PIXEL_FORMAT_RGBA_8888:
+		return DRM_FORMAT_ABGR8888;
+	case HAL_PIXEL_FORMAT_RGBX_8888:
+		return DRM_FORMAT_XBGR8888;
+	case HAL_PIXEL_FORMAT_RGB_888:
+		return DRM_FORMAT_BGR888;
+	case HAL_PIXEL_FORMAT_RGB_565:
+		return DRM_FORMAT_RGB565;
+	case HAL_PIXEL_FORMAT_BGRA_8888:
+		return DRM_FORMAT_ARGB8888;
+	case HAL_PIXEL_FORMAT_YV12:
+		/* YV12 is planar, but must be a single buffer so ask for GR88 */
+		return DRM_FORMAT_GR88;
+	case HAL_PIXEL_FORMAT_YCbCr_422_SP:
+	case HAL_PIXEL_FORMAT_YCrCb_420_SP:
+	default:
+		return 0;
+        }
+}
+
 static int gbm_mod_perform(const struct gralloc_module_t *mod, int op, ...)
 {
 	struct gbm_module_t *dmod = (struct gbm_module_t *) mod;
 	va_list args;
 	int err;
 	uint32_t uop = static_cast<uint32_t>(op);
+	buffer_handle_t handle;
+	struct cros_gralloc0_buffer_info *info;
+	struct gralloc_handle_t *hnd;
 
 	err = gbm_init(dmod);
 	if (err)
@@ -81,6 +120,21 @@ static int gbm_mod_perform(const struct gralloc_module_t *mod, int op, ...)
 		{
 			int *fd = va_arg(args, int *);
 			*fd = gbm_device_get_fd(dmod->gbm);
+			err = 0;
+		}
+		break;
+	case CROS_GRALLOC_DRM_GET_BUFFER_INFO:
+		{
+			handle = va_arg(args, buffer_handle_t);
+			hnd = gralloc_handle(handle);
+			info = va_arg(args, struct cros_gralloc0_buffer_info *);
+			memset(info, 0, sizeof(*info));
+			info->drm_fourcc = get_fourcc(hnd->format);
+			info->num_fds = 1;
+			info->fds[0] = hnd->prime_fd;
+			info->modifier = hnd->modifier;
+			info->stride[0] = hnd->stride;
+			info->offset[0] = 0;
 			err = 0;
 		}
 		break;
