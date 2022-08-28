@@ -87,11 +87,30 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
     if ((contents->flags & HWC_GEOMETRY_CHANGED) && pdev->use_subsurface)
         pdev->display->geo_changed = true;
 
+    std::pair<int, int> skipped(-1, -1);
+    for (size_t i = 0; i < contents->numHwLayers; i++) {
+      if (!(contents->hwLayers[i].flags & HWC_SKIP_LAYER))
+        continue;
+
+      if (skipped.first == -1)
+        skipped.first = i;
+      skipped.second = i;
+    }
+
     for (size_t i = 0; i < contents->numHwLayers; i++) {
         if (contents->hwLayers[i].compositionType == HWC_FRAMEBUFFER_TARGET)
             continue;
         if (contents->hwLayers[i].flags & HWC_SKIP_LAYER)
             continue;
+
+        /* skipped layers have to be composited by SurfaceFlinger; so in order
+           have correct z-ordering, we must ask SurfaceFlinger to composite
+           everything between the first and the last skipped layer. Unfortunately,
+           this can't be done in multi windows mode, which relies on layers not
+           being composited, so we won't render skipped layers correctly in that mode */
+        if (!pdev->multi_windows)
+            if (skipped.first >= 0 && i > skipped.first && i < skipped.second)
+                contents->hwLayers[i].compositionType = HWC_FRAMEBUFFER;
 
         if (contents->hwLayers[i].compositionType ==
             (pdev->use_subsurface ? HWC_FRAMEBUFFER : HWC_OVERLAY))
@@ -371,6 +390,18 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         pdev->display->buffer_map.clear();
     }
 
+    std::pair<int, int> skipped(-1, -1);
+    if (pdev->use_subsurface && !pdev->multi_windows) {
+        for (size_t i = 0; i < contents->numHwLayers; i++) {
+          if (!(contents->hwLayers[i].flags & HWC_SKIP_LAYER))
+            continue;
+
+          if (skipped.first == -1)
+            skipped.first = i;
+          skipped.second = i;
+        }
+    }
+
     /*
      * In prop "persist.waydroid.multi_windows" we detect HWC let SF rander layers 
      * And just show the target client layer (single windows mode) or
@@ -527,8 +558,30 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
     }
 
+    size_t fb_target = -1;
+    for (size_t l = 0; l < contents->numHwLayers; l++) {
+        hwc_layer_1_t* fb_layer = &contents->hwLayers[l];
+        if (fb_layer->compositionType == HWC_FRAMEBUFFER_TARGET) {
+            fb_target = l;
+            break;
+        }
+    }
+
     int err = 0;
-    for (size_t layer = 0; layer < contents->numHwLayers; layer++) {
+    for (size_t l = 0; l < contents->numHwLayers; l++) {
+        size_t layer = l;
+        if (l == skipped.first && fb_target >= 0) {
+            // draw framebuffer target instead of skipped layers
+            if (contents->hwLayers[layer].acquireFenceFd != -1) {
+                close(contents->hwLayers[layer].acquireFenceFd);
+            }
+            layer = fb_target;
+        }
+        if (skipped.first >= 0 && l == fb_target) {
+            // don't handle fb_target twice
+            continue;
+        }
+
         hwc_layer_1_t* fb_layer = &contents->hwLayers[layer];
 
         if (fb_layer->flags & HWC_SKIP_LAYER) {
@@ -539,7 +592,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
 
         if (fb_layer->compositionType != 
-            (pdev->use_subsurface ? HWC_OVERLAY : HWC_FRAMEBUFFER_TARGET)) {
+            (pdev->use_subsurface ? HWC_OVERLAY : HWC_FRAMEBUFFER_TARGET) && layer == l) {
             if (fb_layer->acquireFenceFd != -1) {
                 close(fb_layer->acquireFenceFd);
             }
