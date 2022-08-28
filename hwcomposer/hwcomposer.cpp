@@ -235,11 +235,11 @@ static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pde
                                wl_fixed_from_double(fmax(1, (sourceCrop.bottom - sourceCrop.top) / (double)pdev->display->scale)));
     }
     wp_viewport_set_destination(window->viewports[window->lastLayer],
-                                fmax(1, (layer->displayFrame.right - layer->displayFrame.left) / pdev->display->scale),
-                                fmax(1, (layer->displayFrame.bottom - layer->displayFrame.top) / pdev->display->scale));
+                                fmax(1, ceil((layer->displayFrame.right - layer->displayFrame.left) / (double)pdev->display->scale)),
+                                fmax(1, ceil((layer->displayFrame.bottom - layer->displayFrame.top) / (double)pdev->display->scale)));
     wl_subsurface_set_position(window->subsurfaces[window->lastLayer],
-                               layer->displayFrame.left / pdev->display->scale,
-                               layer->displayFrame.top / pdev->display->scale);
+                               floor(layer->displayFrame.left / (double)pdev->display->scale),
+                               floor(layer->displayFrame.top / (double)pdev->display->scale));
 
     pdev->display->layers[window->surfaces[window->lastLayer]] = {
         .x = layer->displayFrame.left,
