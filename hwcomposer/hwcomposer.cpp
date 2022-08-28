@@ -409,7 +409,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     } else if (active_apps == "Waydroid") {
         // Clear all open windows if there's any and just keep "Waydroid"
         if ((pdev->windows.find(active_apps) != pdev->windows.end())) {
-            if (pdev->windows.size() > 1) {
+            if (pdev->windows.size() > 1 || !pdev->windows[active_apps]->isActive) {
                 for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
                     if (it->second)
                         destroy_window(it->second);
@@ -570,9 +570,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                     property_set("waydroid.open_windows", std::to_string(pdev->windows.size()).c_str());
                 }
                 window = pdev->windows[single_layer_tid];
-                // Window is closed, don't bother
-                if (!window->isActive)
-                    window = NULL;
             }
         } else {
             // Create windows based on Task ID in layer name
@@ -656,7 +653,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             }
         }
 
-        if (!window) {
+        if (!window || !window->isActive) {
             if (fb_layer->acquireFenceFd != -1) {
                 close(fb_layer->acquireFenceFd);
             }
