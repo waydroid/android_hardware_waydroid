@@ -415,6 +415,7 @@ destroy_window(struct window *window, bool keep)
             wl_buffer_destroy(window->buffer);
 
         wl_surface_destroy(window->surface);
+        wl_display_flush(window->display->display);
     }
     if (keep)
         window->isActive = false;
