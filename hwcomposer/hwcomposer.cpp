@@ -133,8 +133,6 @@ static void update_shm_buffer(struct display *display, struct buffer *buffer)
 
 static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, size_t pos)
 {
-    // TODO: retrieve the actual size of the buffer (from gralloc or IWaydroidDisplay)
-    // it can't be calculated from displayFrame since it may be cropped
     int width = layer->displayFrame.right - layer->displayFrame.left;
     int height = layer->displayFrame.bottom - layer->displayFrame.top;
     auto it = pdev->display->buffer_map.find(layer->handle);
@@ -166,9 +164,8 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
             update_shm_buffer(pdev->display, buf);
         }
     } else {
-        // TODO: use the actual buffer size
-        uint32_t format;
-        uint32_t stride;
+        uint32_t format = HAL_PIXEL_FORMAT_RGBA_8888;
+        uint32_t stride = width;
         if (layer->compositionType == HWC_FRAMEBUFFER_TARGET) {
             format = pdev->display->target_layer_handle_ext.format;
             stride = pdev->display->target_layer_handle_ext.stride;
@@ -226,14 +223,11 @@ static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pde
         sourceCrop.bottom = layer->sourceCropi.right;
     }
 
-    // can't correctly crop on other gralloc implementations yet
-    if (pdev->display->gtype == GRALLOC_GBM) {
-        wp_viewport_set_source(window->viewports[window->lastLayer],
-                               wl_fixed_from_double(fmax(0, sourceCrop.left / (double)pdev->display->scale)),
-                               wl_fixed_from_double(fmax(0, sourceCrop.top / (double)pdev->display->scale)),
-                               wl_fixed_from_double(fmax(1, (sourceCrop.right - sourceCrop.left) / (double)pdev->display->scale)),
-                               wl_fixed_from_double(fmax(1, (sourceCrop.bottom - sourceCrop.top) / (double)pdev->display->scale)));
-    }
+    wp_viewport_set_source(window->viewports[window->lastLayer],
+                           wl_fixed_from_double(fmax(0, sourceCrop.left / (double)pdev->display->scale)),
+                           wl_fixed_from_double(fmax(0, sourceCrop.top / (double)pdev->display->scale)),
+                           wl_fixed_from_double(fmax(1, (sourceCrop.right - sourceCrop.left) / (double)pdev->display->scale)),
+                           wl_fixed_from_double(fmax(1, (sourceCrop.bottom - sourceCrop.top) / (double)pdev->display->scale)));
     wp_viewport_set_destination(window->viewports[window->lastLayer],
                                 fmax(1, (layer->displayFrame.right - layer->displayFrame.left) / pdev->display->scale),
                                 fmax(1, (layer->displayFrame.bottom - layer->displayFrame.top) / pdev->display->scale));
