@@ -409,10 +409,14 @@ destroy_window(struct window *window, bool keep)
             xdg_surface_destroy(window->xdg_surface);
         if (window->shell_surface)
             wl_shell_surface_destroy(window->shell_surface);
-        if (window->viewport)
-            wp_viewport_destroy(window->viewport);
-        if (window->buffer)
-            wl_buffer_destroy(window->buffer);
+        if (window->bg_viewport)
+            wp_viewport_destroy(window->bg_viewport);
+        if (window->bg_subsurface)
+            wl_subsurface_destroy(window->bg_subsurface);
+        if (window->bg_surface)
+            wl_surface_destroy(window->bg_surface);
+        if (window->bg_buffer)
+            wl_buffer_destroy(window->bg_buffer);
 
         wl_surface_destroy(window->surface);
     }
@@ -434,8 +438,10 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
     window->surface = wl_compositor_create_surface(display->compositor);
     window->taskID = taskID;
     window->isActive = true;
-    window->viewport = NULL;
-    window->buffer = NULL;
+    window->bg_viewport = NULL;
+    window->bg_buffer = NULL;
+    window->bg_surface = NULL;
+    window->bg_subsurface = NULL;
 
     if (display->wm_base) {
         window->xdg_surface =
@@ -490,41 +496,52 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
         assert(0);
     }
 
-    if (with_dummy) {
-        int fd = syscall(SYS_memfd_create, "buffer", 0);
-        ftruncate(fd, 4);
-        void *shm_data = mmap(NULL, 4, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-        if (shm_data == MAP_FAILED) {
-            ALOGE("mmap failed");
-            close(fd);
-            exit(1);
-        }
-        uint32_t *buf = (uint32_t*)shm_data;
-        *buf = color.a << 24 | color.r << 16 | color.g << 8 | color.b;
-
-        struct wl_shm_pool *pool = wl_shm_create_pool(display->shm, fd, 4);
-        window->buffer = wl_shm_pool_create_buffer(pool, 0, 1, 1, 4, WL_SHM_FORMAT_ARGB8888);
-        wl_shm_pool_destroy(pool);
+    int fd = syscall(SYS_memfd_create, "buffer", 0);
+    ftruncate(fd, 4);
+    void *shm_data = mmap(NULL, 4, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (shm_data == MAP_FAILED) {
+        ALOGE("mmap failed");
         close(fd);
-        wl_surface_attach(window->surface, window->buffer, 0, 0);
-        wl_surface_damage_buffer(window->surface, 0, 0, 1, 1);
-
-        if (display->isWinResSet) {
-            window->viewport = wp_viewporter_get_viewport(display->viewporter, window->surface);
-            wp_viewport_set_source(window->viewport, wl_fixed_from_int(0), wl_fixed_from_int(0), wl_fixed_from_int(1), wl_fixed_from_int(1));
-            wp_viewport_set_destination(window->viewport, display->width / display->scale, display->height / display->scale);
-        }
-
-        struct wl_region *region = wl_compositor_create_region(display->compositor);
-        if (color.a == 0) {
-            wl_surface_set_input_region(window->surface, region);
-        }
-        if (color.a == 255) {
-            wl_region_add(region, 0, 0, display->width / display->scale, display->height / display->scale);
-            wl_surface_set_opaque_region(window->surface, region);
-        }
-        wl_region_destroy(region);
+        exit(1);
     }
+    uint32_t *buf = (uint32_t*)shm_data;
+    *buf = color.a << 24 | color.r << 16 | color.g << 8 | color.b;
+
+    struct wl_shm_pool *pool = wl_shm_create_pool(display->shm, fd, 4);
+    window->bg_buffer = wl_shm_pool_create_buffer(pool, 0, 1, 1, 4, WL_SHM_FORMAT_ARGB8888);
+    wl_shm_pool_destroy(pool);
+    close(fd);
+
+    struct wl_surface *surface = window->surface;
+    if (!with_dummy) {
+        surface = wl_compositor_create_surface(display->compositor);
+        struct wl_subsurface *subsurface = wl_subcompositor_get_subsurface(display->subcompositor, surface, window->surface);
+        wl_subsurface_place_below(subsurface, window->surface);
+        window->bg_surface = surface;
+        window->bg_subsurface = subsurface;
+    }
+
+    wl_surface_attach(surface, window->bg_buffer, 0, 0);
+    wl_surface_damage_buffer(surface, 0, 0, 1, 1);
+
+    if (display->isWinResSet) {
+        window->bg_viewport = wp_viewporter_get_viewport(display->viewporter, surface);
+        wp_viewport_set_source(window->bg_viewport, wl_fixed_from_int(0), wl_fixed_from_int(0), wl_fixed_from_int(1), wl_fixed_from_int(1));
+        wp_viewport_set_destination(window->bg_viewport, display->width / display->scale, display->height / display->scale);
+    }
+
+    struct wl_region *region = wl_compositor_create_region(display->compositor);
+    if (color.a == 0) {
+        wl_surface_set_input_region(surface, region);
+    }
+    if (color.a == 255) {
+        wl_region_add(region, 0, 0, display->width / display->scale, display->height / display->scale);
+        wl_surface_set_opaque_region(surface, region);
+    }
+    wl_region_destroy(region);
+
+    wl_surface_commit(surface);
+
     return window;
 }
 
