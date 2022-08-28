@@ -467,7 +467,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         for (auto it = pdev->windows.cbegin(); it != pdev->windows.cend();) {
             if (it->second) {
                 // This window is closed, but android is still showing leftover layers, we detect it here
-                if (!it->second->isActive) {
+                if (!it->second->isActive || it->first == "Waydroid") {
                     for (size_t l = 0; l < contents->numHwLayers; l++) {
                         std::string layer_name = pdev->display->layer_names[l];
                         if (layer_name.substr(0, 4) == "TID:") {
