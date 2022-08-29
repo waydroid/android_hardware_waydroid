@@ -313,9 +313,16 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
 }
 
 static void
+send_key_event(display *data, uint32_t key, wl_keyboard_key_state state);
+
+static void
 xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
 {
     struct window *window = (struct window *)data;
+
+    // simulate user input to restart idle timeout (TODO: find a better way)
+    send_key_event(window->display, 0, WL_KEYBOARD_KEY_STATE_PRESSED);
+    send_key_event(window->display, 0, WL_KEYBOARD_KEY_STATE_RELEASED);
 
     if (window->display->task != nullptr) {
         if (window->taskID != "none") {
