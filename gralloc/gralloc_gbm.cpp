@@ -101,6 +101,12 @@ static uint32_t get_gbm_format(int format)
 		/* YV12 is planar, but must be a single buffer so ask for GR88 */
 		fmt = GBM_FORMAT_GR88;
 		break;
+	case HAL_PIXEL_FORMAT_RGBA_FP16:
+		fmt = GBM_FORMAT_ABGR16161616F;
+		break;
+	case HAL_PIXEL_FORMAT_RGBA_1010102:
+		fmt = GBM_FORMAT_ABGR2101010;
+		break;
 	case HAL_PIXEL_FORMAT_YCbCr_422_SP:
 	case HAL_PIXEL_FORMAT_YCrCb_420_SP:
 	default:
@@ -116,9 +122,13 @@ static int gralloc_gbm_get_bpp(int format)
 	int bpp;
 
 	switch (format) {
+	case HAL_PIXEL_FORMAT_RGBA_FP16:
+		bpp = 8;
+		break;
 	case HAL_PIXEL_FORMAT_RGBA_8888:
 	case HAL_PIXEL_FORMAT_RGBX_8888:
 	case HAL_PIXEL_FORMAT_BGRA_8888:
+	case HAL_PIXEL_FORMAT_RGBA_1010102:
 		bpp = 4;
 		break;
 	case HAL_PIXEL_FORMAT_RGB_888:

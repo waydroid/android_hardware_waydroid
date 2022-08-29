@@ -93,6 +93,10 @@ static int get_fourcc(int format)
 	case HAL_PIXEL_FORMAT_YV12:
 		/* YV12 is planar, but must be a single buffer so ask for GR88 */
 		return DRM_FORMAT_GR88;
+	case HAL_PIXEL_FORMAT_RGBA_FP16:
+		return DRM_FORMAT_ABGR16161616F;
+	case HAL_PIXEL_FORMAT_RGBA_1010102:
+		return DRM_FORMAT_ABGR2101010;
 	case HAL_PIXEL_FORMAT_YCbCr_422_SP:
 	case HAL_PIXEL_FORMAT_YCrCb_420_SP:
 	default:
