@@ -231,7 +231,8 @@ static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pde
         subsurface = wl_subcompositor_get_subsurface(pdev->display->subcompositor,
                                                      surface,
                                                      window->surface);
-        viewport = wp_viewporter_get_viewport(pdev->display->viewporter, surface);
+        if (pdev->display->viewporter)
+            viewport = wp_viewporter_get_viewport(pdev->display->viewporter, surface);
         window->surfaces[window->lastLayer] = surface;
         window->subsurfaces[window->lastLayer] = subsurface;
         window->viewports[window->lastLayer] = viewport;
@@ -246,17 +247,20 @@ static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pde
         sourceCrop.bottom = layer->sourceCropi.right;
     }
 
-    // can't correctly crop on other gralloc implementations yet
-    if (pdev->display->gtype == GRALLOC_GBM) {
-        wp_viewport_set_source(window->viewports[window->lastLayer],
-                               wl_fixed_from_double(fmax(0, sourceCrop.left / (double)pdev->display->scale)),
-                               wl_fixed_from_double(fmax(0, sourceCrop.top / (double)pdev->display->scale)),
-                               wl_fixed_from_double(fmax(1, (sourceCrop.right - sourceCrop.left) / (double)pdev->display->scale)),
-                               wl_fixed_from_double(fmax(1, (sourceCrop.bottom - sourceCrop.top) / (double)pdev->display->scale)));
+    if (pdev->display->viewporter) {
+        // can't correctly crop on other gralloc implementations yet
+        if (pdev->display->gtype == GRALLOC_GBM) {
+            wp_viewport_set_source(window->viewports[window->lastLayer],
+                                   wl_fixed_from_double(fmax(0, sourceCrop.left / (double)pdev->display->scale)),
+                                   wl_fixed_from_double(fmax(0, sourceCrop.top / (double)pdev->display->scale)),
+                                   wl_fixed_from_double(fmax(1, (sourceCrop.right - sourceCrop.left) / (double)pdev->display->scale)),
+                                   wl_fixed_from_double(fmax(1, (sourceCrop.bottom - sourceCrop.top) / (double)pdev->display->scale)));
+        }
+        wp_viewport_set_destination(window->viewports[window->lastLayer],
+                                    fmax(1, ceil((layer->displayFrame.right - layer->displayFrame.left) / (double)pdev->display->scale)),
+                                    fmax(1, ceil((layer->displayFrame.bottom - layer->displayFrame.top) / (double)pdev->display->scale)));
     }
-    wp_viewport_set_destination(window->viewports[window->lastLayer],
-                                fmax(1, ceil((layer->displayFrame.right - layer->displayFrame.left) / (double)pdev->display->scale)),
-                                fmax(1, ceil((layer->displayFrame.bottom - layer->displayFrame.top) / (double)pdev->display->scale)));
+
     wl_subsurface_set_position(window->subsurfaces[window->lastLayer],
                                floor(layer->displayFrame.left / (double)pdev->display->scale),
                                floor(layer->displayFrame.top / (double)pdev->display->scale));
