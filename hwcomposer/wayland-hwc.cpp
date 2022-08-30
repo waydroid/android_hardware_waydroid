@@ -383,7 +383,8 @@ destroy_window(struct window *window, bool keep)
             wl_callback_destroy(window->callback);
 
         for (auto it = window->surfaces.begin(); it != window->surfaces.end(); it++) {
-            wp_viewport_destroy(window->viewports[it->first]);
+            if (window->viewports[it->first])
+                wp_viewport_destroy(window->viewports[it->first]);
             wl_subsurface_destroy(window->subsurfaces[it->first]);
             wl_surface_destroy(it->second);
         }
@@ -509,7 +510,7 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
     wl_surface_attach(surface, window->bg_buffer, 0, 0);
     wl_surface_damage_buffer(surface, 0, 0, 1, 1);
 
-    if (display->isWinResSet) {
+    if (display->isWinResSet && display->viewporter) {
         window->bg_viewport = wp_viewporter_get_viewport(display->viewporter, surface);
         wp_viewport_set_source(window->bg_viewport, wl_fixed_from_int(0), wl_fixed_from_int(0), wl_fixed_from_int(1), wl_fixed_from_int(1));
         wp_viewport_set_destination(window->bg_viewport, display->width / display->scale, display->height / display->scale);
