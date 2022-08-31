@@ -452,14 +452,10 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
         if (appID != "Waydroid")
             appID = "waydroid." + appID;
         xdg_toplevel_set_app_id(window->xdg_toplevel, appID.c_str());
-        wl_surface_commit(window->surface);
 
         if (display->isWinResSet)
             xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width / display->scale, display->height / display->scale);
 
-        /* Here we retrieve objects if executed without immed, or error */
-        wl_display_roundtrip(display->display);
-        wl_surface_commit(window->surface);
     } else if (display->shell) {
         window->shell_surface =
             wl_shell_get_shell_surface(display->shell, window->surface);
@@ -475,12 +471,6 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
                                       { wl_shell_surface_set_title(window->shell_surface, value.c_str()); });
         else
             wl_shell_surface_set_title(window->shell_surface, appID.c_str());
-
-        wl_surface_commit(window->surface);
-
-        /* Here we retrieve objects if executed without immed, or error */
-        wl_display_roundtrip(display->display);
-        wl_surface_commit(window->surface);
     } else {
         assert(0);
     }
@@ -529,7 +519,13 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
     }
     wl_region_destroy(region);
 
-    wl_surface_commit(surface);
+    wl_surface_commit(window->surface);
+
+    if (!with_dummy)
+        wl_surface_commit(window->bg_surface);
+
+    /* Here we retrieve objects if executed without immed, or error */
+    wl_display_roundtrip(display->display);
 
     return window;
 }
