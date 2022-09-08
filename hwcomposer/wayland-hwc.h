@@ -69,6 +69,7 @@ static const char *INPUT_PIPE_NAME[INPUT_TOTAL] = {
 enum {
     GRALLOC_ANDROID,
     GRALLOC_GBM,
+    GRALLOC_CROS,
     GRALLOC_DEFAULT
 };
 
@@ -190,7 +191,7 @@ create_android_wl_buffer(struct display *display, struct buffer *buffer,
 int
 create_dmabuf_wl_buffer(struct display *display, struct buffer *buffer,
              int width, int height, int format,
-             int prime_fd, int stride, uint64_t modifier);
+             int prime_fd, int stride, int offset, uint64_t modifier, bool format_is_drm);
 
 int
 create_shm_wl_buffer(struct display *display, struct buffer *buffer,
