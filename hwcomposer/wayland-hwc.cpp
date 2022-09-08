@@ -202,19 +202,19 @@ int ConvertHalFormatToDrm(struct display *display, uint32_t hal_format) {
 int
 create_dmabuf_wl_buffer(struct display *display, struct buffer *buffer,
              int width, int height, int format,
-             int prime_fd, int stride, uint64_t modifier)
+             int prime_fd, int stride, int offset, uint64_t modifier, bool format_is_drm)
 {
     struct zwp_linux_buffer_params_v1 *params;
 
     assert(prime_fd >= 0);
-    buffer->format = ConvertHalFormatToDrm(display, format);
+    buffer->format = format_is_drm ? format : ConvertHalFormatToDrm(display, format);
     assert(buffer->format >= 0);
     buffer->width = width;
     buffer->height = height;
     buffer->stride = stride;
 
     params = zwp_linux_dmabuf_v1_create_params(display->dmabuf);
-    zwp_linux_buffer_params_v1_add(params, prime_fd, 0, 0, buffer->stride, modifier >> 32, modifier & 0xffffffff);
+    zwp_linux_buffer_params_v1_add(params, prime_fd, 0, offset, buffer->stride, modifier >> 32, modifier & 0xffffffff);
     zwp_linux_buffer_params_v1_add_listener(params, &params_listener, buffer);
 
     buffer->buffer = zwp_linux_buffer_params_v1_create_immed(params, buffer->width, buffer->height, buffer->format, 0);
@@ -1594,7 +1594,7 @@ registry_handle_global(void *data, struct wl_registry *registry,
                (strcmp(interface, "android_wlegl") == 0)) {
         d->android_wlegl = (struct android_wlegl*)wl_registry_bind(registry, id,
                 &android_wlegl_interface, 1);
-    } else if ((d->gtype == GRALLOC_GBM) &&
+    } else if ((d->gtype == GRALLOC_GBM || d->gtype == GRALLOC_CROS) &&
                (strcmp(interface, "zwp_linux_dmabuf_v1") == 0)) {
         if (version < 3)
             return;
@@ -1626,6 +1626,8 @@ get_gralloc_type(const char *gralloc)
         return GRALLOC_DEFAULT;
     } else if (strcmp(gralloc, "gbm") == 0) {
         return GRALLOC_GBM;
+    } else if (strcmp(gralloc, "minigbm_gbm_mesa") == 0) {
+        return GRALLOC_CROS;
     } else {
         return GRALLOC_ANDROID;
     }
