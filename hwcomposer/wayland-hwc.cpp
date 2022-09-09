@@ -65,6 +65,7 @@
 #include "presentation-time-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
 #include "tablet-unstable-v2-client-protocol.h"
+#include "xdg-activation-v1-client-protocol.h"
 
 using ::android::hardware::hidl_string;
 
@@ -1606,6 +1607,13 @@ registry_handle_global(void *data, struct wl_registry *registry,
                 &zwp_tablet_manager_v2_interface, 1);
         if (d->tablet_manager && d->seat)
             add_tablet_seat(d);
+    } else if (strcmp(interface, "xdg_activation_v1") == 0) {
+        char token[PROPERTY_VALUE_MAX];
+        if (property_get("waydroid.xdg_activation_token", token, nullptr) > 0) {
+            d->xdg_activation_token = token;
+            d->xdg_activation = (struct xdg_activation_v1 *)wl_registry_bind(registry, id,
+                    &xdg_activation_v1_interface, 1);
+        }
     }
 }
 
@@ -1683,6 +1691,10 @@ destroy_display(struct display *display)
         }
         zwp_tablet_seat_v2_destroy(display->tablet_seat);
         zwp_tablet_manager_v2_destroy(display->tablet_manager);
+    }
+
+    if (display->xdg_activation) {
+        xdg_activation_v1_destroy(display->xdg_activation);
     }
 
     wl_registry_destroy(display->registry);

@@ -106,6 +106,7 @@ struct display {
     struct xdg_wm_base *wm_base;
     struct zwp_tablet_manager_v2* tablet_manager;
     struct zwp_tablet_seat_v2 *tablet_seat;
+    struct xdg_activation_v1 *xdg_activation;
     int gtype;
     int scale;
     pthread_mutex_t data_mutex;
@@ -128,6 +129,7 @@ struct display {
     struct wl_surface *tablet_surface;
     std::list<struct zwp_tablet_tool_v2 *> tablet_tools;
     std::map<struct zwp_tablet_tool_v2 *, uint16_t> tablet_tools_evt;
+    std::string xdg_activation_token;
 
     int width;
     int height;
