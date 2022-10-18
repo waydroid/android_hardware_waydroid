@@ -20,6 +20,7 @@
 
 LOCAL_PATH := $(call my-dir)
 
+ifneq ($(TARGET_USE_MESA),false)
 include $(CLEAR_VARS)
 
 LOCAL_SRC_FILES := \
@@ -42,6 +43,7 @@ LOCAL_MODULE_RELATIVE_PATH := hw
 LOCAL_PROPRIETARY_MODULE := true
 
 include $(BUILD_SHARED_LIBRARY)
+endif
 
 include $(CLEAR_VARS)
 
