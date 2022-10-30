@@ -97,7 +97,7 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
       skipped.second = i;
     }
 
-    for (size_t i = 0; i < contents->numHwLayers; i++) {
+    for (int i = 0; i < (int) contents->numHwLayers; i++) {
         if (contents->hwLayers[i].compositionType == HWC_FRAMEBUFFER_TARGET)
             continue;
         if (contents->hwLayers[i].flags & HWC_SKIP_LAYER)
@@ -576,7 +576,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     int err = 0;
     for (size_t l = 0; l < contents->numHwLayers; l++) {
         size_t layer = l;
-        if (l == skipped.first && fb_target >= 0) {
+        if (l == (size_t) skipped.first && fb_target >= 0) {
             // draw framebuffer target instead of skipped layers
             if (contents->hwLayers[layer].acquireFenceFd != -1) {
                 close(contents->hwLayers[layer].acquireFenceFd);
