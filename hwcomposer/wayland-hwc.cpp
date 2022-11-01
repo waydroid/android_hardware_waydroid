@@ -461,9 +461,6 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
         xdg_toplevel_set_app_id(window->xdg_toplevel, appID.c_str());
         wl_surface_commit(window->surface);
 
-        if (display->isWinResSet)
-            xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width / display->scale, display->height / display->scale);
-
         /* Here we retrieve objects if executed without immed, or error */
         wl_display_roundtrip(display->display);
         wl_surface_commit(window->surface);
@@ -525,6 +522,9 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
         wp_viewport_set_source(window->bg_viewport, wl_fixed_from_int(0), wl_fixed_from_int(0), wl_fixed_from_int(1), wl_fixed_from_int(1));
         wp_viewport_set_destination(window->bg_viewport, display->width / display->scale, display->height / display->scale);
     }
+
+    if (display->isWinResSet)
+        xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width / display->scale, display->height / display->scale);
 
     struct wl_region *region = wl_compositor_create_region(display->compositor);
     if (color.a == 0) {
