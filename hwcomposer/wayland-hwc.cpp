@@ -523,7 +523,7 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
         wp_viewport_set_destination(window->bg_viewport, display->width / display->scale, display->height / display->scale);
     }
 
-    if (display->isWinResSet)
+    if (display->isWinResSet && display->wm_base)
         xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width / display->scale, display->height / display->scale);
 
     struct wl_region *region = wl_compositor_create_region(display->compositor);
