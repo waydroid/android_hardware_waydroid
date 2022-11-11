@@ -489,6 +489,9 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
         assert(0);
     }
 
+    if (!display->isWinResSet)
+        return window;
+
     int fd = syscall(SYS_memfd_create, "buffer", 0);
     ftruncate(fd, 4);
     void *shm_data = mmap(NULL, 4, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
@@ -517,13 +520,13 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
     wl_surface_attach(surface, window->bg_buffer, 0, 0);
     wl_surface_damage_buffer(surface, 0, 0, 1, 1);
 
-    if (display->isWinResSet && display->viewporter) {
+    if (display->viewporter) {
         window->bg_viewport = wp_viewporter_get_viewport(display->viewporter, surface);
         wp_viewport_set_source(window->bg_viewport, wl_fixed_from_int(0), wl_fixed_from_int(0), wl_fixed_from_int(1), wl_fixed_from_int(1));
         wp_viewport_set_destination(window->bg_viewport, display->width / display->scale, display->height / display->scale);
     }
 
-    if (display->isWinResSet && display->wm_base)
+    if (display->wm_base)
         xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width / display->scale, display->height / display->scale);
 
     struct wl_region *region = wl_compositor_create_region(display->compositor);
