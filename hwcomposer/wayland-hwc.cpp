@@ -287,6 +287,30 @@ static const struct xdg_surface_listener xdg_surface_listener = {
     xdg_surface_handle_configure,
 };
 
+static void choose_width_height(struct display* display, int32_t hint_width, int32_t hint_height) {
+    char property[PROPERTY_VALUE_MAX];
+    int width = hint_width;
+    int height = hint_height;
+
+    // Ignore hint it requested
+    if (property_get("persist.waydroid.width", property, nullptr) > 0) {
+        display->isMaximized = false;
+        width = atoi(property);
+    } else if (display->scale > 1) {
+        width *= display->scale;
+    }
+
+    if (property_get("persist.waydroid.height", property, nullptr) > 0) {
+        display->isMaximized = false;
+        height = atoi(property);
+    } else if (display->scale > 1) {
+        height *= display->scale;
+    }
+
+    display->width = width;
+    display->height = height;
+}
+
 static void
 xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
                               int32_t width, int32_t height,
@@ -300,12 +324,7 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
 	}
 
     if (! window->display->isWinResSet) {
-        if (window->display->scale > 1) {
-            width *= window->display->scale;
-            height *= window->display->scale;
-        }
-        window->display->width = width;
-        window->display->height = height;
+        choose_width_height(window->display, width, height);
         window->display->isWinResSet = true;
         if (window->display->waiting_for_data)
             pthread_cond_broadcast(&window->display->data_available_cond);
@@ -359,12 +378,7 @@ shell_surface_configure(void *data, struct wl_shell_surface *, uint32_t, int32_t
 	}
 
     if (! window->display->isWinResSet) {
-        if (window->display->scale > 1) {
-            width *= window->display->scale;
-            height *= window->display->scale;
-        }
-        window->display->width = width;
-        window->display->height = height;
+        choose_width_height(window->display, width, height);
         window->display->isWinResSet = true;
         if (window->display->waiting_for_data)
             pthread_cond_broadcast(&window->display->data_available_cond);
@@ -447,7 +461,8 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
         window->xdg_toplevel = xdg_surface_get_toplevel(window->xdg_surface);
         assert(window->xdg_toplevel);
         xdg_toplevel_add_listener(window->xdg_toplevel, &xdg_toplevel_listener, window);
-        xdg_toplevel_set_maximized(window->xdg_toplevel);
+        if (display->isMaximized || !display->isWinResSet)
+            xdg_toplevel_set_maximized(window->xdg_toplevel);
         const hidl_string appID_hidl(appID);
         hidl_string appName_hidl(appID);
         if (appID != "Waydroid" && display->task)
@@ -471,7 +486,8 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
 
         wl_shell_surface_add_listener(window->shell_surface, &shell_surface_listener, window);
         wl_shell_surface_set_toplevel(window->shell_surface);
-        wl_shell_surface_set_maximized(window->shell_surface, display->output);
+        if (display->isMaximized || !display->isWinResSet)
+            wl_shell_surface_set_maximized(window->shell_surface, display->output);
         const hidl_string appID_hidl(appID);
         hidl_string appName_hidl(appID);
         if (appID != "Waydroid" && display->task)
@@ -1662,6 +1678,7 @@ create_display(const char *gralloc)
     wl_log_set_handler_client(wayland_log_handler);
     display->gtype = get_gralloc_type(gralloc);
     display->refresh = 0;
+    display->isMaximized = true;
     display->display = wl_display_connect(NULL);
     assert(display->display);
 
