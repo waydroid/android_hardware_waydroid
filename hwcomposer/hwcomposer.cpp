@@ -390,6 +390,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             if (it->second) {
                 if (it->second->buffer)
                     wl_buffer_destroy(it->second->buffer);
+                if (it->second->isShm)
+                    munmap(it->second->shm_data, it->second->size);
                 delete (it->second);
             }
         }

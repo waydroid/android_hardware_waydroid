@@ -160,6 +160,7 @@ struct buffer {
     int timeline_fd;
     bool isShm;
     void *shm_data;
+    int size;
 };
 
 struct window {

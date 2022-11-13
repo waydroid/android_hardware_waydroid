@@ -250,6 +250,7 @@ create_shm_wl_buffer(struct display *display, struct buffer *buffer,
         shm_stride = stride;
     int size = shm_stride * height;
 
+    buffer->size = size;
     buffer->format = ConvertHalFormatToShm(format);
     assert(buffer->format >= 0);
     buffer->width = width;
