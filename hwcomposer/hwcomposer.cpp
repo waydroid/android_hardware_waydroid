@@ -324,7 +324,7 @@ static void* hwc_vsync_thread(void* data) {
         wait_time.tv_nsec = time_to_sleep_to_next_vsync(&rt, pdev->last_vsync_ns, pdev->vsync_period_ns);
         pthread_mutex_unlock(&pdev->vsync_lock);
 
-        if (!vsync_enabled) {
+        if (!vsync_enabled || !pdev->procs || !pdev->procs->vsync) {
             ATRACE_END();
             continue;
         }
