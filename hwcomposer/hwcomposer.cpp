@@ -677,7 +677,10 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                     }
 
                     wl_surface_attach(pdev->display->cursor_surface, buf->buffer, 0, 0);
-                    wl_surface_damage_buffer(pdev->display->cursor_surface, 0, 0, buf->width, buf->height);
+                    if (wl_compositor_get_version(pdev->display->compositor) >= WL_SURFACE_DAMAGE_BUFFER_SINCE_VERSION)
+                        wl_surface_damage_buffer(pdev->display->cursor_surface, 0, 0, buf->width, buf->height);
+                    else
+                        wl_surface_damage(pdev->display->cursor_surface, 0, 0, buf->width, buf->height);
                     if (pdev->display->scale > 1)
                         wl_surface_set_buffer_scale(pdev->display->cursor_surface, pdev->display->scale);
 
@@ -753,7 +756,10 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         window->lastLayer++;
 
         wl_surface_attach(surface, buf->buffer, 0, 0);
-        wl_surface_damage_buffer(surface, 0, 0, buf->width, buf->height);
+        if (wl_compositor_get_version(pdev->display->compositor) >= WL_SURFACE_DAMAGE_BUFFER_SINCE_VERSION)
+            wl_surface_damage_buffer(surface, 0, 0, buf->width, buf->height);
+        else
+            wl_surface_damage(surface, 0, 0, buf->width, buf->height);
         if (pdev->display->scale > 1)
             wl_surface_set_buffer_scale(surface, pdev->display->scale);
         switch (fb_layer->transform) {
