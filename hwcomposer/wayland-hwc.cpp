@@ -509,6 +509,10 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
     if (!display->isWinResSet)
         return window;
 
+    // No subsurface background for us!
+    if (!with_dummy && !display->subcompositor)
+        return window;
+
     int fd = syscall(SYS_memfd_create, "buffer", 0);
     ftruncate(fd, 4);
     void *shm_data = mmap(NULL, 4, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
