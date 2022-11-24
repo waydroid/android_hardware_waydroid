@@ -1589,7 +1589,7 @@ registry_handle_global(void *data, struct wl_registry *registry,
     if (strcmp(interface, "wl_compositor") == 0) {
         d->compositor =
             (struct wl_compositor*)wl_registry_bind(registry,
-                id, &wl_compositor_interface, version);
+                id, &wl_compositor_interface, std::min(version, 5U));
     } else if (strcmp(interface, "wl_subcompositor") == 0) {
         d->subcompositor =
         (struct wl_subcompositor*)wl_registry_bind(registry,
