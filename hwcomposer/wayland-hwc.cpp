@@ -1599,7 +1599,7 @@ registry_handle_global(void *data, struct wl_registry *registry,
                 registry, id, &wl_shell_interface, 1);
     } else if (strcmp(interface, "wl_seat") == 0) {
         d->seat = (struct wl_seat*)wl_registry_bind(registry, id,
-                &wl_seat_interface, WL_POINTER_AXIS_SOURCE_SINCE_VERSION);
+                &wl_seat_interface, std::min(version, (uint32_t)WL_POINTER_AXIS_SOURCE_SINCE_VERSION));
         wl_seat_add_listener(d->seat, &seat_listener, d);
         if (d->tablet_manager && !d->tablet_seat)
             add_tablet_seat(d);
