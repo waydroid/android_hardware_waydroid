@@ -24,7 +24,10 @@
 using android::hardware::health::V2_0::DiskStats;
 using android::hardware::health::V2_0::StorageInfo;
 
-void healthd_board_init(struct healthd_config*) {}
+void healthd_board_init(struct healthd_config* config) {
+  config->periodic_chores_interval_fast = -1;
+  config->periodic_chores_interval_slow = -1;
+}
 
 int healthd_board_battery_update(
     struct android::BatteryProperties* battery_props) {
