@@ -34,6 +34,7 @@ cc_library_shared {
         "vendor.waydroid.display@1.0",
         "vendor.waydroid.display@1.1",
         "vendor.waydroid.task@1.0",
+        "vendor.waydroid.window@1.0",
     ],
     static_libs: [
         "libwayland_client",
@@ -45,6 +46,7 @@ cc_library_shared {
         "extension.cpp",
         "hwcomposer.cpp",
         "wayland-hwc.cpp",
+        "WaydroidWindow.cpp",
         "egl-tools.cpp",
     ],
     header_libs: [

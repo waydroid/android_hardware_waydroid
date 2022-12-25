@@ -491,6 +491,7 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
     window->callback = NULL;
     window->display = display;
     window->surface = wl_compositor_create_surface(display->compositor);
+    window->appID = appID;
     window->taskID = taskID;
     window->isActive = true;
     window->bg_viewport = NULL;

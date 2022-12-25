@@ -194,6 +194,7 @@ struct window {
     struct buffer *last_layer_buffer;
     struct buffer *snapshot_buffer;
     int lastLayer;
+    std::string appID;
     std::string taskID;
     bool isActive;
 };

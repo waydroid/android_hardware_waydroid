@@ -45,6 +45,7 @@
 #include <utils/Trace.h>
 
 #include "extension.h"
+#include "WaydroidWindow.h"
 #include "egl-tools.h"
 
 using ::android::hardware::configureRpcThreadpool;
@@ -52,6 +53,8 @@ using ::android::hardware::joinRpcThreadpool;
 
 using ::vendor::waydroid::display::V1_1::IWaydroidDisplay;
 using ::vendor::waydroid::display::V1_1::implementation::WaydroidDisplay;
+using ::vendor::waydroid::window::V1_0::IWaydroidWindow;
+using ::vendor::waydroid::window::implementation::WaydroidWindow;
 
 using ::android::OK;
 using ::android::status_t;
@@ -62,6 +65,7 @@ struct waydroid_hwc_composer_device_1 {
     pthread_t wayland_thread;     // constant after init
     pthread_t vsync_thread;       // constant after init
     pthread_t extension_thread;   // constant after init
+    pthread_t window_service_thread; // constant after init
     pthread_t egl_worker_thread;  // constant after init
     int32_t vsync_period_ns;      // constant after init
     struct display *display;      // constant after init
@@ -1046,6 +1050,34 @@ shutdown:
     return NULL;
 }
 
+static void* hwc_window_service_thread(void* data) {
+    struct waydroid_hwc_composer_device_1* pdev = (struct waydroid_hwc_composer_device_1*)data;
+    sp<IWaydroidWindow> waydroidWindow;
+    status_t status;
+
+    waydroidWindow = new WaydroidWindow(pdev->display);
+    if (waydroidWindow == nullptr) {
+        ALOGE("Can not create an instance of Waydroid Window HAL, exiting.");
+        goto shutdown;
+    }
+
+    configureRpcThreadpool(1, true /*callerWillJoin*/);
+
+    status = waydroidWindow->registerAsService();
+    if (status != OK) {
+        ALOGE("Could not register service for Waydroid Window HAL (%d).", status);
+    }
+
+    ALOGI("Waydroid Window HAL thread is ready.");
+    joinRpcThreadpool();
+    // Should not pass this line
+
+shutdown:
+    // In normal operation, we don't expect the thread pool to shutdown
+    ALOGE("Waydroid Window HAL service is shutting down.");
+    return NULL;
+}
+
 static void hwc_register_procs(struct hwc_composer_device_1* dev,
                                hwc_procs_t const* procs) {
     struct waydroid_hwc_composer_device_1* pdev = (struct waydroid_hwc_composer_device_1*)dev;
@@ -1155,6 +1187,11 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     ret = pthread_create (&pdev->extension_thread, NULL, hwc_extension_thread, pdev);
     if (ret) {
         ALOGE("waydroid_hw_composer could not start extension_thread\n");
+    }
+
+    ret = pthread_create(&pdev->window_service_thread, NULL, hwc_window_service_thread, pdev);
+    if (ret) {
+        ALOGE("waydroid_hw_composer could not start window_service_thread\n");
     }
 
     ret = pthread_create(&pdev->egl_worker_thread, NULL, egl_loop, pdev->display);
