@@ -31,6 +31,7 @@ cc_library_shared {
         "libdrm",
         "vendor.waydroid.display@1.0",
         "vendor.waydroid.task@1.0",
+        "vendor.waydroid.window@1.0",
     ],
     static_libs: [
         "libwayland_client",
@@ -40,7 +41,8 @@ cc_library_shared {
     srcs: [
         "extension.cpp",
         "hwcomposer.cpp",
-        "wayland-hwc.cpp"
+        "wayland-hwc.cpp",
+        "WaydroidWindow.cpp",
     ],
     header_libs: [
         "libsystem_headers",

@@ -179,6 +179,7 @@ struct window {
     std::map<size_t, struct wp_viewport *> viewports;
     struct wl_callback *callback;
     int lastLayer;
+    std::string appID;
     std::string taskID;
     bool isActive;
 };
