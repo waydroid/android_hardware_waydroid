@@ -32,6 +32,7 @@ cc_library_shared {
         "libEGL",
         "libGLESv2",
         "vendor.waydroid.display@1.0",
+        "vendor.waydroid.display@1.1",
         "vendor.waydroid.task@1.0",
         "vendor.waydroid.window@1.0",
     ],
