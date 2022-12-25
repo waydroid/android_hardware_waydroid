@@ -3,7 +3,7 @@
 hidl_interface {
     name: "vendor.waydroid.display@1.0",
     root: "vendor.waydroid",
-    product_specific: true,
+    system_ext_specific: true,
     srcs: [
         "IWaydroidDisplay.hal",
     ],

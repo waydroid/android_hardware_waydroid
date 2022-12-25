@@ -3,12 +3,12 @@
 hidl_interface {
     name: "vendor.waydroid.task@1.0",
     root: "vendor.waydroid",
-    product_specific: true,
+    system_ext_specific: true,
     srcs: [
         "IWaydroidTask.hal",
     ],
     interfaces: [
         "android.hidl.base@1.0",
     ],
-    gen_java: false,
+    gen_java: true,
 }
