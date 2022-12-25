@@ -19,7 +19,7 @@
 namespace vendor {
 namespace waydroid {
 namespace display {
-namespace V1_0 {
+namespace V1_1 {
 namespace implementation {
 
 WaydroidDisplay::WaydroidDisplay(struct display *display)
@@ -49,8 +49,21 @@ Return<Error> WaydroidDisplay::setTargetLayerHandleInfo(uint32_t format, uint32_
     return Error::NONE;
 }
 
+// Methods from ::vendor::waydroid::display::V1_1::IWaydroidDisplay follow.
+Return<Error> WaydroidDisplay::setLayerSize(uint32_t layer, uint32_t width, uint32_t height) {
+    mDisplay->layer_handles_ext[layer].width = width;
+    mDisplay->layer_handles_ext[layer].height = height;
+    return Error::NONE;
+}
+
+Return<Error> WaydroidDisplay::setTargetLayerSize(uint32_t width, uint32_t height) {
+    mDisplay->target_layer_handle_ext.width = width;
+    mDisplay->target_layer_handle_ext.height = height;
+    return Error::NONE;
+}
+
 }  // namespace implementation
-}  // namespace V1_0
+}  // namespace V1_1
 }  // namespace display
 }  // namespace waydroid
 }  // namespace vendor

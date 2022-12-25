@@ -50,8 +50,8 @@
 using ::android::hardware::configureRpcThreadpool;
 using ::android::hardware::joinRpcThreadpool;
 
-using ::vendor::waydroid::display::V1_0::IWaydroidDisplay;
-using ::vendor::waydroid::display::V1_0::implementation::WaydroidDisplay;
+using ::vendor::waydroid::display::V1_1::IWaydroidDisplay;
+using ::vendor::waydroid::display::V1_1::implementation::WaydroidDisplay;
 
 using ::android::OK;
 using ::android::status_t;
@@ -152,17 +152,27 @@ static void update_shm_buffer(struct buffer *buffer)
 
 static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, size_t pos)
 {
+    uint32_t format;
     uint32_t pixel_stride;
+    uint32_t width;
+    uint32_t height;
     if (layer->compositionType == HWC_FRAMEBUFFER_TARGET) {
+        format = pdev->display->target_layer_handle_ext.format;
         pixel_stride = pdev->display->target_layer_handle_ext.stride;
+        width = pdev->display->target_layer_handle_ext.width;
+        height = pdev->display->target_layer_handle_ext.height;
     } else {
+        format = pdev->display->layer_handles_ext[pos].format;
         pixel_stride = pdev->display->layer_handles_ext[pos].stride;
+        width = pdev->display->layer_handles_ext[pos].width;
+        height = pdev->display->layer_handles_ext[pos].height;
     }
 
-    // TODO: retrieve the actual size of the buffer (from gralloc or IWaydroidDisplay)
-    // it can't be calculated from displayFrame since it may be cropped
-    int width = layer->displayFrame.right - layer->displayFrame.left;
-    int height = layer->displayFrame.bottom - layer->displayFrame.top;
+    if (!width)
+        width = layer->displayFrame.right - layer->displayFrame.left;
+    if (!height)
+        height = layer->displayFrame.bottom - layer->displayFrame.top;
+
     auto it = pdev->display->buffer_map.find(layer->handle);
     if (it != pdev->display->buffer_map.end()) {
         if (it->second->isShm) {
@@ -192,13 +202,6 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
             update_shm_buffer(buf);
         }
     } else {
-        // TODO: use the actual buffer size
-        uint32_t format;
-        if (layer->compositionType == HWC_FRAMEBUFFER_TARGET) {
-            format = pdev->display->target_layer_handle_ext.format;
-        } else {
-            format = pdev->display->layer_handles_ext[pos].format;
-        }
         if (pdev->display->gtype == GRALLOC_ANDROID) {
             ret = create_android_wl_buffer(pdev->display, buf, width, height, format, pixel_stride, layer->handle);
         } else {
