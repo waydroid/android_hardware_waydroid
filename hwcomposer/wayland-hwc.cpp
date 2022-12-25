@@ -354,7 +354,6 @@ xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
             }
         }
     }
-    destroy_window(window, true);
 }
 
 static const struct xdg_toplevel_listener xdg_toplevel_listener = {
