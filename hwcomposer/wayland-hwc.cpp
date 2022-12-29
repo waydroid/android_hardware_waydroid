@@ -452,6 +452,8 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
     window->bg_surface = NULL;
     window->bg_subsurface = NULL;
 
+    bool calibrating = !display->isWinResSet;
+
     if (display->wm_base) {
         window->xdg_surface =
                 xdg_wm_base_get_xdg_surface(display->wm_base, window->surface);
@@ -507,7 +509,7 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
         assert(0);
     }
 
-    if (!display->isWinResSet)
+    if (calibrating)
         return window;
 
     // No subsurface background for us!
