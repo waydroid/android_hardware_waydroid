@@ -446,16 +446,15 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         return 0;
     } else if (active_apps == "Waydroid") {
         // Clear all open windows if there's any and just keep "Waydroid"
-        if ((pdev->windows.find(active_apps) != pdev->windows.end())) {
-            if (pdev->windows.size() > 1 || !pdev->windows[active_apps]->isActive) {
-                for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
-                    if (it->second)
-                        destroy_window(it->second);
+        if (pdev->windows.find(active_apps) == pdev->windows.end() || !pdev->windows[active_apps]->isActive) {
+            for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
+                if (it->second) {
+                    destroy_window(it->second);
                 }
-                pdev->windows.clear();
-            } else {
-                pdev->windows[active_apps]->lastLayer = 0;
             }
+            pdev->windows.clear();
+        } else {
+            pdev->windows[active_apps]->lastLayer = 0;
         }
     } else if (!pdev->multi_windows) {
         // Single window mode, detecting if any unblacklisted app is on screen
