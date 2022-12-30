@@ -214,11 +214,11 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
 
 static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, struct window *window, bool multi)
 {
+    pdev->display->windows[window->surface] = window;
     if (!multi) {
         pdev->display->layers[window->surface] = {
             .x = layer->displayFrame.left,
             .y = layer->displayFrame.top };
-        pdev->display->windows[window->surface] = window;
         return window->surface;
     }
 
@@ -268,7 +268,6 @@ static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pde
     pdev->display->layers[window->surfaces[window->lastLayer]] = {
         .x = layer->displayFrame.left,
         .y = layer->displayFrame.top };
-    pdev->display->windows[window->surfaces[window->lastLayer]] = window;
     return window->surfaces[window->lastLayer];
 }
 
