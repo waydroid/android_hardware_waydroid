@@ -555,7 +555,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                 }
             }
             // This window ID doesn't match with any selected app IDs from prop, so kill it
-            if (!foundApp) {
+            if (!foundApp || (it->second && !it->second->isActive)) {
                 if (it->second)
                     destroy_window(it->second);
                 pdev->windows.erase(it++);
