@@ -994,7 +994,7 @@ static int hwc_close(hw_device_t* dev) {
     pthread_kill(pdev->wayland_thread, SIGTERM);
     pthread_join(pdev->wayland_thread, NULL);
 
-    free(dev);
+    delete dev;
     return 0;
 }
 

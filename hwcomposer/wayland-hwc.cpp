@@ -431,7 +431,7 @@ destroy_window(struct window *window, bool keep)
     if (keep)
         window->isActive = false;
     else
-        free(window);
+        delete window;
 }
 
 struct window *
@@ -1727,5 +1727,5 @@ destroy_display(struct display *display)
     wl_registry_destroy(display->registry);
     wl_display_flush(display->display);
     wl_display_disconnect(display->display);
-    free(display);
+    delete display;
 }
