@@ -338,7 +338,7 @@ static const struct xdg_surface_listener xdg_surface_listener = {
     xdg_surface_handle_configure,
 };
 
-static void choose_width_height(struct display* display, int32_t hint_width, int32_t hint_height) {
+void choose_width_height(struct display* display, int32_t hint_width, int32_t hint_height) {
     char property[PROPERTY_VALUE_MAX];
     int width = hint_width;
     int height = hint_height;
@@ -368,18 +368,22 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
                               struct wl_array *)
 {
     struct window *window = (struct window *)data;
+    struct display *display = window->display;
 
     if (width == 0 || height == 0) {
 		/* Compositor is deferring to us */
 		return;
 	}
 
-    if (! window->display->isWinResSet) {
-        choose_width_height(window->display, width, height);
-        window->display->isWinResSet = true;
-        if (window->display->waiting_for_data)
-            pthread_cond_broadcast(&window->display->data_available_cond);
+    pthread_mutex_lock(&display->data_mutex);
+    if (!display->width || !display->height) {
+        choose_width_height(display, width, height);
+        if (!display->isMaximized)
+            xdg_toplevel_unset_maximized(window->xdg_toplevel);
+        if (display->waiting_for_data)
+            pthread_cond_broadcast(&display->data_available_cond);
     }
+    pthread_mutex_unlock(&display->data_mutex);
 }
 
 static void
@@ -424,18 +428,20 @@ void
 shell_surface_configure(void *data, struct wl_shell_surface *, uint32_t, int32_t width, int32_t height)
 {
     struct window *window = (struct window *)data;
+    struct display *display = window->display;
 
     if (width == 0 || height == 0) {
 		/* Compositor is deferring to us */
 		return;
 	}
 
-    if (! window->display->isWinResSet) {
-        choose_width_height(window->display, width, height);
-        window->display->isWinResSet = true;
-        if (window->display->waiting_for_data)
-            pthread_cond_broadcast(&window->display->data_available_cond);
+    pthread_mutex_lock(&display->data_mutex);
+    if (!display->width || !display->height) {
+        choose_width_height(display, width, height);
+        if (display->waiting_for_data)
+            pthread_cond_broadcast(&display->data_available_cond);
     }
+    pthread_mutex_unlock(&display->data_mutex);
 }
 
 void
@@ -506,8 +512,6 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
     window->bg_surface = NULL;
     window->bg_subsurface = NULL;
 
-    bool calibrating = !display->isWinResSet;
-
     if (display->wm_base) {
         window->xdg_surface =
                 xdg_wm_base_get_xdg_surface(display->wm_base, window->surface);
@@ -519,7 +523,7 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
         window->xdg_toplevel = xdg_surface_get_toplevel(window->xdg_surface);
         assert(window->xdg_toplevel);
         xdg_toplevel_add_listener(window->xdg_toplevel, &xdg_toplevel_listener, window);
-        if (display->isMaximized || !display->isWinResSet)
+        if (display->isMaximized || !display->height || !display->width)
             xdg_toplevel_set_maximized(window->xdg_toplevel);
         const hidl_string appID_hidl(appID);
         hidl_string appName_hidl(appID);
@@ -544,7 +548,7 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
 
         wl_shell_surface_add_listener(window->shell_surface, &shell_surface_listener, window);
         wl_shell_surface_set_toplevel(window->shell_surface);
-        if (display->isMaximized || !display->isWinResSet)
+        if (display->isMaximized || !display->height || !display->width)
             wl_shell_surface_set_maximized(window->shell_surface, display->output);
         const hidl_string appID_hidl(appID);
         hidl_string appName_hidl(appID);
@@ -563,8 +567,23 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
         assert(0);
     }
 
-    if (calibrating)
-        return window;
+    // Wait for configure event if necessary
+    pthread_mutex_lock(&display->data_mutex);
+    if (!display->height || !display->width) {
+        struct timespec timeToWait;
+        struct timeval now;
+        gettimeofday(&now, NULL);
+        timeToWait.tv_sec = now.tv_sec + 5;
+        timeToWait.tv_nsec = now.tv_usec * 1000UL;
+
+        while (!display->height || !display->width) {
+            display->waiting_for_data = true;
+            pthread_cond_timedwait(&display->data_available_cond,
+                                   &display->data_mutex, &timeToWait);
+            display->waiting_for_data = false;
+        }
+    }
+    pthread_mutex_unlock(&display->data_mutex);
 
     // No subsurface background for us!
     if (!with_dummy && !display->subcompositor)

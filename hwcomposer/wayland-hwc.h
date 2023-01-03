@@ -164,7 +164,6 @@ struct display {
     std::map<buffer_handle_t, struct buffer *> buffer_map;
     std::array<uint8_t, 239> keysDown;
 
-    bool isWinResSet;
     bool isMaximized;
     sp<IWaydroidTask> task;
 };
@@ -243,3 +242,5 @@ void
 destroy_window(struct window *window, bool keep = false);
 struct window *
 create_window(struct display *display, bool with_dummy, std::string appID, std::string taskID, hwc_color_t color);
+void
+choose_width_height(struct display* display, int32_t hint_width, int32_t hint_height);
