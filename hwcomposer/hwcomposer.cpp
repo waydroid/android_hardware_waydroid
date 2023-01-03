@@ -29,8 +29,6 @@
 #include <log/log.h>
 #include <cutils/properties.h>
 #include <hardware/hwcomposer.h>
-#include <ui/Rect.h>
-#include <ui/GraphicBufferMapper.h>
 #include <libsync/sw_sync.h>
 #include <sync/sync.h>
 #include <drm_fourcc.h>
@@ -126,35 +124,6 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
     return 0;
 }
 
-static void update_shm_buffer(struct display *display, struct buffer *buffer)
-{
-    void *data;
-    int stride, src_stride;
-    android::Rect bounds(buffer->width, buffer->height);
-    if (android::GraphicBufferMapper::get().lock(buffer->handle, GRALLOC_USAGE_SW_READ_OFTEN, bounds, &data) == 0) {
-        if (display->gtype == GRALLOC_GBM) {
-            stride = buffer->stride / 4;
-            src_stride = buffer->stride / 4;
-        } else {
-            stride = buffer->stride;
-            src_stride = buffer->stride;
-        }
-        for (int i = 0; i < buffer->height; i++) {
-            uint32_t* source = (uint32_t*)data + (i * src_stride);
-            uint32_t* dist = (uint32_t*)buffer->shm_data + (i * stride);
-            uint32_t* end = dist + stride;
-
-            while (dist < end) {
-                uint32_t c = *source;
-                *dist = (c & 0xFF00FF00) | ((c & 0xFF0000) >> 16) | ((c & 0xFF) << 16);
-                source++;
-                dist++;
-            }
-        }
-        android::GraphicBufferMapper::get().unlock(buffer->handle);
-    }
-}
-
 static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, size_t pos)
 {
     // TODO: retrieve the actual size of the buffer (from gralloc or IWaydroidDisplay)
@@ -184,7 +153,7 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
     if (pdev->display->gtype == GRALLOC_GBM) {
         struct gralloc_handle_t *drm_handle = (struct gralloc_handle_t *)layer->handle;
         if (pdev->display->dmabuf) {
-            ret = create_dmabuf_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, drm_handle->prime_fd, drm_handle->stride, 0 /* offset */, drm_handle->modifier, false /* format_is_drm */);
+            ret = create_dmabuf_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, -1 /* compute drm format */, drm_handle->prime_fd, drm_handle->stride, 0 /* offset */, drm_handle->modifier, layer->handle);
         } else {
             ret = create_shm_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, drm_handle->stride, layer->handle);
             update_shm_buffer(pdev->display, buf);
@@ -192,7 +161,7 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
     } else if (pdev->display->gtype == GRALLOC_CROS) {
         const struct cros_gralloc_handle *cros_handle = (const struct cros_gralloc_handle *)layer->handle;
         if (pdev->display->dmabuf) {
-            ret = create_dmabuf_wl_buffer(pdev->display, buf, cros_handle->width, cros_handle->height, cros_handle->format, cros_handle->fds[0], cros_handle->strides[0], cros_handle->offsets[0], cros_handle->format_modifier, true /* format_is_drm */);
+            ret = create_dmabuf_wl_buffer(pdev->display, buf, cros_handle->width, cros_handle->height, cros_handle->droid_format, cros_handle->format, cros_handle->fds[0], cros_handle->strides[0], cros_handle->offsets[0], cros_handle->format_modifier, layer->handle);
         } else {
             ret = create_shm_wl_buffer(pdev->display, buf, cros_handle->width, cros_handle->height, cros_handle->droid_format, cros_handle->strides[0], layer->handle);
             update_shm_buffer(pdev->display, buf);
@@ -468,6 +437,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             pdev->windows.clear();
         } else {
             pdev->windows[active_apps]->lastLayer = 0;
+            pdev->windows[active_apps]->last_layer_buffer = nullptr;
         }
     } else if (!pdev->multi_windows) {
         // Single window mode, detecting if any unblacklisted app is on screen
@@ -492,6 +462,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                         }
                         if (pdev->windows.find(single_layer_tid) != pdev->windows.end()) {
                             pdev->windows[single_layer_tid]->lastLayer = 0;
+                            pdev->windows[single_layer_tid]->last_layer_buffer = nullptr;
                         }
                     }
                 }
@@ -551,6 +522,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                     std::string layer_tid = layer_name.substr(4, layer_name.find('#') - 4);
                     if (layer_tid == it->first) {
                         it->second->lastLayer = 0;
+                        it->second->last_layer_buffer = nullptr;
                         foundApp = true;
                         break;
                     }
@@ -560,6 +532,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                     std::getline(issLayer, LayerRawName, '#');
                     if (LayerRawName == it->first) {
                         it->second->lastLayer = 0;
+                        it->second->last_layer_buffer = nullptr;
                         foundApp = true;
                         break;
                     }
@@ -764,6 +737,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             ALOGE("Failed to get surface");
             continue;
         }
+        window->last_layer_buffer = buf;
         window->lastLayer++;
 
         wl_surface_attach(surface, buf->buffer, 0, 0);
@@ -809,6 +783,13 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
         wl_surface_commit(surface);
 
+        if (window->snapshot_buffer) {
+            // Snapshot buffer should be detached by now, clean up
+            wl_buffer_destroy(window->snapshot_buffer->buffer);
+            free(window->snapshot_buffer);
+            window->snapshot_buffer = nullptr;
+        }
+
         const int kAcquireWarningMS = 100;
         err = sync_wait(fb_layer->acquireFenceFd, kAcquireWarningMS);
         if (err < 0 && errno == ETIME) {
@@ -817,6 +798,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
         close(fb_layer->acquireFenceFd);
     }
+
     // Layers order is changed from SF so we rearrange wayland surfaces
     if (pdev->display->geo_changed) {
         for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
@@ -835,10 +817,21 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
         pdev->display->geo_changed = false;
     }
+
+    if (!pdev->multi_windows && single_layer_tid.length() && active_apps != "Waydroid") {
+        for (auto const& [layer_tid, window] : pdev->windows) {
+            // Replace inactive app window buffer with snapshot in staged mode
+            if (layer_tid != single_layer_tid && !window->snapshot_buffer) {
+                snapshot_inactive_app_window(pdev->display, window);
+            }
+        }
+    }
+
     if (pdev->use_subsurface)
         for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++)
             if (it->second)
                 wl_surface_commit(it->second->surface);
+
     wl_display_flush(pdev->display->display);
 
     sw_sync_timeline_inc(pdev->timeline_fd, 1);

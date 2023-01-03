@@ -54,6 +54,9 @@
 #include <hardware/gralloc.h>
 #include <log/log.h>
 
+#include <ui/Rect.h>
+#include <ui/GraphicBufferMapper.h>
+
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
 #include <cutils/trace.h>
 #include <cutils/properties.h>
@@ -95,8 +98,9 @@ create_android_wl_buffer(struct display *display, struct buffer *buffer,
 
     buffer->width = width;
     buffer->height = height;
-    buffer->format = format;
+    buffer->format = buffer->hal_format = format;
     buffer->stride = stride;
+    buffer->handle = target;
 
     wl_array_init(&ints);
     the_ints = (int *)wl_array_add(&ints, target->numInts * sizeof(int));
@@ -201,17 +205,19 @@ int ConvertHalFormatToDrm(struct display *display, uint32_t hal_format) {
 
 int
 create_dmabuf_wl_buffer(struct display *display, struct buffer *buffer,
-             int width, int height, int format,
-             int prime_fd, int stride, int offset, uint64_t modifier, bool format_is_drm)
+             int width, int height, int hal_format, int format,
+             int prime_fd, int stride, int offset, uint64_t modifier, buffer_handle_t target)
 {
     struct zwp_linux_buffer_params_v1 *params;
 
     assert(prime_fd >= 0);
-    buffer->format = format_is_drm ? format : ConvertHalFormatToDrm(display, format);
+    buffer->hal_format = hal_format;
+    buffer->format = (format >= 0) ? format : ConvertHalFormatToDrm(display, hal_format);
     assert(buffer->format >= 0);
     buffer->width = width;
     buffer->height = height;
     buffer->stride = stride;
+    buffer->handle = target;
 
     params = zwp_linux_dmabuf_v1_create_params(display->dmabuf);
     zwp_linux_buffer_params_v1_add(params, prime_fd, 0, offset, buffer->stride, modifier >> 32, modifier & 0xffffffff);
@@ -246,11 +252,12 @@ create_shm_wl_buffer(struct display *display, struct buffer *buffer,
              int width, int height, int format, int stride, buffer_handle_t target)
 {
     int shm_stride = stride * 4;
-    if (display->gtype == GRALLOC_GBM)
+    if (display->gtype == GRALLOC_GBM || display->gtype == GRALLOC_CROS)
         shm_stride = stride;
     int size = shm_stride * height;
 
     buffer->size = size;
+    buffer->hal_format = format;
     buffer->format = ConvertHalFormatToShm(format);
     assert(buffer->format >= 0);
     buffer->width = width;
@@ -275,6 +282,72 @@ create_shm_wl_buffer(struct display *display, struct buffer *buffer,
     close(fd);
 
     return 0;
+}
+
+void update_shm_buffer(struct display *display, struct buffer *buffer)
+{
+    void *data;
+    int stride, src_stride;
+    android::Rect bounds(buffer->width, buffer->height);
+    buffer_handle_t handle;
+    android::GraphicBufferMapper& mapper(android::GraphicBufferMapper::get());
+    if (mapper.importBuffer(buffer->handle, buffer->width, buffer->height, 1, buffer->hal_format, GRALLOC_USAGE_SW_READ_OFTEN, buffer->stride, &handle) == 0) {
+        if (mapper.lock(handle, GRALLOC_USAGE_SW_READ_OFTEN, bounds, &data) == 0 && data) {
+            if (display->gtype == GRALLOC_GBM || display->gtype == GRALLOC_CROS) {
+                stride = buffer->stride / 4;
+                src_stride = buffer->stride / 4;
+            } else {
+                stride = buffer->stride;
+                src_stride = buffer->stride;
+            }
+            for (int i = 0; i < buffer->height; i++) {
+                uint32_t* source = (uint32_t*)data + (i * src_stride);
+                uint32_t* dist = (uint32_t*)buffer->shm_data + (i * stride);
+                uint32_t* end = dist + stride;
+
+                while (dist < end) {
+                    uint32_t c = *source;
+                    *dist = (c & 0xFF00FF00) | ((c & 0xFF0000) >> 16) | ((c & 0xFF) << 16);
+                    source++;
+                    dist++;
+                }
+            }
+            mapper.unlock(handle);
+        }
+        mapper.freeBuffer(handle);
+    }
+}
+
+void snapshot_inactive_app_window(struct display *display,
+                                         struct window *window) {
+    if (!window->surface || !window->last_layer_buffer
+        || window->last_layer_buffer->isShm || window->snapshot_buffer) {
+        // Need a surface to draw and a non-SHM buffer to make snapshot from
+        return;
+    }
+
+    ALOGI("Making inactive window snapshot for %s", window->taskID.c_str());
+
+    struct buffer *old_buf = window->last_layer_buffer;
+    struct buffer *new_buf = (struct buffer *)calloc(1, sizeof *new_buf);
+    // FIXME won't work as expected if there are multiple surfaces
+    struct wl_surface *surface = window->surface;
+
+    int ret = create_shm_wl_buffer(display, new_buf, old_buf->width, old_buf->height,
+                                    old_buf->hal_format, old_buf->stride, old_buf->handle);
+    if (ret) {
+        ALOGE("failed to create a wayland buffer for window snapshot");
+        return;
+    }
+    update_shm_buffer(display, new_buf);
+
+    wl_surface_attach(surface, new_buf->buffer, 0, 0);
+    wl_surface_damage_buffer(surface, 0, 0, new_buf->width, new_buf->height);
+    if (display->scale > 1)
+        wl_surface_set_buffer_scale(surface, display->scale);
+    wl_surface_commit(surface);
+
+    window->snapshot_buffer = new_buf;
 }
 
 static void

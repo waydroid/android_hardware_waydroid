@@ -157,6 +157,7 @@ struct buffer {
     int height;
     unsigned long stride;
     int format;
+    uint32_t hal_format;
 
     int timeline_fd;
     bool isShm;
@@ -178,6 +179,8 @@ struct window {
     std::map<size_t, struct wl_subsurface *> subsurfaces;
     std::map<size_t, struct wp_viewport *> viewports;
     struct wl_callback *callback;
+    struct buffer *last_layer_buffer;
+    struct buffer *snapshot_buffer;
     int lastLayer;
     std::string appID;
     std::string taskID;
@@ -191,12 +194,19 @@ create_android_wl_buffer(struct display *display, struct buffer *buffer,
 
 int
 create_dmabuf_wl_buffer(struct display *display, struct buffer *buffer,
-             int width, int height, int format,
-             int prime_fd, int stride, int offset, uint64_t modifier, bool format_is_drm);
+             int width, int height, int hal_format, int format,
+             int prime_fd, int stride, int offset, uint64_t modifier, buffer_handle_t target);
 
 int
 create_shm_wl_buffer(struct display *display, struct buffer *buffer,
              int width, int height, int format, int stride, buffer_handle_t target);
+
+void
+update_shm_buffer(struct display *display, struct buffer *buffer);
+
+void
+snapshot_inactive_app_window(struct display *display,
+                                         struct window *window);
 
 struct display *
 create_display(const char* gralloc);
