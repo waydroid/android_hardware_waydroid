@@ -45,8 +45,15 @@
 #include <map>
 #include <list>
 #include <pthread.h>
+#include <semaphore.h>
 #include <hardware/hwcomposer.h>
 #include <vendor/waydroid/task/1.0/IWaydroidTask.h>
+
+#define EGL_EGLEXT_PROTOTYPES
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+
+#include <functional>
 
 using ::android::sp;
 using ::vendor::waydroid::task::V1_0::IWaydroidTask;
@@ -129,6 +136,11 @@ struct display {
     std::list<struct zwp_tablet_tool_v2 *> tablet_tools;
     std::map<struct zwp_tablet_tool_v2 *, uint16_t> tablet_tools_evt;
 
+    EGLDisplay egl_dpy;
+    std::list<std::function<void()>> egl_work_queue;
+    sem_t egl_go;
+    sem_t egl_done;
+
     int width;
     int height;
     int full_width;
@@ -157,6 +169,7 @@ struct buffer {
     int height;
     unsigned long pixel_stride;
     int format;
+    uint32_t hal_format;
 
     int timeline_fd;
     bool isShm;
@@ -178,6 +191,8 @@ struct window {
     std::map<size_t, struct wl_subsurface *> subsurfaces;
     std::map<size_t, struct wp_viewport *> viewports;
     struct wl_callback *callback;
+    struct buffer *last_layer_buffer;
+    struct buffer *snapshot_buffer;
     int lastLayer;
     std::string taskID;
     bool isActive;
@@ -190,13 +205,16 @@ create_android_wl_buffer(struct display *display, struct buffer *buffer,
 
 int
 create_dmabuf_wl_buffer(struct display *display, struct buffer *buffer,
-             int width, int height, int format,
+             int width, int height, int hal_format, int format,
              int prime_fd, int pixel_stride, int byte_stride,
-             int offset, uint64_t modifier, bool format_is_drm);
+             int offset, uint64_t modifier, buffer_handle_t target);
 
 int
 create_shm_wl_buffer(struct display *display, struct buffer *buffer,
              int width, int height, int format, int pixel_stride, buffer_handle_t target);
+
+void
+snapshot_inactive_app_window(struct display *display, struct window *window);
 
 struct display *
 create_display(const char* gralloc);

@@ -16,6 +16,7 @@
  */
 #include <errno.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include <stdlib.h>
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -25,6 +26,7 @@
 #include <sys/un.h>
 #include <string>
 #include <sstream>
+#include <functional>
 
 #include <log/log.h>
 #include <cutils/properties.h>
@@ -44,6 +46,7 @@
 #include <utils/Trace.h>
 
 #include "extension.h"
+#include "egl-tools.h"
 
 using ::android::hardware::configureRpcThreadpool;
 using ::android::hardware::joinRpcThreadpool;
@@ -60,6 +63,7 @@ struct waydroid_hwc_composer_device_1 {
     pthread_t wayland_thread;     // constant after init
     pthread_t vsync_thread;       // constant after init
     pthread_t extension_thread;   // constant after init
+    pthread_t egl_worker_thread;  // constant after init
     int32_t vsync_period_ns;      // constant after init
     struct display *display;      // constant after init
     std::map<std::string, struct window *> windows;
@@ -183,7 +187,7 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
     if (pdev->display->gtype == GRALLOC_GBM) {
         struct gralloc_handle_t *drm_handle = (struct gralloc_handle_t *)layer->handle;
         if (pdev->display->dmabuf) {
-            ret = create_dmabuf_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, drm_handle->prime_fd, pixel_stride, drm_handle->stride, 0 /* offset */, drm_handle->modifier, false /* format_is_drm */);
+            ret = create_dmabuf_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, -1 /* compute drm format */, drm_handle->prime_fd, pixel_stride, drm_handle->stride, 0 /* offset */, drm_handle->modifier, layer->handle);
         } else {
             ret = create_shm_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, pixel_stride, layer->handle);
             update_shm_buffer(buf);
@@ -191,7 +195,7 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
     } else if (pdev->display->gtype == GRALLOC_CROS) {
         const struct cros_gralloc_handle *cros_handle = (const struct cros_gralloc_handle *)layer->handle;
         if (pdev->display->dmabuf) {
-            ret = create_dmabuf_wl_buffer(pdev->display, buf, cros_handle->width, cros_handle->height, cros_handle->format, cros_handle->fds[0], pixel_stride, cros_handle->strides[0], cros_handle->offsets[0], cros_handle->format_modifier, true /* format_is_drm */);
+            ret = create_dmabuf_wl_buffer(pdev->display, buf, cros_handle->width, cros_handle->height, cros_handle->droid_format, cros_handle->format, cros_handle->fds[0], pixel_stride, cros_handle->strides[0], cros_handle->offsets[0], cros_handle->format_modifier, layer->handle);
         } else {
             ret = create_shm_wl_buffer(pdev->display, buf, cros_handle->width, cros_handle->height, cros_handle->droid_format, pixel_stride, layer->handle);
             update_shm_buffer(buf);
@@ -464,6 +468,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             pdev->windows.clear();
         } else {
             pdev->windows[active_apps]->lastLayer = 0;
+            pdev->windows[active_apps]->last_layer_buffer = nullptr;
         }
     } else if (!pdev->multi_windows) {
         // Single window mode, detecting if any unblacklisted app is on screen
@@ -488,6 +493,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                         }
                         if (pdev->windows.find(single_layer_tid) != pdev->windows.end()) {
                             pdev->windows[single_layer_tid]->lastLayer = 0;
+                            pdev->windows[single_layer_tid]->last_layer_buffer = nullptr;
                         }
                     }
                 }
@@ -547,6 +553,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                     std::string layer_tid = layer_name.substr(4, layer_name.find('#') - 4);
                     if (layer_tid == it->first) {
                         it->second->lastLayer = 0;
+                        it->second->last_layer_buffer = nullptr;
                         foundApp = true;
                         break;
                     }
@@ -556,6 +563,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                     std::getline(issLayer, LayerRawName, '#');
                     if (LayerRawName == it->first) {
                         it->second->lastLayer = 0;
+                        it->second->last_layer_buffer = nullptr;
                         foundApp = true;
                         break;
                     }
@@ -760,6 +768,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             ALOGE("Failed to get surface");
             continue;
         }
+        window->last_layer_buffer = buf;
         window->lastLayer++;
 
         wl_surface_attach(surface, buf->buffer, 0, 0);
@@ -805,6 +814,13 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
         wl_surface_commit(surface);
 
+        if (window->snapshot_buffer) {
+            // Snapshot buffer should be detached by now, clean up
+            wl_buffer_destroy(window->snapshot_buffer->buffer);
+            delete window->snapshot_buffer;
+            window->snapshot_buffer = nullptr;
+        }
+
         const int kAcquireWarningMS = 100;
         err = sync_wait(fb_layer->acquireFenceFd, kAcquireWarningMS);
         if (err < 0 && errno == ETIME) {
@@ -831,6 +847,20 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
         pdev->display->geo_changed = false;
     }
+
+    if (!pdev->multi_windows && single_layer_tid.length() && active_apps != "Waydroid") {
+        for (auto const& [layer_tid, window] : pdev->windows) {
+            // Replace inactive app window buffer with snapshot in staged mode
+            if (layer_tid != single_layer_tid && !window->snapshot_buffer) {
+                pdev->display->egl_work_queue.push_back(std::bind(snapshot_inactive_app_window, pdev->display, window));
+            }
+        }
+        if (!pdev->display->egl_work_queue.empty()) {
+            sem_post(&pdev->display->egl_go);
+            sem_wait(&pdev->display->egl_done);
+        }
+    }
+
     if (pdev->use_subsurface)
         for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++)
             if (it->second)
@@ -1142,6 +1172,11 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     ret = pthread_create (&pdev->extension_thread, NULL, hwc_extension_thread, pdev);
     if (ret) {
         ALOGE("waydroid_hw_composer could not start extension_thread\n");
+    }
+
+    ret = pthread_create(&pdev->egl_worker_thread, NULL, egl_loop, pdev->display);
+    if (ret) {
+        ALOGE("waydroid_hw_composer could not start egl_worker_thread");
     }
 
     *device = &pdev->base.common;

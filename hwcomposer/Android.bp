@@ -29,6 +29,8 @@ cc_library_shared {
         "libsync",
         "libui",
         "libdrm",
+        "libEGL",
+        "libGLESv2",
         "vendor.waydroid.display@1.0",
         "vendor.waydroid.task@1.0",
     ],
@@ -40,7 +42,8 @@ cc_library_shared {
     srcs: [
         "extension.cpp",
         "hwcomposer.cpp",
-        "wayland-hwc.cpp"
+        "wayland-hwc.cpp",
+        "egl-tools.cpp",
     ],
     header_libs: [
         "libsystem_headers",
