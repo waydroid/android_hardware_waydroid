@@ -1149,32 +1149,22 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     }
     ALOGE("wayland display %p", pdev->display);
 
-    struct timespec timeToWait;
-    struct timeval now;
-    gettimeofday(&now, NULL);
-    timeToWait.tv_sec = now.tv_sec + 5;
-    timeToWait.tv_nsec = (now.tv_usec + 1000UL * 2000) * 1000UL;
-
     pthread_mutex_init(&pdev->vsync_lock, NULL);
     pthread_mutex_init(&pdev->display->data_mutex, NULL);
     pthread_cond_init(&pdev->display->data_available_cond, NULL);
     pdev->display->waiting_for_data = false;
     pdev->vsync_callback_enabled = true;
-    pthread_mutex_lock(&pdev->display->data_mutex);
-    pdev->calib_window = create_window(pdev->display, false, "Waydroid", "0", {});
+
+    choose_width_height(pdev->display, 0, 0);
+    pdev->windows["Waydroid"] = create_window(pdev->display, pdev->use_subsurface, "Waydroid", "0", {0, 0, 0, 255});
+    property_set("waydroid.open_windows", "1");
+
+    if (pdev->display->refresh > 1000 && pdev->display->refresh < 1000000)
+        pdev->vsync_period_ns = 1000 * 1000 * 1000 / (pdev->display->refresh / 1000);
+
     if (!property_get_bool("persist.waydroid.cursor_on_subsurface", false))
         pdev->display->cursor_surface =
             wl_compositor_create_surface(pdev->display->compositor);
-    if (!pdev->display->height) {
-        pdev->display->waiting_for_data = true;
-        pthread_cond_timedwait(&pdev->display->data_available_cond,
-                               &pdev->display->data_mutex, &timeToWait);
-        pdev->display->waiting_for_data = false;
-    }
-    destroy_window(pdev->calib_window);
-    pthread_mutex_unlock(&pdev->display->data_mutex);
-    if (pdev->display->refresh > 1000 && pdev->display->refresh < 1000000)
-        pdev->vsync_period_ns = 1000 * 1000 * 1000 / (pdev->display->refresh / 1000);
 
     struct timespec rt;
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
