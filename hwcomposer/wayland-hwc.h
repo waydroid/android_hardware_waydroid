@@ -155,7 +155,7 @@ struct buffer {
     buffer_handle_t handle;
     int width;
     int height;
-    unsigned long stride;
+    unsigned long pixel_stride;
     int format;
 
     int timeline_fd;
@@ -186,16 +186,17 @@ struct window {
 int
 create_android_wl_buffer(struct display *display, struct buffer *buffer,
              int width, int height, int format,
-             int stride, buffer_handle_t target);
+             int pixel_stride, buffer_handle_t target);
 
 int
 create_dmabuf_wl_buffer(struct display *display, struct buffer *buffer,
              int width, int height, int format,
-             int prime_fd, int stride, int offset, uint64_t modifier, bool format_is_drm);
+             int prime_fd, int pixel_stride, int byte_stride,
+             int offset, uint64_t modifier, bool format_is_drm);
 
 int
 create_shm_wl_buffer(struct display *display, struct buffer *buffer,
-             int width, int height, int format, int stride, buffer_handle_t target);
+             int width, int height, int format, int pixel_stride, buffer_handle_t target);
 
 struct display *
 create_display(const char* gralloc);
