@@ -179,7 +179,7 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
     struct buffer *buf;
     int ret = 0;
 
-    buf = (struct buffer *)calloc(1, sizeof *buf);
+    buf = new struct buffer();
     if (pdev->display->gtype == GRALLOC_GBM) {
         struct gralloc_handle_t *drm_handle = (struct gralloc_handle_t *)layer->handle;
         if (pdev->display->dmabuf) {
