@@ -87,7 +87,7 @@ static const struct wl_buffer_listener buffer_listener = {
 int
 create_android_wl_buffer(struct display *display, struct buffer *buffer,
              int width, int height, int format,
-             int stride, buffer_handle_t target)
+             int pixel_stride, buffer_handle_t target)
 {
     struct android_wlegl_handle *wlegl_handle;
     struct wl_array ints;
@@ -96,7 +96,7 @@ create_android_wl_buffer(struct display *display, struct buffer *buffer,
     buffer->width = width;
     buffer->height = height;
     buffer->format = format;
-    buffer->stride = stride;
+    buffer->pixel_stride = pixel_stride;
 
     wl_array_init(&ints);
     the_ints = (int *)wl_array_add(&ints, target->numInts * sizeof(int));
@@ -108,7 +108,7 @@ create_android_wl_buffer(struct display *display, struct buffer *buffer,
         android_wlegl_handle_add_fd(wlegl_handle, target->data[i]);
     }
 
-    buffer->buffer = android_wlegl_create_buffer(display->android_wlegl, buffer->width, buffer->height, buffer->stride, buffer->format, GRALLOC_USAGE_HW_RENDER, wlegl_handle);
+    buffer->buffer = android_wlegl_create_buffer(display->android_wlegl, buffer->width, buffer->height, buffer->pixel_stride, buffer->format, GRALLOC_USAGE_HW_RENDER, wlegl_handle);
     android_wlegl_handle_destroy(wlegl_handle);
 
     wl_buffer_add_listener(buffer->buffer, &buffer_listener, buffer);
@@ -202,7 +202,8 @@ int ConvertHalFormatToDrm(struct display *display, uint32_t hal_format) {
 int
 create_dmabuf_wl_buffer(struct display *display, struct buffer *buffer,
              int width, int height, int format,
-             int prime_fd, int stride, int offset, uint64_t modifier, bool format_is_drm)
+             int prime_fd, int pixel_stride, int byte_stride,
+             int offset, uint64_t modifier, bool format_is_drm)
 {
     struct zwp_linux_buffer_params_v1 *params;
 
@@ -211,10 +212,10 @@ create_dmabuf_wl_buffer(struct display *display, struct buffer *buffer,
     assert(buffer->format >= 0);
     buffer->width = width;
     buffer->height = height;
-    buffer->stride = stride;
+    buffer->pixel_stride = pixel_stride;
 
     params = zwp_linux_dmabuf_v1_create_params(display->dmabuf);
-    zwp_linux_buffer_params_v1_add(params, prime_fd, 0, offset, buffer->stride, modifier >> 32, modifier & 0xffffffff);
+    zwp_linux_buffer_params_v1_add(params, prime_fd, 0, offset, byte_stride, modifier >> 32, modifier & 0xffffffff);
     zwp_linux_buffer_params_v1_add_listener(params, &params_listener, buffer);
 
     buffer->buffer = zwp_linux_buffer_params_v1_create_immed(params, buffer->width, buffer->height, buffer->format, 0);
@@ -243,11 +244,10 @@ ConvertHalFormatToShm(uint32_t hal_format) {
 
 int
 create_shm_wl_buffer(struct display *display, struct buffer *buffer,
-             int width, int height, int format, int stride, buffer_handle_t target)
+             int width, int height, int format, int pixel_stride, buffer_handle_t target)
 {
-    int shm_stride = stride * 4;
-    if (display->gtype == GRALLOC_GBM)
-        shm_stride = stride;
+    // Assume 4bpp formats or none of this is going to work
+    int shm_stride = width * 4;
     int size = shm_stride * height;
 
     buffer->size = size;
@@ -255,7 +255,7 @@ create_shm_wl_buffer(struct display *display, struct buffer *buffer,
     assert(buffer->format >= 0);
     buffer->width = width;
     buffer->height = height;
-    buffer->stride = stride;
+    buffer->pixel_stride = pixel_stride;
     buffer->handle = target;
     buffer->isShm = true;
 
