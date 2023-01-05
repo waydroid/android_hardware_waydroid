@@ -1179,9 +1179,14 @@ output_handle_scale(void *data, struct wl_output *,
             int32_t scale)
 {
     struct display *d = (struct display*)data;
+    char property[PROPERTY_VALUE_MAX];
+    int default_density = 180;
 
     d->scale = scale;
-    property_set("persist.waydroid.scale", std::to_string(scale).c_str());
+    property_set("waydroid.display_scale", std::to_string(scale).c_str());
+    if (property_get("ro.sf.lcd_density", property, nullptr) <= 0) {
+        property_set("ro.sf.lcd_density", std::to_string(default_density * scale).c_str());
+    }
 }
 
 static const struct wl_output_listener output_listener = {
@@ -1617,6 +1622,7 @@ registry_handle_global(void *data, struct wl_registry *registry,
         d->output = (struct wl_output*)wl_registry_bind(registry, id,
                 &wl_output_interface, std::min(version, 3U));
         wl_output_add_listener(d->output, &output_listener, d);
+        wl_display_roundtrip(d->display);
     } else if (strcmp(interface, "wp_presentation") == 0) {
         bool no_presentation = property_get_bool("persist.waydroid.no_presentation", false);
         if (!no_presentation) {

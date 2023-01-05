@@ -947,11 +947,6 @@ static int32_t hwc_attribute(struct waydroid_hwc_composer_device_1* pdev,
         case HWC_DISPLAY_DPI_Y:
             if (property_get("ro.sf.lcd_density", property, nullptr) > 0)
                 density = atoi(property);
-            else {
-                if (property_get("persist.waydroid.scale", property, nullptr) > 0)
-                    density *= atoi(property);
-                property_set("ro.sf.lcd_density", std::to_string(density).c_str());
-            }
             return density * 1000;
         case HWC_DISPLAY_COLOR_TRANSFORM:
             return HAL_COLOR_TRANSFORM_IDENTITY;
