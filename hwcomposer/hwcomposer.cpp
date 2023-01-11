@@ -39,7 +39,6 @@
 #include <presentation-time-client-protocol.h>
 #include <viewporter-client-protocol.h>
 #include <gralloc_handle.h>
-#include <cros_gralloc/cros_gralloc_handle.h>
 
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
 #include <cutils/trace.h>
@@ -192,14 +191,6 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
             ret = create_shm_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, pixel_stride, layer->handle);
             update_shm_buffer(buf);
         }
-    } else if (pdev->display->gtype == GRALLOC_CROS) {
-        const struct cros_gralloc_handle *cros_handle = (const struct cros_gralloc_handle *)layer->handle;
-        if (pdev->display->dmabuf) {
-            ret = create_dmabuf_wl_buffer(pdev->display, buf, cros_handle->width, cros_handle->height, cros_handle->droid_format, cros_handle->format, cros_handle->fds[0], pixel_stride, cros_handle->strides[0], cros_handle->offsets[0], cros_handle->format_modifier, layer->handle);
-        } else {
-            ret = create_shm_wl_buffer(pdev->display, buf, cros_handle->width, cros_handle->height, cros_handle->droid_format, pixel_stride, layer->handle);
-            update_shm_buffer(buf);
-        }
     } else {
         // TODO: use the actual buffer size
         uint32_t format;
@@ -262,7 +253,7 @@ static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pde
 
     if (pdev->display->viewporter) {
         // can't correctly crop on other gralloc implementations yet
-        if (pdev->display->gtype == GRALLOC_GBM || pdev->display->gtype == GRALLOC_CROS) {
+        if (pdev->display->gtype == GRALLOC_GBM) {
             wp_viewport_set_source(window->viewports[window->lastLayer],
                                    wl_fixed_from_double(fmax(0, sourceCrop.left / (double)pdev->display->scale)),
                                    wl_fixed_from_double(fmax(0, sourceCrop.top / (double)pdev->display->scale)),

@@ -76,7 +76,6 @@ static const char *INPUT_PIPE_NAME[INPUT_TOTAL] = {
 enum {
     GRALLOC_ANDROID,
     GRALLOC_GBM,
-    GRALLOC_CROS,
     GRALLOC_DEFAULT
 };
 
