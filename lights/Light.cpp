@@ -36,7 +36,8 @@ Return<Status> Light::setLight(Type, const LightState&) {
 	return Status::SUCCESS;
 }
 
-Return<void> Light::getSupportedTypes(getSupportedTypes_cb) {
+Return<void> Light::getSupportedTypes(getSupportedTypes_cb _hidl_cb) {
+    _hidl_cb(std::vector<Type>());
     return Void();
 }
 
