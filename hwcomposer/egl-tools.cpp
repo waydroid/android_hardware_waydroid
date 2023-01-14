@@ -185,9 +185,10 @@ void egl_init(struct display* display) {
 void egl_render_to_pixels(struct display* display, struct buffer* buf) {
     // Wrap native handle into ANativeWindowBuffer for eglCreateImageKHR
     android::sp<android::GraphicBuffer> graphicBuffer = new android::GraphicBuffer(
+            (native_handle_t*)buf->handle, android::GraphicBuffer::WRAP_HANDLE,
             buf->width, buf->height, buf->hal_format, 1 /* layers */,
-            android::GraphicBuffer::USAGE_HW_TEXTURE | android::GraphicBuffer::USAGE_SW_READ_OFTEN,
-            buf->pixel_stride, (native_handle_t*)buf->handle, false);
+            (uint64_t) android::GraphicBuffer::USAGE_HW_TEXTURE,
+            buf->pixel_stride);
 
     EGLint image_attrs[] = { EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE };
     auto image = eglCreateImageKHR(display->egl_dpy, EGL_NO_CONTEXT,
