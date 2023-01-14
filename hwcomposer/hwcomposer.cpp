@@ -840,10 +840,10 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     }
 
     if (!pdev->multi_windows && single_layer_tid.length() && active_apps != "Waydroid") {
-        for (auto const& [layer_tid, window] : pdev->windows) {
+        for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
             // Replace inactive app window buffer with snapshot in staged mode
-            if (layer_tid != single_layer_tid && !window->snapshot_buffer) {
-                pdev->display->egl_work_queue.push_back(std::bind(snapshot_inactive_app_window, pdev->display, window));
+            if (it->first != single_layer_tid && !it->second->snapshot_buffer) {
+                pdev->display->egl_work_queue.push_back(std::bind(snapshot_inactive_app_window, pdev->display, it->second));
             }
         }
         if (!pdev->display->egl_work_queue.empty()) {
