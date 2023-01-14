@@ -162,7 +162,14 @@ void egl_init(struct display* display) {
 
     EGLConfig config;
     int num_config;
-    EGLint dpy_attrs[] = { EGL_NATIVE_VISUAL_ID, (EGLint)HAL_PIXEL_FORMAT_RGBA_8888, EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_NONE };
+    EGLint dpy_attrs[] = {
+        EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
+        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+        EGL_RED_SIZE, 8,
+        EGL_GREEN_SIZE, 8,
+        EGL_BLUE_SIZE, 8,
+        EGL_ALPHA_SIZE, 8,
+        EGL_NONE };
     eglChooseConfig(display->egl_dpy, dpy_attrs, &config, 1, &num_config);
     ALOGI("eglChooseConfig: %s", eglStrError(eglGetError()));
 
