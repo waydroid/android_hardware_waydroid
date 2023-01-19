@@ -176,7 +176,7 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
     auto it = pdev->display->buffer_map.find(layer->handle);
     if (it != pdev->display->buffer_map.end()) {
         if (it->second->isShm) {
-            if (width != it->second->width || height != it->second->height) {
+            if (width != (uint32_t)it->second->width || height != (uint32_t)it->second->height) {
                 if (it->second->buffer)
                     wl_buffer_destroy(it->second->buffer);
                 delete (it->second);
