@@ -701,6 +701,8 @@ keyboard_handle_key(void *data, struct wl_keyboard *,
                     uint32_t, uint32_t, uint32_t key,
                     uint32_t state)
 {
+    if (key == KEY_POWER)
+        return;
     send_key_event((struct display*)data, key, (enum wl_keyboard_key_state)state);
 }
 
