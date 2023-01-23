@@ -125,9 +125,17 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
     return 0;
 }
 
-static void update_shm_buffer(struct buffer *buffer)
+static void update_shm_buffer(struct display* display, struct buffer *buffer)
 {
-    // Assume 4bpp formats or none of this is going to work
+    // Slower but always correct
+    if (display->gtype != GRALLOC_DEFAULT) {
+        display->egl_work_queue.push_back(std::bind(egl_render_to_pixels, display, buffer));
+        sem_post(&display->egl_go);
+        sem_wait(&display->egl_done);
+        return;
+    }
+
+    // Fast path for when the buffer is guaranteed to be linear and 4bpp
     void *data;
     int shm_stride, src_stride;
     android::Rect bounds(buffer->width, buffer->height);
@@ -182,7 +190,7 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
                 delete (it->second);
                 pdev->display->buffer_map.erase(it);
             } else {
-                update_shm_buffer(it->second);
+                update_shm_buffer(pdev->display, it->second);
                 return it->second;
             }
         } else
@@ -199,14 +207,14 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
             ret = create_dmabuf_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, -1 /* compute drm format */, drm_handle->prime_fd, pixel_stride, drm_handle->stride, 0 /* offset */, drm_handle->modifier, layer->handle);
         } else {
             ret = create_shm_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, pixel_stride, layer->handle);
-            update_shm_buffer(buf);
+            update_shm_buffer(pdev->display, buf);
         }
     } else {
         if (pdev->display->gtype == GRALLOC_ANDROID) {
             ret = create_android_wl_buffer(pdev->display, buf, width, height, format, pixel_stride, layer->handle);
         } else {
             ret = create_shm_wl_buffer(pdev->display, buf, width, height, format, pixel_stride, layer->handle);
-            update_shm_buffer(buf);
+            update_shm_buffer(pdev->display, buf);
         }
     }
 
