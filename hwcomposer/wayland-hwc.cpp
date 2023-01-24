@@ -49,6 +49,7 @@
 #include <system/graphics.h>
 #include <syscall.h>
 #include <cmath>
+#include <algorithm>
 
 #include <libsync/sw_sync.h>
 #include <sync/sync.h>
@@ -58,6 +59,8 @@
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
 #include <cutils/trace.h>
 #include <cutils/properties.h>
+
+#include <xkbcommon/xkbcommon.h>
 
 #include <wayland-client.h>
 #include <wayland-android-client-protocol.h>
@@ -660,9 +663,26 @@ send_key_event(display *data, uint32_t key, wl_keyboard_key_state state)
 
 static void
 keyboard_handle_keymap(void *, struct wl_keyboard *,
-               uint32_t, int fd, uint32_t)
+               uint32_t format, int fd, uint32_t size)
 {
-    /* Just so we don’t leak the keymap fd */
+    if (format == WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1) {
+        char* keymap_shm = (char*)mmap(NULL, size - 1, PROT_READ, MAP_PRIVATE, fd, 0);
+        auto xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_DEFAULT_INCLUDES);
+        auto xkb_keymap = xkb_keymap_new_from_buffer(xkb_ctx, keymap_shm, size - 1,
+                            XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
+        std::string layout_name(xkb_keymap_layout_get_name(xkb_keymap, 0));
+
+        // Try to convert XKB name to an android identifier.
+        // This is not very good, for example "English (UK)" becomes "english"
+        // but android understand only "english_uk" or "english_us"
+        std::string layout_id = layout_name.substr(0, layout_name.find(' '));
+        std::transform(layout_id.begin(), layout_id.end(), layout_id.begin(), ::tolower);
+        property_set("waydroid.keyboard_layout", layout_id.c_str());
+
+        xkb_keymap_unref(xkb_keymap);
+        xkb_context_unref(xkb_ctx);
+        munmap(keymap_shm, size - 1);
+    }
     close(fd);
 }
 
