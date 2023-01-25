@@ -1157,6 +1157,7 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
 
     choose_width_height(pdev->display, 0, 0);
     pdev->windows["Waydroid"] = create_window(pdev->display, pdev->use_subsurface, "Waydroid", "0", {0, 0, 0, 255});
+    property_set("waydroid.active_apps", "Waydroid");
     property_set("waydroid.open_windows", "1");
 
     if (pdev->display->refresh > 1000 && pdev->display->refresh < 1000000)
