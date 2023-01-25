@@ -445,12 +445,14 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     std::string single_layer_tid;
     std::string single_layer_aid;
 
-    for (size_t l = 0; l < contents->numHwLayers; l++) {
-        std::string layer_name = pdev->display->layer_names[l];
-        if (layer_name.rfind("BootAnimation#", 0) == 0) {
-            // force single window mode during boot animation
-            active_apps = "Waydroid";
-            break;
+    if (active_apps != "Waydroid" && !property_get_bool("waydroid.background_start", true)) {
+        for (size_t l = 0; l < contents->numHwLayers; l++) {
+            std::string layer_name = pdev->display->layer_names[l];
+            if (layer_name.rfind("BootAnimation#", 0) == 0) {
+                // force single window mode during boot animation
+                active_apps = "Waydroid";
+                break;
+            }
         }
     }
 
@@ -1156,9 +1158,14 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     pdev->vsync_callback_enabled = true;
 
     choose_width_height(pdev->display, 0, 0);
-    pdev->windows["Waydroid"] = create_window(pdev->display, pdev->use_subsurface, "Waydroid", "0", {0, 0, 0, 255});
-    property_set("waydroid.active_apps", "Waydroid");
-    property_set("waydroid.open_windows", "1");
+    auto first_window = create_window(pdev->display, pdev->use_subsurface, "Waydroid", "0", {0, 0, 0, 255});
+    if (!property_get_bool("waydroid.background_start", true)) {
+        pdev->windows["Waydroid"] = first_window;
+        property_set("waydroid.active_apps", "Waydroid");
+        property_set("waydroid.open_windows", "1");
+    } else {
+        destroy_window(first_window);
+    }
 
     if (pdev->display->refresh > 1000 && pdev->display->refresh < 1000000)
         pdev->vsync_period_ns = 1000 * 1000 * 1000 / (pdev->display->refresh / 1000);
