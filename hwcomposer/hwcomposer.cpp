@@ -188,24 +188,28 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
 
     auto it = pdev->display->buffer_map.find(layer->handle);
     if (it != pdev->display->buffer_map.end()) {
+        std::lock_guard(pdev->display->buffers_mutex);
         if (it->second->isShm) {
             if (width != it->second->width || height != it->second->height) {
-                if (it->second->buffer)
-                    wl_buffer_destroy(it->second->buffer);
-                delete (it->second);
+                it->second->refcount--;
+                if (it->second->refcount == 0)
+                    destroy_buffer(it->second);
                 pdev->display->buffer_map.erase(it);
             } else {
+                it->second->refcount++;
                 update_shm_buffer(pdev->display, it->second);
                 return it->second;
             }
-        } else
+        } else {
+            it->second->refcount++;
             return it->second;
+        }
     }
 
     struct buffer *buf;
     int ret = 0;
 
-    buf = new struct buffer();
+    buf = create_buffer(pdev->display);
     if (pdev->display->gtype == GRALLOC_GBM) {
         struct gralloc_handle_t *drm_handle = (struct gralloc_handle_t *)layer->handle;
         if (pdev->display->dmabuf) {
@@ -236,7 +240,7 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
         return NULL;
     }
     pdev->display->buffer_map[layer->handle] = buf;
-
+    buf->refcount++;
     return pdev->display->buffer_map[layer->handle];
 }
 
@@ -414,14 +418,11 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     int err = 0;
 
     if (pdev->display->geo_changed) {
+        std::lock_guard(pdev->display->buffers_mutex);
         for (auto it = pdev->display->buffer_map.begin(); it != pdev->display->buffer_map.end(); it++) {
-            if (it->second) {
-                if (it->second->buffer)
-                    wl_buffer_destroy(it->second->buffer);
-                if (it->second->isShm)
-                    munmap(it->second->shm_data, it->second->size);
-                delete (it->second);
-            }
+            it->second->refcount--;
+            if (it->second->refcount == 0)
+                destroy_buffer(it->second);
         }
         pdev->display->buffer_map.clear();
     }
@@ -769,12 +770,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         if (fb_layer->compositionType != HWC_FRAMEBUFFER &&
             fb_layer->compositionType != HWC_SIDEBAND)
         {
-            int timeline_fd = sw_sync_timeline_create();
             /* To be signaled when the compositor releases the buffer */
-            fb_layer->releaseFenceFd = sw_sync_fence_create(timeline_fd, "wayland_release", 1);
-            buf->timeline_fd = timeline_fd;
-        } else {
-            buf->timeline_fd = -1;
+            fb_layer->releaseFenceFd = sw_sync_fence_create(buf->timeline_fd, "wayland_release", ++buf->sync_point);
         }
 
         struct wl_surface *surface = get_surface(pdev, fb_layer, window, pdev->use_subsurface);

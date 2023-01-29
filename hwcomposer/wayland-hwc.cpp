@@ -72,7 +72,23 @@
 
 using ::android::hardware::hidl_string;
 
-struct buffer;
+struct buffer*
+create_buffer(struct display* display) {
+    struct buffer* buf = new struct buffer();
+    buf->display = display;
+    buf->timeline_fd = sw_sync_timeline_create();
+    buf->refcount = 1;
+    return buf;
+}
+
+void
+destroy_buffer(struct buffer* buf) {
+    close(buf->timeline_fd);
+    wl_buffer_destroy(buf->buffer);
+    if (buf->isShm)
+        munmap(buf->shm_data, buf->size);
+    delete buf;
+}
 
 static void
 buffer_release(void *data, struct wl_buffer *)
@@ -80,8 +96,10 @@ buffer_release(void *data, struct wl_buffer *)
     struct buffer *mybuf = (struct buffer*)data;
 
     sw_sync_timeline_inc(mybuf->timeline_fd, 1);
-    close(mybuf->timeline_fd);
-    mybuf->timeline_fd = -1;
+    std::lock_guard(mybuf->display->buffers_mutex);
+    mybuf->refcount--;
+    if (mybuf->refcount == 0)
+        destroy_buffer(mybuf);
 }
 
 static const struct wl_buffer_listener buffer_listener = {
@@ -296,7 +314,7 @@ void snapshot_inactive_app_window(struct display *display, struct window *window
     ALOGI("Making inactive window snapshot for %s", window->taskID.c_str());
 
     struct buffer *old_buf = window->last_layer_buffer;
-    struct buffer *new_buf = new struct buffer();
+    struct buffer *new_buf = create_buffer(display);
     // FIXME won't work as expected if there are multiple surfaces
     struct wl_surface *surface = window->surface;
 

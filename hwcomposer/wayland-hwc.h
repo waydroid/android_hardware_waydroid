@@ -155,6 +155,7 @@ struct display {
     std::map<uint32_t, struct handleExt> layer_handles_ext;
     struct handleExt target_layer_handle_ext;
     std::map<buffer_handle_t, struct buffer *> buffer_map;
+    std::mutex buffers_mutex;
     std::array<uint8_t, 239> keysDown;
 
     bool isWinResSet;
@@ -174,9 +175,13 @@ struct buffer {
     uint32_t hal_format;
 
     int timeline_fd;
+    int sync_point;
     bool isShm;
     void *shm_data;
     int size;
+
+    int refcount;
+    struct display* display;
 };
 
 struct window {
@@ -218,6 +223,11 @@ create_shm_wl_buffer(struct display *display, struct buffer *buffer,
 
 void
 snapshot_inactive_app_window(struct display *display, struct window *window);
+
+void
+destroy_buffer(struct buffer* buffer);
+struct buffer*
+create_buffer(struct display* display);
 
 struct display *
 create_display(const char* gralloc);
