@@ -410,6 +410,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     }
 
     hwc_display_contents_1_t* contents = displays[HWC_DISPLAY_PRIMARY];
+    size_t fb_target = -1;
+    int err = 0;
 
     if (pdev->display->geo_changed) {
         for (auto it = pdev->display->buffer_map.begin(); it != pdev->display->buffer_map.end(); it++) {
@@ -470,7 +472,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
 
         property_set("waydroid.open_windows", "0");
-        return 0;
+        goto sync;
     } else if (active_apps == "Waydroid") {
         // Clear all open windows if there's any and just keep "Waydroid"
         if (pdev->windows.find(active_apps) == pdev->windows.end() || !pdev->windows[active_apps]->isActive) {
@@ -527,7 +529,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             }
 
             property_set("waydroid.open_windows", "0");
-            return 0;
+            goto sync;
         }
         bool shouldCloseLeftover = true;
         for (auto it = pdev->windows.cbegin(); it != pdev->windows.cend();) {
@@ -595,7 +597,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
     }
 
-    size_t fb_target = -1;
     for (size_t l = 0; l < contents->numHwLayers; l++) {
         hwc_layer_1_t* fb_layer = &contents->hwLayers[l];
         if (fb_layer->compositionType == HWC_FRAMEBUFFER_TARGET) {
@@ -604,7 +605,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
     }
 
-    int err = 0;
     for (size_t l = 0; l < contents->numHwLayers; l++) {
         size_t layer = l;
         if (l == skipped.first && fb_target >= 0) {
@@ -881,6 +881,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                 wl_surface_commit(it->second->surface);
     wl_display_flush(pdev->display->display);
 
+sync:
     sw_sync_timeline_inc(pdev->timeline_fd, 1);
     contents->retireFenceFd = sw_sync_fence_create(pdev->timeline_fd, "hwc_contents_release", ++pdev->next_sync_point);
 
