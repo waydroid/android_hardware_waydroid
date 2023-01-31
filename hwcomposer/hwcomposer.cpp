@@ -825,12 +825,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
         wl_surface_commit(surface);
 
-        if (window->snapshot_buffer) {
-            // Snapshot buffer should be detached by now, clean up
-            wl_buffer_destroy(window->snapshot_buffer->buffer);
-            delete window->snapshot_buffer;
-            window->snapshot_buffer = nullptr;
-        }
+        // Snapshot buffer is no longer used
+        window->snapshot_buffer = nullptr;
 
         const int kAcquireWarningMS = 100;
         err = sync_wait(fb_layer->acquireFenceFd, kAcquireWarningMS);
