@@ -198,6 +198,9 @@ struct window {
     bool isActive;
 };
 
+void
+destroy_buffer(struct buffer* buf);
+
 int
 create_android_wl_buffer(struct display *display, struct buffer *buffer,
              int width, int height, int format,

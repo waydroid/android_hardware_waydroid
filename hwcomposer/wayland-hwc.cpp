@@ -74,6 +74,14 @@ using ::android::hardware::hidl_string;
 
 struct buffer;
 
+void
+destroy_buffer(struct buffer* buf) {
+    wl_buffer_destroy(buf->buffer);
+    if (buf->isShm)
+        munmap(buf->shm_data, buf->size);
+    delete buf;
+}
+
 static void
 buffer_release(void *, struct wl_buffer *)
 {
