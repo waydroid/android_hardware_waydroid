@@ -190,9 +190,7 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
     if (it != pdev->display->buffer_map.end()) {
         if (it->second->isShm) {
             if (width != it->second->width || height != it->second->height) {
-                if (it->second->buffer)
-                    wl_buffer_destroy(it->second->buffer);
-                delete (it->second);
+                destroy_buffer(it->second);
                 pdev->display->buffer_map.erase(it);
             } else {
                 update_shm_buffer(pdev->display, it->second);
@@ -416,11 +414,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     if (pdev->display->geo_changed) {
         for (auto it = pdev->display->buffer_map.begin(); it != pdev->display->buffer_map.end(); it++) {
             if (it->second) {
-                if (it->second->buffer)
-                    wl_buffer_destroy(it->second->buffer);
-                if (it->second->isShm)
-                    munmap(it->second->shm_data, it->second->size);
-                delete (it->second);
+                destroy_buffer(it->second);
             }
         }
         pdev->display->buffer_map.clear();
@@ -818,8 +812,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
         if (window->snapshot_buffer) {
             // Snapshot buffer should be detached by now, clean up
-            wl_buffer_destroy(window->snapshot_buffer->buffer);
-            delete window->snapshot_buffer;
+            destroy_buffer(window->snapshot_buffer);
             window->snapshot_buffer = nullptr;
         }
 
@@ -1009,7 +1002,7 @@ static int hwc_close(hw_device_t* dev) {
 
     for (std::map<buffer_handle_t, struct buffer *>::iterator it = pdev->display->buffer_map.begin(); it != pdev->display->buffer_map.end(); it++)
     {
-        wl_buffer_destroy(it->second->buffer);
+        destroy_buffer(it->second);
     }
     pdev->display->buffer_map.clear();
 
