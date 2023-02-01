@@ -173,7 +173,6 @@ struct buffer {
     int format;
     uint32_t hal_format;
 
-    int timeline_fd;
     bool isShm;
     void *shm_data;
     int size;
