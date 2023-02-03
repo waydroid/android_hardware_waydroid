@@ -22,9 +22,7 @@ cc_binary {
     shared_libs: [
         "libbase",
         "libhidlbase",
-        "libhidltransport",
         "liblog",
-        "libhwbinder",
         "libutils",
         "libhardware",
         "android.hardware.vibrator@1.0",
