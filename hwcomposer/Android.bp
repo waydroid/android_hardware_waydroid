@@ -37,7 +37,7 @@ cc_library_shared {
         "vendor.waydroid.window@1.2",
     ],
     static_libs: [
-        "libwayland_client",
+        "libwayland_client_static",
         "libffi",
         "libwayland_extension_client_protocols",
         "libxkbcommon",
