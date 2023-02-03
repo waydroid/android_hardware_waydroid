@@ -41,8 +41,6 @@ LOCAL_SHARED_LIBRARIES := \
 	libutils \
 	libcrypto \
 	libhidlbase \
-	libhidltransport \
-	libhwbinder \
 	android.hardware.gatekeeper@1.0 \
 
 LOCAL_STATIC_LIBRARIES := libscrypt_static
