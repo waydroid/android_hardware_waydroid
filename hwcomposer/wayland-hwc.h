@@ -121,6 +121,7 @@ struct display {
     struct zwp_relative_pointer_v1 *relative_pointer;
     struct zwp_idle_inhibit_manager_v1 *idle_manager;
     struct wp_fractional_scale_manager_v1 *fractional_scale_manager;
+    int system_version;
     int gtype;
     double scale;
 
@@ -194,6 +195,7 @@ struct window {
     struct wl_buffer *bg_buffer;
     struct wl_surface *bg_surface;
     struct wl_subsurface *bg_subsurface;
+    struct wl_region* input_region;
     struct zwp_locked_pointer_v1 *locked_pointer;
     struct zwp_idle_inhibitor_v1 *idle_inhibitor;
     std::map<size_t, struct wl_surface *> surfaces;
