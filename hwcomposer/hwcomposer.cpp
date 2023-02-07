@@ -59,6 +59,8 @@ using ::vendor::waydroid::window::implementation::WaydroidWindow;
 using ::android::OK;
 using ::android::status_t;
 
+#define WINDOW_DECORATION_OUTSET 15
+
 struct waydroid_hwc_composer_device_1 {
     hwc_composer_device_1_t base; // constant after init
     const hwc_procs_t *procs;     // constant after init
@@ -298,6 +300,14 @@ static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pde
     wl_subsurface_set_position(window->subsurfaces[window->lastLayer],
                                floor(layer->displayFrame.left / pdev->display->scale),
                                floor(layer->displayFrame.top / pdev->display->scale));
+
+    if (window->input_region) {
+        wl_region_add(window->input_region,
+                -WINDOW_DECORATION_OUTSET + floor(layer->displayFrame.left / pdev->display->scale),
+                -WINDOW_DECORATION_OUTSET + floor(layer->displayFrame.top / pdev->display->scale),
+                2*WINDOW_DECORATION_OUTSET + ceil((layer->displayFrame.right - layer->displayFrame.left) / pdev->display->scale),
+                2*WINDOW_DECORATION_OUTSET + ceil((layer->displayFrame.bottom - layer->displayFrame.top) / pdev->display->scale));
+    }
 
     pdev->display->layers[window->surfaces[window->lastLayer]] = {
         .x = layer->displayFrame.left,
@@ -624,6 +634,10 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
     }
 
+    for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++)
+        if (it->second->input_region)
+            wl_region_subtract(it->second->input_region, 0, 0, INT_MAX, INT_MAX);
+
     for (size_t l = 0; l < contents->numHwLayers; l++) {
         size_t layer = l;
         if (l == (size_t) skipped.first && fb_target >= 0) {
@@ -879,6 +893,10 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
         pdev->display->geo_changed = false;
     }
+
+    for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++)
+        if (it->second->input_region)
+            wl_surface_set_input_region(it->second->surface, it->second->input_region);
 
     if (!pdev->multi_windows && single_layer_tid.length() && active_apps != "Waydroid") {
         for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
