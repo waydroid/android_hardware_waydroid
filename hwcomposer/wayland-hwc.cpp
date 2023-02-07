@@ -489,6 +489,8 @@ destroy_window(struct window *window, bool keep)
             wl_buffer_destroy(window->bg_buffer);
         if (window->viewport)
             wp_viewport_destroy(window->viewport);
+        if (window->input_region)
+            wl_region_destroy(window->input_region);
 
         wl_surface_destroy(window->surface);
         wl_display_flush(window->display->display);
@@ -649,12 +651,16 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
     struct wl_region *region = wl_compositor_create_region(display->compositor);
     if (color.a == 0) {
         wl_surface_set_input_region(surface, region);
+        if (display->system_version >= 33)
+            window->input_region = region;
+        else
+            wl_region_destroy(region);
     }
     if (color.a == 255) {
         wl_region_add(region, 0, 0, display->width, display->height);
         wl_surface_set_opaque_region(surface, region);
+        wl_region_destroy(region);
     }
-    wl_region_destroy(region);
 
     wl_surface_commit(surface);
 
@@ -1898,6 +1904,7 @@ create_display(const char *gralloc)
         return NULL;
     }
     wl_log_set_handler_client(wayland_log_handler);
+    display->system_version = property_get_int32("ro.system.build.version.sdk", 0);
     display->gtype = get_gralloc_type(gralloc);
     display->refresh = 0;
     display->isMaximized = true;
