@@ -1068,8 +1068,44 @@ touch_handle_frame(void *, struct wl_touch *)
 }
 
 static void
-touch_handle_cancel(void *, struct wl_touch *)
+touch_handle_cancel(void *data, struct wl_touch *)
 {
+    struct display* display = (struct display*)data;
+    struct input_event event[6];
+    struct timespec rt;
+    unsigned int res, n;
+    int i, id;
+
+    if (ensure_pipe(display, INPUT_TOUCH))
+        return;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+       ALOGE("%s:%d error in touch clock_gettime: %s",
+            __FILE__, __LINE__, strerror(errno));
+    }
+
+    // Cancel all touch points.
+    for (i = 0; i < MAX_TOUCHPOINTS; i++) {
+        if (display->touch_id[i] != -1) {
+            id = display->touch_id[i];
+            display->touch_id[i] = -1;
+            display->touch_surfaces[id] = NULL;
+
+            n = 0;
+            // Turn finger into palm.
+            ADD_EVENT(EV_ABS, ABS_MT_SLOT, i);
+            ADD_EVENT(EV_ABS, ABS_MT_TOOL_TYPE, MT_TOOL_PALM);
+            ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+            // Lift off.
+            ADD_EVENT(EV_ABS, ABS_MT_TOOL_TYPE, MT_TOOL_FINGER);
+            ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, -1);
+            ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+
+            res = write(display->input_fd[INPUT_TOUCH], &event, sizeof(event));
+            if (res < sizeof(event))
+                ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+        }
+    }
 }
 
 static void
