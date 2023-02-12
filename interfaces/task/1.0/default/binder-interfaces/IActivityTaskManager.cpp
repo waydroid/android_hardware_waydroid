@@ -51,7 +51,7 @@ BpActivityTaskManager::BpActivityTaskManager(const ::android::sp<::android::IBin
   if (((_aidl_ret_status) != (::android::OK))) {
     goto _aidl_error;
   }
-  _aidl_ret_status = remote()->transact(::android::IBinder::FIRST_CALL_TRANSACTION + 28 /* setFocusedTask */, _aidl_data, &_aidl_reply);
+  _aidl_ret_status = remote()->transact(::android::IBinder::FIRST_CALL_TRANSACTION + 20 /* setFocusedTask */, _aidl_data, &_aidl_reply);
   if (((_aidl_ret_status) != (::android::OK))) {
     goto _aidl_error;
   }
@@ -80,7 +80,7 @@ BpActivityTaskManager::BpActivityTaskManager(const ::android::sp<::android::IBin
   if (((_aidl_ret_status) != (::android::OK))) {
     goto _aidl_error;
   }
-  _aidl_ret_status = remote()->transact(::android::IBinder::FIRST_CALL_TRANSACTION + 29 /* removeTask */, _aidl_data, &_aidl_reply);
+  _aidl_ret_status = remote()->transact(::android::IBinder::FIRST_CALL_TRANSACTION + 21 /* removeTask */, _aidl_data, &_aidl_reply);
   if (((_aidl_ret_status) != (::android::OK))) {
     goto _aidl_error;
   }
@@ -109,7 +109,7 @@ BpActivityTaskManager::BpActivityTaskManager(const ::android::sp<::android::IBin
   if (((_aidl_ret_status) != (::android::OK))) {
     goto _aidl_error;
   }
-  _aidl_ret_status = remote()->transact(::android::IBinder::FIRST_CALL_TRANSACTION + 30 /* removeAllVisibleRecentTasks */, _aidl_data, &_aidl_reply);
+  _aidl_ret_status = remote()->transact(::android::IBinder::FIRST_CALL_TRANSACTION + 22 /* removeAllVisibleRecentTasks */, _aidl_data, &_aidl_reply);
   if (((_aidl_ret_status) != (::android::OK))) {
     goto _aidl_error;
   }
@@ -138,7 +138,7 @@ namespace app {
 ::android::status_t BnActivityTaskManager::onTransact(uint32_t _aidl_code, const ::android::Parcel& _aidl_data, ::android::Parcel* _aidl_reply, uint32_t _aidl_flags) {
   ::android::status_t _aidl_ret_status = ::android::OK;
   switch (_aidl_code) {
-  case ::android::IBinder::FIRST_CALL_TRANSACTION + 28 /* setFocusedTask */:
+  case ::android::IBinder::FIRST_CALL_TRANSACTION + 20 /* setFocusedTask */:
   {
     int32_t in_taskId;
     if (!(_aidl_data.checkInterface(this))) {
@@ -159,7 +159,7 @@ namespace app {
     }
   }
   break;
-  case ::android::IBinder::FIRST_CALL_TRANSACTION + 29 /* removeTask */:
+  case ::android::IBinder::FIRST_CALL_TRANSACTION + 21 /* removeTask */:
   {
     int32_t in_taskId;
     bool _aidl_return;
@@ -185,7 +185,7 @@ namespace app {
     }
   }
   break;
-  case ::android::IBinder::FIRST_CALL_TRANSACTION + 30 /* removeAllVisibleRecentTasks */:
+  case ::android::IBinder::FIRST_CALL_TRANSACTION + 22 /* removeAllVisibleRecentTasks */:
   {
     if (!(_aidl_data.checkInterface(this))) {
       _aidl_ret_status = ::android::BAD_TYPE;
