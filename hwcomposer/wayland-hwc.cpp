@@ -72,6 +72,7 @@
 #include "pointer-constraints-unstable-v1-client-protocol.h"
 #include "relative-pointer-unstable-v1-client-protocol.h"
 #include "idle-inhibit-unstable-v1-client-protocol.h"
+#include "fractional-scale-v1-client-protocol.h"
 
 using ::android::hardware::hidl_string;
 
@@ -320,8 +321,10 @@ void snapshot_inactive_app_window(struct display *display, struct window *window
         wl_surface_damage_buffer(surface, 0, 0, new_buf->width, new_buf->height);
     else
         wl_surface_damage(surface, 0, 0, new_buf->width, new_buf->height);
-    if (!display->viewporter && display->scale > 1)
-        wl_surface_set_buffer_scale(surface, display->scale);
+    if (!display->viewporter && display->scale > 1) {
+        // With no viewporter the scale is guaranteed to be integer
+        wl_surface_set_buffer_scale(surface, (int)display->scale);
+    }
     wl_surface_commit(surface);
 
     window->snapshot_buffer = new_buf;
@@ -337,6 +340,18 @@ xdg_surface_handle_configure(void *, struct xdg_surface *surface,
 static const struct xdg_surface_listener xdg_surface_listener = {
     xdg_surface_handle_configure,
 };
+
+
+static void
+finished_computing_scale(struct display *d)
+{
+    char property[PROPERTY_VALUE_MAX];
+    int default_density = 180;
+    property_set("waydroid.display_scale", std::to_string(d->scale).c_str());
+    if (property_get("ro.sf.lcd_density", property, nullptr) <= 0) {
+        property_set("ro.sf.lcd_density", std::to_string(int(default_density * d->scale)).c_str());
+    }
+}
 
 void choose_width_height(struct display* display, int32_t hint_width, int32_t hint_height) {
     char property[PROPERTY_VALUE_MAX];
@@ -492,6 +507,21 @@ destroy_window(struct window *window, bool keep)
         delete window;
 }
 
+static void fractional_scale_handle_preferred_scale(void *data, struct wp_fractional_scale_v1 *,
+            uint32_t scale_times_120) {
+    struct display *display = (struct display *)data;
+    if (!display->viewporter) {
+        // We should always have the viewporter if we have the fractional scale manager
+        // but for debugging purpuses we may decide to disable one
+        return;
+    }
+    display->scale = scale_times_120 / 120.0;
+}
+
+static const struct wp_fractional_scale_v1_listener fractional_scale_listener = {
+    .preferred_scale = fractional_scale_handle_preferred_scale
+};
+
 struct window *
 create_window(struct display *display, bool use_subsurfaces, std::string appID, std::string taskID, hwc_color_t color)
 {
@@ -509,6 +539,8 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
     window->bg_buffer = NULL;
     window->bg_surface = NULL;
     window->bg_subsurface = NULL;
+
+    bool calibrating = !display->height || !display->width;
 
     if (display->wm_base) {
         window->xdg_surface =
@@ -554,6 +586,16 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
         assert(0);
     }
 
+    if (calibrating && display->fractional_scale_manager) {
+        // We only support one global scale
+        wp_fractional_scale_v1* fs = wp_fractional_scale_manager_v1_get_fractional_scale(
+                display->fractional_scale_manager, window->surface);
+        wp_fractional_scale_v1_add_listener(fs, &fractional_scale_listener, display);
+        wl_display_roundtrip(display->display);
+        wp_fractional_scale_v1_destroy(fs);
+    }
+    finished_computing_scale(display);
+
     wl_surface_commit(window->surface);
 
     /* Here we retrieve objects if executed without immed, or error */
@@ -562,7 +604,7 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
 
     // Wait for configure event if necessary
     pthread_mutex_lock(&display->data_mutex);
-    if (!display->height || !display->width) {
+    if (calibrating) {
         struct timespec timeToWait;
         struct timeval now;
         gettimeofday(&now, NULL);
@@ -822,9 +864,9 @@ pointer_handle_motion(void *data, struct wl_pointer *,
     }
     x = wl_fixed_to_int(sx);
     y = wl_fixed_to_int(sy);
-    if (display->scale > 1) {
-        x *= display->scale;
-        y *= display->scale;
+    if (display->scale != 1) {
+        x = int(x * display->scale);
+        y = int(y * display->scale);
     }
     x += display->layers[display->pointer_surface].x;
     y += display->layers[display->pointer_surface].y;
@@ -1044,9 +1086,9 @@ touch_handle_down(void *data, struct wl_touch *,
     }
     x = wl_fixed_to_int(x_w);
     y = wl_fixed_to_int(y_w);
-    if (display->scale > 1) {
-        x *= display->scale;
-        y *= display->scale;
+    if (display->scale != 1) {
+        x = int(x * display->scale);
+        y = int(y * display->scale);
     }
     x += display->layers[surface].x;
     y += display->layers[surface].y;
@@ -1109,9 +1151,9 @@ touch_handle_motion(void *data, struct wl_touch *,
     }
     x = wl_fixed_to_int(x_w);
     y = wl_fixed_to_int(y_w);
-    if (display->scale > 1) {
-        x *= display->scale;
-        y *= display->scale;
+    if (display->scale != 1) {
+        x = int(x * display->scale);
+        y = int(y * display->scale);
     }
     x += display->layers[display->touch_surfaces[id]].x;
     y += display->layers[display->touch_surfaces[id]].y;
@@ -1358,18 +1400,7 @@ output_handle_scale(void *data, struct wl_output *,
             int32_t scale)
 {
     struct display *d = (struct display*)data;
-    d->scale = std::max(d->scale, scale);
-}
-
-static void
-outputs_finished_all(struct display *d)
-{
-    char property[PROPERTY_VALUE_MAX];
-    int default_density = 180;
-    property_set("waydroid.display_scale", std::to_string(d->scale).c_str());
-    if (property_get("ro.sf.lcd_density", property, nullptr) <= 0) {
-        property_set("ro.sf.lcd_density", std::to_string(default_density * d->scale).c_str());
-    }
+    d->scale = std::max((int)d->scale, scale);
 }
 
 static const struct wl_output_listener output_listener = {
@@ -1585,9 +1616,9 @@ tablet_tool_motion(void *data, struct zwp_tablet_tool_v2 *,
     }
     x = wl_fixed_to_int(x_w);
     y = wl_fixed_to_int(y_w);
-    if (display->scale > 1) {
-        x *= display->scale;
-        y *= display->scale;
+    if (display->scale != 1) {
+        x = int(x * display->scale);
+        y = int(y * display->scale);
     }
     x += display->layers[display->tablet_surface].x;
     y += display->layers[display->tablet_surface].y;
@@ -1806,7 +1837,6 @@ registry_handle_global(void *data, struct wl_registry *registry,
                 &wl_output_interface, std::min(version, 3U));
         wl_output_add_listener(d->output, &output_listener, d);
         wl_display_roundtrip(d->display);
-        outputs_finished_all(d);
     } else if (strcmp(interface, "wp_presentation") == 0) {
         bool no_presentation = property_get_bool("persist.waydroid.no_presentation", false);
         if (!no_presentation) {
@@ -1843,6 +1873,9 @@ registry_handle_global(void *data, struct wl_registry *registry,
     } else if (strcmp(interface, "zwp_idle_inhibit_manager_v1") == 0) {
         d->idle_manager = (struct zwp_idle_inhibit_manager_v1 *)wl_registry_bind(
                 registry, id, &zwp_idle_inhibit_manager_v1_interface, 1);
+    } else if (strcmp(interface, wp_fractional_scale_manager_v1_interface.name) == 0) {
+        d->fractional_scale_manager = (struct wp_fractional_scale_manager_v1*)wl_registry_bind(registry, id,
+                &wp_fractional_scale_manager_v1_interface, 1);
     }
 }
 

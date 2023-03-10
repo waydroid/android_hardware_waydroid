@@ -120,8 +120,9 @@ struct display {
     struct zwp_relative_pointer_manager_v1 *relative_pointer_manager;
     struct zwp_relative_pointer_v1 *relative_pointer;
     struct zwp_idle_inhibit_manager_v1 *idle_manager;
+    struct wp_fractional_scale_manager_v1 *fractional_scale_manager;
     int gtype;
-    int scale;
+    double scale;
     pthread_mutex_t data_mutex;
     pthread_cond_t data_available_cond;
     bool waiting_for_data;

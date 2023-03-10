@@ -241,8 +241,8 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
 static void setup_viewport_destination(wp_viewport *viewport, hwc_rect_t frame, struct display *display)
 {
     wp_viewport_set_destination(viewport,
-            fmax(1, ceil((frame.right - frame.left) / (double)display->scale)),
-            fmax(1, ceil((frame.bottom - frame.top) / (double)display->scale)));
+            fmax(1, ceil((frame.right - frame.left) / display->scale)),
+            fmax(1, ceil((frame.bottom - frame.top) / display->scale)));
 }
 
 static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, struct window *window, bool multi)
@@ -286,19 +286,19 @@ static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pde
 
     if (pdev->display->viewporter) {
         wp_viewport_set_source(window->viewports[window->lastLayer],
-                               wl_fixed_from_double(fmax(0, pdev->display->viewporter ? sourceCrop.left : sourceCrop.left / (double)pdev->display->scale)),
-                               wl_fixed_from_double(fmax(0, pdev->display->viewporter ? sourceCrop.top : sourceCrop.top / (double)pdev->display->scale)),
+                               wl_fixed_from_double(fmax(0, pdev->display->viewporter ? sourceCrop.left : sourceCrop.left / pdev->display->scale)),
+                               wl_fixed_from_double(fmax(0, pdev->display->viewporter ? sourceCrop.top : sourceCrop.top / pdev->display->scale)),
                                wl_fixed_from_double(fmax(1, pdev->display->viewporter ? (sourceCrop.right - sourceCrop.left) :
-                                                                                        (sourceCrop.right - sourceCrop.left) / (double)pdev->display->scale)),
+                                                                                        (sourceCrop.right - sourceCrop.left) / pdev->display->scale)),
                                wl_fixed_from_double(fmax(1, pdev->display->viewporter ? (sourceCrop.bottom - sourceCrop.top) :
-                                                                                        (sourceCrop.bottom - sourceCrop.top) / (double)pdev->display->scale)));
+                                                                                        (sourceCrop.bottom - sourceCrop.top) / pdev->display->scale)));
 
         setup_viewport_destination(window->viewports[window->lastLayer], layer->displayFrame, pdev->display);
     }
 
     wl_subsurface_set_position(window->subsurfaces[window->lastLayer],
-                               floor(layer->displayFrame.left / (double)pdev->display->scale),
-                               floor(layer->displayFrame.top / (double)pdev->display->scale));
+                               floor(layer->displayFrame.left / pdev->display->scale),
+                               floor(layer->displayFrame.top / pdev->display->scale));
 
     pdev->display->layers[window->surfaces[window->lastLayer]] = {
         .x = layer->displayFrame.left,
@@ -728,9 +728,10 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                         wl_surface_damage_buffer(pdev->display->cursor_surface, 0, 0, buf->width, buf->height);
                     else
                         wl_surface_damage(pdev->display->cursor_surface, 0, 0, buf->width, buf->height);
-                    if (!pdev->display->viewporter && pdev->display->scale > 1)
-                        wl_surface_set_buffer_scale(pdev->display->cursor_surface, pdev->display->scale);
-                    else if (pdev->display->viewporter && pdev->display->scale > 1) {
+                    if (!pdev->display->viewporter && pdev->display->scale > 1) {
+                        // With no viewporter the scale is guaranteed to be integer
+                        wl_surface_set_buffer_scale(pdev->display->cursor_surface, (int)pdev->display->scale);
+                    } else if (pdev->display->viewporter && pdev->display->scale != 1) {
                         setup_viewport_destination(pdev->display->cursor_viewport, fb_layer->displayFrame, pdev->display);
                     }
 
@@ -799,8 +800,10 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             wl_surface_damage_buffer(surface, 0, 0, buf->width, buf->height);
         else
             wl_surface_damage(surface, 0, 0, buf->width, buf->height);
-        if (!pdev->display->viewporter && pdev->display->scale > 1)
-            wl_surface_set_buffer_scale(surface, pdev->display->scale);
+        if (!pdev->display->viewporter && pdev->display->scale > 1) {
+            // With no viewporter the scale is guaranteed to be integer
+            wl_surface_set_buffer_scale(surface, (int)pdev->display->scale);
+        }
         switch (fb_layer->transform) {
             case HWC_TRANSFORM_FLIP_H:
                 wl_surface_set_buffer_transform(surface, WL_OUTPUT_TRANSFORM_FLIPPED_180);
@@ -961,8 +964,8 @@ static int hwc_get_display_configs(struct hwc_composer_device_1* dev __unused,
 static int32_t hwc_attribute(struct waydroid_hwc_composer_device_1* pdev,
                              const uint32_t attribute) {
     char property[PROPERTY_VALUE_MAX];
-    int width = pdev->display->width * pdev->display->scale;
-    int height = pdev->display->height * pdev->display->scale;
+    int width = floor(pdev->display->width * pdev->display->scale);
+    int height = floor(pdev->display->height * pdev->display->scale);
     int density = 180;
 
     switch(attribute) {
