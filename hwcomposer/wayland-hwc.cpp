@@ -536,11 +536,6 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
         if (appID != "Waydroid")
             appID = "waydroid." + appID;
         xdg_toplevel_set_app_id(window->xdg_toplevel, appID.c_str());
-        wl_surface_commit(window->surface);
-
-        /* Here we retrieve objects if executed without immed, or error */
-        wl_display_roundtrip(display->display);
-        wl_surface_commit(window->surface);
     } else if (display->shell) {
         window->shell_surface =
             wl_shell_get_shell_surface(display->shell, window->surface);
@@ -557,15 +552,15 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
                                       { wl_shell_surface_set_title(window->shell_surface, value.c_str()); });
         else
             wl_shell_surface_set_title(window->shell_surface, appID.c_str());
-
-        wl_surface_commit(window->surface);
-
-        /* Here we retrieve objects if executed without immed, or error */
-        wl_display_roundtrip(display->display);
-        wl_surface_commit(window->surface);
     } else {
         assert(0);
     }
+
+    wl_surface_commit(window->surface);
+
+    /* Here we retrieve objects if executed without immed, or error */
+    wl_display_roundtrip(display->display);
+    wl_surface_commit(window->surface);
 
     // Wait for configure event if necessary
     pthread_mutex_lock(&display->data_mutex);
