@@ -347,15 +347,11 @@ void choose_width_height(struct display* display, int32_t hint_width, int32_t hi
     if (property_get("persist.waydroid.width", property, nullptr) > 0) {
         display->isMaximized = false;
         width = atoi(property);
-    } else if (display->scale > 1) {
-        width *= display->scale;
     }
 
     if (property_get("persist.waydroid.height", property, nullptr) > 0) {
         display->isMaximized = false;
         height = atoi(property);
-    } else if (display->scale > 1) {
-        height *= display->scale;
     }
 
     display->width = width;
@@ -577,6 +573,11 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
                                    &display->data_mutex, &timeToWait);
             display->waiting_for_data = false;
         }
+
+        if (!display->height || !display->width) {
+            display->height = display->full_height;
+            display->width = display->full_width;
+        }
     }
     pthread_mutex_unlock(&display->data_mutex);
 
@@ -615,18 +616,18 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
     if (display->viewporter) {
         window->bg_viewport = wp_viewporter_get_viewport(display->viewporter, surface);
         wp_viewport_set_source(window->bg_viewport, wl_fixed_from_int(0), wl_fixed_from_int(0), wl_fixed_from_int(1), wl_fixed_from_int(1));
-        wp_viewport_set_destination(window->bg_viewport, display->width / display->scale, display->height / display->scale);
+        wp_viewport_set_destination(window->bg_viewport, display->width, display->height);
     }
 
     if (display->wm_base)
-        xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width / display->scale, display->height / display->scale);
+        xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width, display->height);
 
     struct wl_region *region = wl_compositor_create_region(display->compositor);
     if (color.a == 0) {
         wl_surface_set_input_region(surface, region);
     }
     if (color.a == 255) {
-        wl_region_add(region, 0, 0, display->width / display->scale, display->height / display->scale);
+        wl_region_add(region, 0, 0, display->width, display->height);
         wl_surface_set_opaque_region(surface, region);
     }
     wl_region_destroy(region);
@@ -1319,8 +1320,6 @@ output_handle_mode(void *data, struct wl_output *,
     d->full_width = width;
     d->full_height = height;
     d->refresh = refresh;
-    property_set("waydroid.full_display_width", std::to_string(width).c_str());
-    property_set("waydroid.full_display_height", std::to_string(height).c_str());
 }
 
 static void
