@@ -53,7 +53,7 @@ using ::android::hardware::joinRpcThreadpool;
 
 using ::vendor::waydroid::display::V1_1::IWaydroidDisplay;
 using ::vendor::waydroid::display::V1_1::implementation::WaydroidDisplay;
-using ::vendor::waydroid::window::V1_0::IWaydroidWindow;
+using ::vendor::waydroid::window::V1_1::IWaydroidWindow;
 using ::vendor::waydroid::window::implementation::WaydroidWindow;
 
 using ::android::OK;

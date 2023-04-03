@@ -48,6 +48,7 @@
 #include <semaphore.h>
 #include <hardware/hwcomposer.h>
 #include <vendor/waydroid/task/1.0/IWaydroidTask.h>
+#include <wayland-util.h>
 
 #define EGL_EGLEXT_PROTOTYPES
 #include <EGL/egl.h>
@@ -114,6 +115,9 @@ struct display {
     struct xdg_wm_base *wm_base;
     struct zwp_tablet_manager_v2* tablet_manager;
     struct zwp_tablet_seat_v2 *tablet_seat;
+    struct zwp_pointer_constraints_v1 *pointer_constraints;
+    struct zwp_relative_pointer_manager_v1 *relative_pointer_manager;
+    struct zwp_relative_pointer_v1 *relative_pointer;
     int gtype;
     int scale;
     pthread_mutex_t data_mutex;
@@ -187,6 +191,7 @@ struct window {
     struct wl_buffer *bg_buffer;
     struct wl_surface *bg_surface;
     struct wl_subsurface *bg_subsurface;
+    struct zwp_locked_pointer_v1 *locked_pointer;
     std::map<size_t, struct wl_surface *> surfaces;
     std::map<size_t, struct wl_subsurface *> subsurfaces;
     std::map<size_t, struct wp_viewport *> viewports;
@@ -198,6 +203,10 @@ struct window {
     std::string taskID;
     bool isActive;
 };
+
+void
+handle_relative_motion(void *data, struct zwp_relative_pointer_v1*,
+        uint32_t, uint32_t, wl_fixed_t dx, wl_fixed_t dy, wl_fixed_t, wl_fixed_t);
 
 void
 destroy_buffer(struct buffer* buf);
