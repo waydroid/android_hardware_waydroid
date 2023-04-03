@@ -69,6 +69,8 @@
 #include "presentation-time-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
 #include "tablet-unstable-v2-client-protocol.h"
+#include "pointer-constraints-unstable-v1-client-protocol.h"
+#include "relative-pointer-unstable-v1-client-protocol.h"
 
 using ::android::hardware::hidl_string;
 
@@ -811,6 +813,44 @@ pointer_handle_motion(void *data, struct wl_pointer *,
     ADD_EVENT(EV_SYN, SYN_REPORT, 0);
     display->ptrPrvX = x;
     display->ptrPrvY = y;
+
+    res = write(display->input_fd[INPUT_POINTER], &event, sizeof(event));
+    if (res < sizeof(event))
+        ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+}
+
+void
+handle_relative_motion(void *data, struct zwp_relative_pointer_v1*,
+        uint32_t, uint32_t, wl_fixed_t dx, wl_fixed_t dy, wl_fixed_t, wl_fixed_t)
+{
+    struct display *display = (struct display *)data;
+    struct input_event event[3];
+    struct timespec rt;
+    unsigned int res, n = 0;
+
+    static double acc_x = 0;
+    static double acc_y = 0;
+
+    if (ensure_pipe(display, INPUT_POINTER))
+        return;
+
+    acc_x += wl_fixed_to_double(dx);
+    acc_y += wl_fixed_to_double(dy);
+
+    if (abs(acc_x) < 1 && abs(acc_y) < 1)
+        return;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+        ALOGE("%s:%d error in touch clock_gettime: %s",
+              __FILE__, __LINE__, strerror(errno));
+    }
+
+    ADD_EVENT(EV_REL, REL_X, (int)acc_x);
+    ADD_EVENT(EV_REL, REL_Y, (int)acc_y);
+    ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+
+    acc_x -= (int)acc_x;
+    acc_y -= (int)acc_y;
 
     res = write(display->input_fd[INPUT_POINTER], &event, sizeof(event));
     if (res < sizeof(event))
@@ -1754,6 +1794,12 @@ registry_handle_global(void *data, struct wl_registry *registry,
                 &zwp_tablet_manager_v2_interface, 1);
         if (d->tablet_manager && d->seat)
             add_tablet_seat(d);
+    } else if (strcmp(interface, "zwp_pointer_constraints_v1") == 0) {
+        d->pointer_constraints = (struct zwp_pointer_constraints_v1 *)wl_registry_bind(
+                registry, id, &zwp_pointer_constraints_v1_interface, 1);
+    } else if (strcmp(interface, "zwp_relative_pointer_manager_v1") == 0) {
+        d->relative_pointer_manager = (struct zwp_relative_pointer_manager_v1 *)wl_registry_bind(
+                registry, id, &zwp_relative_pointer_manager_v1_interface, 1);
     }
 }
 
@@ -1835,6 +1881,12 @@ destroy_display(struct display *display)
         zwp_tablet_seat_v2_destroy(display->tablet_seat);
         zwp_tablet_manager_v2_destroy(display->tablet_manager);
     }
+
+    if (display->relative_pointer_manager)
+        zwp_relative_pointer_manager_v1_destroy(display->relative_pointer_manager);
+
+    if (display->pointer_constraints)
+        zwp_pointer_constraints_v1_destroy(display->pointer_constraints);
 
     wl_registry_destroy(display->registry);
     wl_display_flush(display->display);
