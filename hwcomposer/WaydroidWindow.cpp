@@ -21,7 +21,10 @@
 #include "pointer-constraints-unstable-v1-client-protocol.h"
 #include "relative-pointer-unstable-v1-client-protocol.h"
 
-namespace vendor::waydroid::window::implementation {
+namespace vendor {
+namespace waydroid {
+namespace window {
+namespace implementation {
 
 WaydroidWindow::WaydroidWindow(struct display *display)
     : mDisplay(display)
@@ -100,4 +103,7 @@ Return<void> WaydroidWindow::setPointerCapture(const hidl_string& packageName, b
     return Void();
 }
 
-}  // namespace vendor::waydroid::window::implementation
+}  // namespace implementation
+}  // namespace window
+}  // namespace waydroid
+}  // namespace vendor

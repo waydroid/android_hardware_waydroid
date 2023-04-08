@@ -22,7 +22,10 @@
 
 #include "wayland-hwc.h"
 
-namespace vendor::waydroid::window::implementation {
+namespace vendor {
+namespace waydroid {
+namespace window {
+namespace implementation {
 
 using ::android::hardware::hidl_array;
 using ::android::hardware::hidl_memory;
@@ -44,4 +47,7 @@ struct WaydroidWindow : public V1_1::IWaydroidWindow {
     struct display *mDisplay;
 };
 
-}  // namespace vendor::waydroid::window::implementation
+}  // namespace implementation
+}  // namespace window
+}  // namespace waydroid
+}  // namespace vendor
