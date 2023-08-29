@@ -423,6 +423,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
     }
 
+
     /*
      * In prop "persist.waydroid.multi_windows" we detect HWC let SF rander layers 
      * And just show the target client layer (single windows mode) or
@@ -443,6 +444,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     std::string blacklist_apps = std::string(property);
     std::string single_layer_tid;
     std::string single_layer_aid;
+
+    std::lock_guard<std::mutex> lock(pdev->display->windowsMutex);
     if (active_apps == "none") {
         // Clear all open windows
         for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
