@@ -17,9 +17,12 @@
 #include "WaydroidWindow.h"
 
 #include <cutils/properties.h>
+#include <log/log.h>
+
 #include "xdg-shell-client-protocol.h"
 #include "pointer-constraints-unstable-v1-client-protocol.h"
 #include "relative-pointer-unstable-v1-client-protocol.h"
+#include "idle-inhibit-unstable-v1-client-protocol.h"
 
 namespace vendor::waydroid::window::implementation {
 
@@ -93,6 +96,36 @@ Return<void> WaydroidWindow::setPointerCapture(const hidl_string& packageName, b
                     zwp_relative_pointer_v1_destroy(mDisplay->relative_pointer);
                     mDisplay->relative_pointer = nullptr;
                 }
+            }
+            break;
+        }
+    }
+    return Void();
+}
+
+// Methods from ::vendor::waydroid::window::V1_2::IWaydroidWindow follow.
+Return<void> WaydroidWindow::setIdleInhibit(const hidl_string& task, bool enabled) {
+    char property[PROPERTY_VALUE_MAX];
+    std::string taskID = task;
+
+    if (!mDisplay->idle_manager)
+        return Void();
+
+    property_get("waydroid.active_apps", property, "Waydroid");
+    if (!strcmp(property, "Waydroid"))
+        taskID = "0";
+
+    for (auto it = mDisplay->windows.begin(); it != mDisplay->windows.end(); it++) {
+        struct window* window = it->second;
+        if (window && window->isActive && (window->taskID == taskID || taskID == "*")) {
+            ALOGI("%sinhibiting sleep from %s#%s", enabled ? "" : "not ", window->appID.c_str(), window->taskID.c_str());
+            if (enabled && window->idle_inhibitor == nullptr) {
+                window->idle_inhibitor = zwp_idle_inhibit_manager_v1_create_inhibitor(
+                        mDisplay->idle_manager,
+                        window->surface);
+            } else if (!enabled && window->idle_inhibitor != nullptr) {
+                zwp_idle_inhibitor_v1_destroy(window->idle_inhibitor);
+                window->idle_inhibitor = nullptr;
             }
             break;
         }
