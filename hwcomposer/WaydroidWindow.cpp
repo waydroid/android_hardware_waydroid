@@ -46,6 +46,7 @@ Return<bool> WaydroidWindow::minimize(const hidl_string& packageName) {
     if (!strcmp(property, "Waydroid"))
         return false;
 
+    std::scoped_lock lock(mDisplay->windowsMutex);
     for (auto it = mDisplay->windows.begin(); it != mDisplay->windows.end(); it++) {
         struct window* window = it->second;
         if (window && window->appID == packageName) {
@@ -68,6 +69,7 @@ Return<void> WaydroidWindow::setPointerCapture(const hidl_string& packageName, b
     if (!strcmp(property, "Waydroid"))
         windowName = "Waydroid";
 
+    std::scoped_lock lock(mDisplay->windowsMutex);
     for (auto it = mDisplay->windows.begin(); it != mDisplay->windows.end(); it++) {
         struct window* window = it->second;
         if (window && window->appID == windowName) {
@@ -115,6 +117,7 @@ Return<void> WaydroidWindow::setIdleInhibit(const hidl_string& task, bool enable
     if (!strcmp(property, "Waydroid"))
         taskID = "0";
 
+    std::scoped_lock lock(mDisplay->windowsMutex);
     for (auto it = mDisplay->windows.begin(); it != mDisplay->windows.end(); it++) {
         struct window* window = it->second;
         if (window && window->isActive && (window->taskID == taskID || taskID == "*")) {

@@ -404,6 +404,8 @@ xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
             }
         }
     }
+
+    std::scoped_lock lock(window->display->windowsMutex);
     destroy_window(window, true);
 }
 
