@@ -118,6 +118,7 @@ struct display {
     struct zwp_pointer_constraints_v1 *pointer_constraints;
     struct zwp_relative_pointer_manager_v1 *relative_pointer_manager;
     struct zwp_relative_pointer_v1 *relative_pointer;
+    struct zwp_idle_inhibit_manager_v1 *idle_manager;
     int gtype;
     int scale;
     pthread_mutex_t data_mutex;
@@ -192,6 +193,7 @@ struct window {
     struct wl_surface *bg_surface;
     struct wl_subsurface *bg_subsurface;
     struct zwp_locked_pointer_v1 *locked_pointer;
+    struct zwp_idle_inhibitor_v1 *idle_inhibitor;
     std::map<size_t, struct wl_surface *> surfaces;
     std::map<size_t, struct wl_subsurface *> subsurfaces;
     std::map<size_t, struct wp_viewport *> viewports;

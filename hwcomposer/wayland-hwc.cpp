@@ -71,6 +71,7 @@
 #include "tablet-unstable-v2-client-protocol.h"
 #include "pointer-constraints-unstable-v1-client-protocol.h"
 #include "relative-pointer-unstable-v1-client-protocol.h"
+#include "idle-inhibit-unstable-v1-client-protocol.h"
 
 using ::android::hardware::hidl_string;
 
@@ -1800,6 +1801,9 @@ registry_handle_global(void *data, struct wl_registry *registry,
     } else if (strcmp(interface, "zwp_relative_pointer_manager_v1") == 0) {
         d->relative_pointer_manager = (struct zwp_relative_pointer_manager_v1 *)wl_registry_bind(
                 registry, id, &zwp_relative_pointer_manager_v1_interface, 1);
+    } else if (strcmp(interface, "zwp_idle_inhibit_manager_v1") == 0) {
+        d->idle_manager = (struct zwp_idle_inhibit_manager_v1 *)wl_registry_bind(
+                registry, id, &zwp_idle_inhibit_manager_v1_interface, 1);
     }
 }
 
