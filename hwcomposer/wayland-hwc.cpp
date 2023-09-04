@@ -1267,16 +1267,27 @@ static const struct wl_seat_listener seat_listener = {
     seat_handle_name,
 };
 
+static void dmabuf_format(void *, struct zwp_linux_dmabuf_v1 *, uint32_t);
 static void
-dmabuf_modifiers(void *data, struct zwp_linux_dmabuf_v1 *,
-         uint32_t format, uint32_t, uint32_t)
+dmabuf_modifiers(void *data, struct zwp_linux_dmabuf_v1 * dmabuf,
+         uint32_t format, uint32_t modifier_hi, uint32_t modifier_lo)
 {
-    struct display *d = (struct display*)data;
+    dmabuf_format(data, dmabuf, format);
 
-    ++d->formats_count;
-    d->formats = (uint32_t*)realloc(d->formats,
-                    d->formats_count * sizeof(*d->formats));
-    d->formats[d->formats_count - 1] = format;
+    struct display *d = (struct display*)data;
+    uint64_t modifier = ((uint64_t)modifier_hi << 32) | modifier_lo;
+    if (modifier == DRM_FORMAT_MOD_INVALID)
+        return;
+
+    std::stringstream prop_name_stream;
+    std::stringstream prop_value_stream;
+    prop_name_stream << "waydroid.modifiers." << std::hex << format << "." << std::dec << d->modifiers[format].size();
+    prop_value_stream << std::hex << modifier;
+    std::string prop_name = prop_name_stream.str();
+    std::string prop_value = prop_value_stream.str();
+    property_set(prop_name.c_str(), prop_value.c_str());
+
+    d->modifiers[format].push_back(modifier);
 }
 
 static void
