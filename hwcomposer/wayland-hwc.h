@@ -156,6 +156,7 @@ struct display {
     int refresh;
     uint32_t *formats;
     int formats_count;
+    std::map<uint32_t, std::vector<uint64_t>> modifiers;
     bool geo_changed;
     std::map<uint32_t, std::string> layer_names;
     std::map<uint32_t, struct handleExt> layer_handles_ext;

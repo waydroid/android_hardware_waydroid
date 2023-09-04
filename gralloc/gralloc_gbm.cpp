@@ -45,12 +45,15 @@
 #include <android/gralloc_handle.h>
 
 #include <unordered_map>
+#include <sstream>
+#include <vector>
 
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
 
 #define unlikely(x) __builtin_expect(!!(x), 0)
 
 static std::unordered_map<buffer_handle_t, struct gbm_bo *> gbm_bo_handle_map;
+static std::unordered_map<uint32_t, std::vector<uint64_t>> gbm_format_modifiers_map;
 
 struct bo_data_t {
 	void *map_data;
@@ -70,6 +73,36 @@ static struct bo_data_t *gbm_bo_data(struct gbm_bo *bo) {
 	return (struct bo_data_t *)gbm_bo_get_user_data(bo);
 }
 
+
+static std::vector<uint64_t> get_supported_modifiers(struct gbm_device *gbm, uint32_t format) {
+	if (gbm_format_modifiers_map.find(format) != gbm_format_modifiers_map.end()) {
+		return gbm_format_modifiers_map[format];
+	}
+
+	// Create empty default so we can match it next time
+	std::vector<uint64_t> &modifiers = gbm_format_modifiers_map[format];
+
+	std::stringstream prop_name_stream;
+	prop_name_stream << "waydroid.modifiers." << std::hex << format << ".";
+	std::string prop_name_base = prop_name_stream.str();
+	char modifier_prop[PROPERTY_VALUE_MAX];
+	int i = 0;
+	while (true) {
+		std::string prop_name = (std::stringstream() << prop_name_base << i).str();
+		if (property_get(prop_name.c_str(), modifier_prop, NULL) < 1)
+			break;
+		std::stringstream ss(modifier_prop);
+		uint64_t mod;
+		ss >> std::hex >> mod;
+
+		// Filter out multiplanar format-modifier combos
+		if (gbm_device_get_format_modifier_plane_count(gbm, format, mod) < 2)
+			modifiers.push_back(mod);
+		i++;
+	}
+
+	return modifiers;
+}
 
 static uint32_t get_gbm_format(int format)
 {
@@ -215,7 +248,7 @@ static struct gbm_bo *gbm_import(struct gbm_device *gbm,
 static struct gbm_bo *gbm_alloc(struct gbm_device *gbm,
 		buffer_handle_t _handle)
 {
-	struct gbm_bo *bo;
+	struct gbm_bo *bo = NULL;
 	struct gralloc_handle_t *handle = gralloc_handle(_handle);
 	int format = get_gbm_format(handle->format);
 	int usage = get_pipe_bind(handle->usage);
@@ -241,7 +274,14 @@ static struct gbm_bo *gbm_alloc(struct gbm_device *gbm,
 
 	ALOGV("create BO, size=%dx%d, fmt=%d, usage=%x",
 	      handle->width, handle->height, handle->format, usage);
-	bo = gbm_bo_create(gbm, width, height, format, usage);
+	std::vector<uint64_t> modifiers = get_supported_modifiers(gbm, format);
+	if (modifiers.size() > 0) {
+		bo = gbm_bo_create_with_modifiers2(gbm, width, height, format, modifiers.data(), modifiers.size(), usage);
+	}
+	if (!bo) {
+		ALOGV("fallback to gbm_bo_create without modifiers");
+		bo = gbm_bo_create(gbm, width, height, format, usage);
+	}
 	if (!bo) {
 		ALOGE("failed to create BO, size=%dx%d, fmt=%d, usage=%x",
 		      handle->width, handle->height, handle->format, usage);
