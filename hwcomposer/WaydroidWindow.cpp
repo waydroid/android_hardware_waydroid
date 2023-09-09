@@ -130,7 +130,6 @@ Return<void> WaydroidWindow::setIdleInhibit(const hidl_string& task, bool enable
                 zwp_idle_inhibitor_v1_destroy(window->idle_inhibitor);
                 window->idle_inhibitor = nullptr;
             }
-            break;
         }
     }
     return Void();
