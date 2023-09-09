@@ -479,6 +479,8 @@ destroy_window(struct window *window, bool keep)
 
         wl_surface_destroy(window->surface);
         wl_display_flush(window->display->display);
+
+        window->display->windows.erase(window->surface);
     }
     if (keep)
         window->isActive = false;
@@ -703,6 +705,7 @@ keyboard_handle_enter(void *data, struct wl_keyboard *,
 {
     struct display *display = (struct display *)data;
 
+    std::lock_guard<std::mutex> lock(display->windowsMutex);
     if (display->windows.find(surface) == display->windows.end())
         return;
 
