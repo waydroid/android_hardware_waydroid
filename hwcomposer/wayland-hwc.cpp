@@ -320,7 +320,7 @@ void snapshot_inactive_app_window(struct display *display, struct window *window
         wl_surface_damage_buffer(surface, 0, 0, new_buf->width, new_buf->height);
     else
         wl_surface_damage(surface, 0, 0, new_buf->width, new_buf->height);
-    if (display->scale > 1)
+    if (!display->viewporter && display->scale > 1)
         wl_surface_set_buffer_scale(surface, display->scale);
     wl_surface_commit(surface);
 
@@ -478,6 +478,8 @@ destroy_window(struct window *window, bool keep)
             wl_surface_destroy(window->bg_surface);
         if (window->bg_buffer)
             wl_buffer_destroy(window->bg_buffer);
+        if (window->viewport)
+            wp_viewport_destroy(window->viewport);
 
         wl_surface_destroy(window->surface);
         wl_display_flush(window->display->display);
