@@ -1327,10 +1327,13 @@ output_handle_mode(void *data, struct wl_output *,
                    int32_t refresh)
 {
     struct display *d = (struct display *)data;
+    d->refresh = std::max(d->refresh, refresh);
 
+    // Fallback size
+    // We can't do anything meaningful if there's more than one display, just pick one at random
+    // Hopefully these won't need to be used
     d->full_width = width;
     d->full_height = height;
-    d->refresh = refresh;
 }
 
 static void
@@ -1353,13 +1356,17 @@ output_handle_scale(void *data, struct wl_output *,
             int32_t scale)
 {
     struct display *d = (struct display*)data;
+    d->scale = std::max(d->scale, scale);
+}
+
+static void
+outputs_finished_all(struct display *d)
+{
     char property[PROPERTY_VALUE_MAX];
     int default_density = 180;
-
-    d->scale = scale;
-    property_set("waydroid.display_scale", std::to_string(scale).c_str());
+    property_set("waydroid.display_scale", std::to_string(d->scale).c_str());
     if (property_get("ro.sf.lcd_density", property, nullptr) <= 0) {
-        property_set("ro.sf.lcd_density", std::to_string(default_density * scale).c_str());
+        property_set("ro.sf.lcd_density", std::to_string(default_density * d->scale).c_str());
     }
 }
 
@@ -1797,6 +1804,7 @@ registry_handle_global(void *data, struct wl_registry *registry,
                 &wl_output_interface, std::min(version, 3U));
         wl_output_add_listener(d->output, &output_listener, d);
         wl_display_roundtrip(d->display);
+        outputs_finished_all(d);
     } else if (strcmp(interface, "wp_presentation") == 0) {
         bool no_presentation = property_get_bool("persist.waydroid.no_presentation", false);
         if (!no_presentation) {
