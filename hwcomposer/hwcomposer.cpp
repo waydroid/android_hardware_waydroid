@@ -229,6 +229,13 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
     return pdev->display->buffer_map[layer->handle];
 }
 
+static void setup_viewport_destination(wp_viewport *viewport, hwc_rect_t frame, struct display *display)
+{
+    wp_viewport_set_destination(viewport,
+            fmax(1, ceil((frame.right - frame.left) / (double)display->scale)),
+            fmax(1, ceil((frame.bottom - frame.top) / (double)display->scale)));
+}
+
 static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, struct window *window, bool multi)
 {
     pdev->display->windows[window->surface] = window;
@@ -236,6 +243,10 @@ static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pde
         pdev->display->layers[window->surface] = {
             .x = layer->displayFrame.left,
             .y = layer->displayFrame.top };
+        if (!multi && pdev->display->scale != 1 && pdev->display->viewporter && !window->viewport) {
+            window->viewport = wp_viewporter_get_viewport(pdev->display->viewporter, window->surface);
+            setup_viewport_destination(window->viewport, layer->displayFrame, pdev->display);
+        }
         return window->surface;
     }
 
@@ -266,14 +277,14 @@ static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pde
 
     if (pdev->display->viewporter) {
         wp_viewport_set_source(window->viewports[window->lastLayer],
-                               wl_fixed_from_double(fmax(0, sourceCrop.left / (double)pdev->display->scale)),
-                               wl_fixed_from_double(fmax(0, sourceCrop.top / (double)pdev->display->scale)),
-                               wl_fixed_from_double(fmax(1, (sourceCrop.right - sourceCrop.left) / (double)pdev->display->scale)),
-                               wl_fixed_from_double(fmax(1, (sourceCrop.bottom - sourceCrop.top) / (double)pdev->display->scale)));
+                               wl_fixed_from_double(fmax(0, pdev->display->viewporter ? sourceCrop.left : sourceCrop.left / (double)pdev->display->scale)),
+                               wl_fixed_from_double(fmax(0, pdev->display->viewporter ? sourceCrop.top : sourceCrop.top / (double)pdev->display->scale)),
+                               wl_fixed_from_double(fmax(1, pdev->display->viewporter ? (sourceCrop.right - sourceCrop.left) :
+                                                                                        (sourceCrop.right - sourceCrop.left) / (double)pdev->display->scale)),
+                               wl_fixed_from_double(fmax(1, pdev->display->viewporter ? (sourceCrop.bottom - sourceCrop.top) :
+                                                                                        (sourceCrop.bottom - sourceCrop.top) / (double)pdev->display->scale)));
 
-        wp_viewport_set_destination(window->viewports[window->lastLayer],
-                                    fmax(1, ceil((layer->displayFrame.right - layer->displayFrame.left) / (double)pdev->display->scale)),
-                                    fmax(1, ceil((layer->displayFrame.bottom - layer->displayFrame.top) / (double)pdev->display->scale)));
+        setup_viewport_destination(window->viewports[window->lastLayer], layer->displayFrame, pdev->display);
     }
 
     wl_subsurface_set_position(window->subsurfaces[window->lastLayer],
@@ -708,8 +719,11 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                         wl_surface_damage_buffer(pdev->display->cursor_surface, 0, 0, buf->width, buf->height);
                     else
                         wl_surface_damage(pdev->display->cursor_surface, 0, 0, buf->width, buf->height);
-                    if (pdev->display->scale > 1)
+                    if (!pdev->display->viewporter && pdev->display->scale > 1)
                         wl_surface_set_buffer_scale(pdev->display->cursor_surface, pdev->display->scale);
+                    else if (pdev->display->viewporter && pdev->display->scale > 1) {
+                        setup_viewport_destination(pdev->display->cursor_viewport, fb_layer->displayFrame, pdev->display);
+                    }
 
                     wl_surface_commit(pdev->display->cursor_surface);
 
@@ -776,7 +790,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             wl_surface_damage_buffer(surface, 0, 0, buf->width, buf->height);
         else
             wl_surface_damage(surface, 0, 0, buf->width, buf->height);
-        if (pdev->display->scale > 1)
+        if (!pdev->display->viewporter && pdev->display->scale > 1)
             wl_surface_set_buffer_scale(surface, pdev->display->scale);
         switch (fb_layer->transform) {
             case HWC_TRANSFORM_FLIP_H:
@@ -1155,9 +1169,15 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     if (pdev->display->refresh > 1000 && pdev->display->refresh < 1000000)
         pdev->vsync_period_ns = 1000 * 1000 * 1000 / (pdev->display->refresh / 1000);
 
-    if (!property_get_bool("persist.waydroid.cursor_on_subsurface", false))
+    if (!property_get_bool("persist.waydroid.cursor_on_subsurface", false)) {
         pdev->display->cursor_surface =
             wl_compositor_create_surface(pdev->display->compositor);
+        if (pdev->display->viewporter) {
+            pdev->display->cursor_viewport =
+                wp_viewporter_get_viewport(pdev->display->viewporter, pdev->display->cursor_surface);
+        }
+    }
+
 
     struct timespec rt;
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {

@@ -139,6 +139,7 @@ struct display {
     std::map<int, struct wl_surface *> touch_surfaces;
     struct wl_surface *pointer_surface;
     struct wl_surface *cursor_surface;
+    struct wp_viewport *cursor_viewport;
     struct wl_surface *tablet_surface;
     std::list<struct zwp_tablet_tool_v2 *> tablet_tools;
     std::map<struct zwp_tablet_tool_v2 *, uint16_t> tablet_tools_evt;
@@ -185,6 +186,7 @@ struct buffer {
 struct window {
     struct display *display;
     struct wl_surface *surface;
+    struct wp_viewport *viewport;
     struct wl_shell_surface *shell_surface;
     struct xdg_surface *xdg_surface;
     struct xdg_toplevel *xdg_toplevel;
