@@ -495,7 +495,7 @@ destroy_window(struct window *window, bool keep)
 }
 
 struct window *
-create_window(struct display *display, bool with_dummy, std::string appID, std::string taskID, hwc_color_t color)
+create_window(struct display *display, bool use_subsurfaces, std::string appID, std::string taskID, hwc_color_t color)
 {
     struct window *window = new struct window();
     if (!window)
@@ -581,7 +581,7 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
     pthread_mutex_unlock(&display->data_mutex);
 
     // No subsurface background for us!
-    if (!with_dummy && !display->subcompositor)
+    if (!use_subsurfaces && !display->subcompositor)
         return window;
 
     int fd = syscall(SYS_memfd_create, "buffer", 0);
@@ -601,7 +601,7 @@ create_window(struct display *display, bool with_dummy, std::string appID, std::
     close(fd);
 
     struct wl_surface *surface = window->surface;
-    if (!with_dummy) {
+    if (!use_subsurfaces) {
         surface = wl_compositor_create_surface(display->compositor);
         struct wl_subsurface *subsurface = wl_subcompositor_get_subsurface(display->subcompositor, surface, window->surface);
         wl_subsurface_place_below(subsurface, window->surface);
