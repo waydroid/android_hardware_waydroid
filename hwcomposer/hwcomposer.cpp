@@ -274,7 +274,6 @@ static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pde
     }
 
     if (pdev->display->viewporter) {
-        // can't correctly crop on other gralloc implementations yet
         wp_viewport_set_source(window->viewports[window->lastLayer],
                                wl_fixed_from_double(fmax(0, sourceCrop.left / (double)pdev->display->scale)),
                                wl_fixed_from_double(fmax(0, sourceCrop.top / (double)pdev->display->scale)),
