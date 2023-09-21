@@ -347,9 +347,11 @@ finished_computing_scale(struct display *d)
 {
     char property[PROPERTY_VALUE_MAX];
     int default_density = 180;
-    property_set("waydroid.display_scale", std::to_string(d->scale).c_str());
+    std::string display_scale = std::to_string(d->scale);
+    property_set("waydroid.display_scale", display_scale.c_str());
     if (property_get("ro.sf.lcd_density", property, nullptr) <= 0) {
-        property_set("ro.sf.lcd_density", std::to_string(int(default_density * d->scale)).c_str());
+        std::string lcd_density = std::to_string(int(default_density * d->scale));
+        property_set("ro.sf.lcd_density", lcd_density.c_str());
     }
 }
 
