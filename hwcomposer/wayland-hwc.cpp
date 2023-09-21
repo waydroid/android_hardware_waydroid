@@ -317,7 +317,7 @@ void snapshot_inactive_app_window(struct display *display, struct window *window
     egl_render_to_pixels(display, new_buf);
 
     wl_surface_attach(surface, new_buf->buffer, 0, 0);
-    if (wl_compositor_get_version(display->compositor) >= WL_SURFACE_DAMAGE_BUFFER_SINCE_VERSION)
+    if (wl_surface_get_version(surface) >= WL_SURFACE_DAMAGE_BUFFER_SINCE_VERSION)
         wl_surface_damage_buffer(surface, 0, 0, new_buf->width, new_buf->height);
     else
         wl_surface_damage(surface, 0, 0, new_buf->width, new_buf->height);
