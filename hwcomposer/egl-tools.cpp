@@ -177,7 +177,7 @@ void egl_init(struct display* display) {
     EGLContext ctx = eglCreateContext(display->egl_dpy, config,  EGL_NO_CONTEXT, context_attrs);
     ALOGI("eglCreateContext: %s", eglStrError(eglGetError()));
 
-    EGLint pbuf_attrs[] = { EGL_WIDTH, (EGLint)display->width, EGL_HEIGHT, (EGLint)display->height, EGL_NONE };
+    EGLint pbuf_attrs[] = { EGL_WIDTH, EGLint(display->width * display->scale), EGL_HEIGHT, EGLint(display->height * display->scale), EGL_NONE };
     EGLSurface pbuf = eglCreatePbufferSurface(display->egl_dpy, config, pbuf_attrs);
     ALOGI("eglCreatePbufferSurface: %s", eglStrError(eglGetError()));
 
