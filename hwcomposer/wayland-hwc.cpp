@@ -388,15 +388,11 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
 		return;
 	}
 
-    pthread_mutex_lock(&display->data_mutex);
     if (!display->width || !display->height) {
         choose_width_height(display, width, height);
         if (!display->isMaximized)
             xdg_toplevel_unset_maximized(window->xdg_toplevel);
-        if (display->waiting_for_data)
-            pthread_cond_broadcast(&display->data_available_cond);
     }
-    pthread_mutex_unlock(&display->data_mutex);
 }
 
 static void
@@ -448,13 +444,9 @@ shell_surface_configure(void *data, struct wl_shell_surface *, uint32_t, int32_t
 		return;
 	}
 
-    pthread_mutex_lock(&display->data_mutex);
     if (!display->width || !display->height) {
         choose_width_height(display, width, height);
-        if (display->waiting_for_data)
-            pthread_cond_broadcast(&display->data_available_cond);
     }
-    pthread_mutex_unlock(&display->data_mutex);
 }
 
 void
@@ -604,28 +596,14 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
     wl_display_roundtrip(display->display);
     wl_surface_commit(window->surface);
 
-    // Wait for configure event if necessary
-    pthread_mutex_lock(&display->data_mutex);
     if (calibrating) {
-        struct timespec timeToWait;
-        struct timeval now;
-        gettimeofday(&now, NULL);
-        timeToWait.tv_sec = now.tv_sec + 5;
-        timeToWait.tv_nsec = now.tv_usec * 1000UL;
-
-        while (!display->height || !display->width) {
-            display->waiting_for_data = true;
-            pthread_cond_timedwait(&display->data_available_cond,
-                                   &display->data_mutex, &timeToWait);
-            display->waiting_for_data = false;
-        }
-
-        if (!display->height || !display->width) {
+        // If we did not receive a window size from the compositor we have to fall back to using the whole output size
+        // At the time of writing this happens on wlroots compositors
+        if (!display->height)
             display->height = display->full_height;
+        if (!display->width)
             display->width = display->full_width;
-        }
     }
-    pthread_mutex_unlock(&display->data_mutex);
 
     // No subsurface background for us!
     if (!use_subsurfaces && !display->subcompositor)

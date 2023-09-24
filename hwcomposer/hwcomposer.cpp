@@ -1164,12 +1164,11 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     ALOGE("wayland display %p", pdev->display);
 
     pthread_mutex_init(&pdev->vsync_lock, NULL);
-    pthread_mutex_init(&pdev->display->data_mutex, NULL);
-    pthread_cond_init(&pdev->display->data_available_cond, NULL);
-    pdev->display->waiting_for_data = false;
     pdev->vsync_callback_enabled = true;
 
+    // Initialize width and height with user-provided overrides if any
     choose_width_height(pdev->display, 0, 0);
+
     auto first_window = create_window(pdev->display, pdev->use_subsurface, "Waydroid", "0", {0, 0, 0, 255});
     if (!property_get_bool("waydroid.background_start", true)) {
         pdev->windows["Waydroid"] = first_window;

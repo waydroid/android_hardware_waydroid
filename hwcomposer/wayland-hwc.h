@@ -122,9 +122,6 @@ struct display {
     struct wp_fractional_scale_manager_v1 *fractional_scale_manager;
     int gtype;
     double scale;
-    pthread_mutex_t data_mutex;
-    pthread_cond_t data_available_cond;
-    bool waiting_for_data;
 
     int input_fd[INPUT_TOTAL];
     int ptrPrvX;
