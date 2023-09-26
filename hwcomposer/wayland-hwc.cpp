@@ -600,9 +600,9 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
         // If we did not receive a window size from the compositor we have to fall back to using the whole output size
         // At the time of writing this happens on wlroots compositors
         if (!display->height)
-            display->height = display->full_height;
+            display->height = display->full_height / display->scale;
         if (!display->width)
-            display->width = display->full_width;
+            display->width = display->full_width / display->scale;
     }
 
     // No subsurface background for us!
