@@ -57,104 +57,6 @@ const char* eglStrError(EGLint err)
     }
 }
 
-const char *vertSource =
-    "precision mediump float;\n"
-    "attribute vec2 in_position;\n"
-    "attribute vec2 in_texcoord;\n"
-    "varying vec2 texcoord;\n"
-    "\n"
-    "void main()\n"
-    "{\n"
-    "   gl_Position = vec4(in_position, 0.0, 1.0);\n"
-    "   texcoord = in_texcoord;\n"
-    "}\n";
-
-const char *fragSource =
-    "precision mediump float;\n"
-    "varying vec2 texcoord;\n"
-    "uniform sampler2D texture;\n"
-    "\n"
-    "void main()\n"
-    "{\n"
-    "   gl_FragColor = texture2D(texture, texcoord);\n"
-    "}\n";
-
-GLint createProgram(const char* vs, const char* fs) {
-    GLint success = 0;
-    GLint logLength = 0;
-    char infoLog[1024];
-
-    GLint vertexShader = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vertexShader, 1, &vs, 0);
-    glCompileShader(vertexShader);
-    glGetShaderiv(vertexShader, GL_COMPILE_STATUS, &success);
-    if (!success)
-    {
-        glGetShaderInfoLog(vertexShader, sizeof(infoLog), &logLength, infoLog);
-        printf("Vertex shader compilation failed:\n%s\n", infoLog);
-    }
-
-    GLint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fragmentShader, 1, &fs, 0);
-    glCompileShader(fragmentShader);
-    glGetShaderiv(fragmentShader, GL_COMPILE_STATUS, &success);
-    if (!success)
-    {
-        glGetShaderInfoLog(fragmentShader, sizeof(infoLog), &logLength, infoLog);
-        printf("Fragment shader compilation failed:\n%s\n", infoLog);
-    }
-
-    GLint program = glCreateProgram();
-    glAttachShader(program, fragmentShader);
-    glAttachShader(program, vertexShader);
-    glLinkProgram(program);
-    glGetProgramiv(program, GL_LINK_STATUS, &success);
-    if (!success)
-    {
-        glGetProgramInfoLog(program, sizeof(infoLog), &logLength, infoLog);
-        printf("Program linking failed:\n%s\n", infoLog);
-    }
-    return program;
-}
-
-void drawQuad(int x, int y, int w, int h) {
-    GLint viewport[4];
-    glGetIntegerv(GL_VIEWPORT, viewport);
-    GLint program;
-
-    const GLfloat viewW = 0.5f * viewport[2];
-    const GLfloat viewH = 0.5f * viewport[3];
-    const GLfloat texW = 1.0f, texH = 1.0f;
-    const GLfloat quadX1 = x       / viewW - 1.0f, quadY1 = y       / viewH - 1.0f;
-    const GLfloat quadX2 = (x + w) / viewW - 1.0f, quadY2 = (y + h) / viewH - 1.0f;
-    const GLfloat texcoords[] =
-    {
-         0,       0,
-         0,       texH,
-         texW,    0,
-         texW,    texH
-    };
-
-    const GLfloat vertices[] =
-    {
-        quadX1, quadY1,
-        quadX1, quadY2,
-        quadX2, quadY1,
-        quadX2, quadY2,
-    };
-
-    glGetIntegerv(GL_CURRENT_PROGRAM, &program);
-    GLint positionAttr = glGetAttribLocation(program, "in_position");
-    GLint texcoordAttr = glGetAttribLocation(program, "in_texcoord");
-
-    glVertexAttribPointer(positionAttr, 2, GL_FLOAT, GL_FALSE, 0, vertices);
-    glVertexAttribPointer(texcoordAttr, 2, GL_FLOAT, GL_FALSE, 0, texcoords);
-    glEnableVertexAttribArray(positionAttr);
-    glEnableVertexAttribArray(texcoordAttr);
-
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-}
-
 void egl_init(struct display* display) {
     display->egl_dpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     eglInitialize(display->egl_dpy, NULL, NULL);
@@ -184,9 +86,9 @@ void egl_init(struct display* display) {
     eglMakeCurrent(display->egl_dpy, pbuf, pbuf, ctx);
     ALOGI("eglMakeCurrent: %s", eglStrError(eglGetError()));
 
-    GLint prog = createProgram(vertSource, fragSource);
-    glUseProgram(prog);
-    ALOGI("glUseProgram: %d", glGetError());
+    GLuint offscreen_framebuffer;
+    glGenFramebuffers(1, &offscreen_framebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, offscreen_framebuffer);
 }
 
 void egl_render_to_pixels(struct display* display, struct buffer* buf) {
@@ -209,7 +111,7 @@ void egl_render_to_pixels(struct display* display, struct buffer* buf) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, image);
 
-    drawQuad(0, 0, buf->width, buf->height);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
 
     glReadPixels(0, 0, buf->width, buf->height, GL_BGRA_EXT, GL_UNSIGNED_BYTE, buf->shm_data);
 
