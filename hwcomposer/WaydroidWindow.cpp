@@ -65,6 +65,9 @@ Return<void> WaydroidWindow::setPointerCapture(const hidl_string& packageName, b
     if (!mDisplay->pointer_constraints)
         return Void();
 
+    if (!mDisplay->pointer)
+        return Void();
+
     property_get("waydroid.active_apps", property, "Waydroid");
     if (!strcmp(property, "Waydroid"))
         windowName = "Waydroid";
