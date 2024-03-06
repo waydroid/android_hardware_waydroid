@@ -1902,7 +1902,12 @@ create_display(const char *gralloc)
     display->refresh = 0;
     display->isMaximized = true;
     display->display = wl_display_connect(NULL);
-    assert(display->display);
+    ALOGI("WAYLAND_DISPLAY: %s", getenv("WAYLAND_DISPLAY"));
+    ALOGI("XDG_RUNTIME_DIR: %s", getenv("XDG_RUNTIME_DIR"));
+    if (!display->display) {
+        ALOGE("Couldn't open Wayland display.");
+        return NULL;
+    }
     sem_init(&display->egl_go, 0, 0);
     sem_init(&display->egl_done, 0, 0);
 
