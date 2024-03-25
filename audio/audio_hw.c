@@ -502,28 +502,6 @@ static int out_get_render_position(const struct audio_stream_out *stream,
     return -EINVAL;
 }
 
-static int out_get_presentation_position(const struct audio_stream_out *stream,
-                                   uint64_t *frames, struct timespec *timestamp)
-{
-    struct alsa_stream_out *out = (struct alsa_stream_out *)stream;
-    int ret = -ENODATA;
-
-        if (out->pcm) {
-            snd_pcm_uframes_t avail;
-            if (snd_pcm_htimestamp(out->pcm, &avail, timestamp) == 0) {
-                size_t kernel_buffer_size = out->config.period_size * out->config.period_count;
-                int64_t signed_frames = out->written - kernel_buffer_size + avail;
-                if (signed_frames >= 0) {
-                    *frames = signed_frames;
-                    ret = 0;
-                }
-            }
-        }
-
-    return ret;
-}
-
-
 static int out_add_audio_effect(const struct audio_stream *stream, effect_handle_t effect)
 {
     ALOGV("out_add_audio_effect: %p", effect);
@@ -836,7 +814,6 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
     out->stream.write = out_write;
     out->stream.get_render_position = out_get_render_position;
     out->stream.get_next_write_timestamp = out_get_next_write_timestamp;
-    out->stream.get_presentation_position = out_get_presentation_position;
 
     out->config.channels = CHANNEL_STEREO;
     out->config.rate = PLAYBACK_CODEC_SAMPLING_RATE;
