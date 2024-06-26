@@ -580,6 +580,8 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
         assert(0);
     }
 
+    wl_surface_commit(window->surface);
+
     if (calibrating && display->fractional_scale_manager) {
         // We only support one global scale
         wp_fractional_scale_v1* fs = wp_fractional_scale_manager_v1_get_fractional_scale(
@@ -589,8 +591,6 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
         wp_fractional_scale_v1_destroy(fs);
     }
     finished_computing_scale(display);
-
-    wl_surface_commit(window->surface);
 
     /* Here we retrieve objects if executed without immed, or error */
     wl_display_roundtrip(display->display);
