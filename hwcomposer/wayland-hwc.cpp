@@ -73,6 +73,7 @@
 #include "relative-pointer-unstable-v1-client-protocol.h"
 #include "idle-inhibit-unstable-v1-client-protocol.h"
 #include "fractional-scale-v1-client-protocol.h"
+#include "cursor-shape-v1-client-protocol.h"
 
 using ::android::hardware::hidl_string;
 
@@ -816,9 +817,17 @@ pointer_handle_enter(void *data, struct wl_pointer *pointer,
 {
     struct display *display = (struct display *)data;
     display->pointer_surface = surface;
-    if (display->cursor_surface)
-        wl_pointer_set_cursor(pointer, serial,
-                              display->cursor_surface, 0, 0);
+    if (display->cursor_shape_manager != NULL) {
+        struct wp_cursor_shape_device_v1 *device =
+            wp_cursor_shape_manager_v1_get_pointer(display->cursor_shape_manager, pointer);
+        wp_cursor_shape_device_v1_set_shape(device, serial,
+            WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT);
+        wp_cursor_shape_device_v1_destroy(device);
+    } else {
+        if (display->cursor_surface)
+            wl_pointer_set_cursor(pointer, serial,
+                                  display->cursor_surface, 0, 0); // FIXME: cursor hotspot with scale
+    }
 }
 
 static void
@@ -1828,6 +1837,9 @@ registry_handle_global(void *data, struct wl_registry *registry,
                 &wl_output_interface, std::min(version, 3U));
         wl_output_add_listener(d->output, &output_listener, d);
         wl_display_roundtrip(d->display);
+    } else if (strcmp(interface, "wp_cursor_shape_manager_v1") == 0) {
+        d->cursor_shape_manager = (struct wp_cursor_shape_manager_v1*)wl_registry_bind(registry, id,
+                &wp_cursor_shape_manager_v1_interface, 1);
     } else if (strcmp(interface, "wp_presentation") == 0) {
         bool no_presentation = property_get_bool("persist.waydroid.no_presentation", false);
         if (!no_presentation) {

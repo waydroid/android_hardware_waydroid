@@ -121,6 +121,7 @@ struct display {
     struct zwp_relative_pointer_v1 *relative_pointer;
     struct zwp_idle_inhibit_manager_v1 *idle_manager;
     struct wp_fractional_scale_manager_v1 *fractional_scale_manager;
+    struct wp_cursor_shape_manager_v1 *cursor_shape_manager;
     struct wl_data_device_manager *data_device_manager;
     struct wl_data_device *data_device;
 
