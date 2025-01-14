@@ -224,8 +224,10 @@ static int start_output_stream(struct alsa_stream_out *out)
   	    return -ENODEV;
     }
 
-    if (snd_pcm_hw_params_set_buffer_size(out->pcm, hwparams, out_get_buffer_size((struct audio_stream *)out)) < 0) {
-        ALOGE("Error setting periods.\n");
+    snd_pcm_uframes_t num_frames = out_get_buffer_size((struct audio_stream *)out) /
+                                   audio_stream_out_frame_size((struct audio_stream_out *)out);
+    if (snd_pcm_hw_params_set_buffer_size(out->pcm, hwparams, num_frames) < 0) {
+        ALOGE("Error setting buffer size.\n");
         adev->active_output = NULL;
   	    return -ENODEV;
     }
@@ -268,13 +270,13 @@ static int out_set_sample_rate(struct audio_stream *stream, uint32_t rate)
 
 static size_t out_get_buffer_size(const struct audio_stream *stream)
 {
-    ALOGV("out_get_buffer_size: %d", 4096);
-
     /* return the closest majoring multiple of 16 frames, as
      * audioflinger expects audio buffers to be a multiple of 16 frames */
     size_t size = PLAYBACK_PERIOD_SIZE;
     size = ((size + 15) / 16) * 16;
-    return size * audio_stream_out_frame_size((struct audio_stream_out *)stream);
+    size = size * audio_stream_out_frame_size((struct audio_stream_out *)stream);
+    ALOGV("out_get_buffer_size: %zu", size);
+    return size;
 }
 
 static audio_channel_mask_t out_get_channels(const struct audio_stream *stream)
