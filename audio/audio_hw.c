@@ -63,7 +63,7 @@
 /* number of base blocks in a short period (low latency) */
 #define PLAYBACK_PERIOD_MULTIPLIER 32  /* 21 ms */
 /* number of frames per short period (low latency) */
-#define PLAYBACK_PERIOD_SIZE 2048
+#define PLAYBACK_PERIOD_SIZE 1024
 /* number of pseudo periods for low latency playback */
 #define PLAYBACK_PERIOD_COUNT 4
 #define PLAYBACK_PERIOD_START_THRESHOLD 2
