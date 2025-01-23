@@ -284,7 +284,7 @@ static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pde
         sourceCrop.bottom = layer->sourceCropi.right;
     }
 
-    if (pdev->display->viewporter) {
+    if (window->viewports[window->lastLayer]) {
         wp_viewport_set_source(window->viewports[window->lastLayer],
                                wl_fixed_from_double(fmax(0, pdev->display->viewporter ? sourceCrop.left : sourceCrop.left / pdev->display->scale)),
                                wl_fixed_from_double(fmax(0, pdev->display->viewporter ? sourceCrop.top : sourceCrop.top / pdev->display->scale)),
@@ -736,7 +736,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                     if (!pdev->display->viewporter && pdev->display->scale > 1) {
                         // With no viewporter the scale is guaranteed to be integer
                         wl_surface_set_buffer_scale(pdev->display->cursor_surface, (int)pdev->display->scale);
-                    } else if (pdev->display->viewporter && pdev->display->scale != 1) {
+                    } else if (pdev->display->cursor_viewport && pdev->display->scale != 1) {
                         setup_viewport_destination(pdev->display->cursor_viewport, fb_layer->displayFrame, pdev->display);
                     }
 
