@@ -238,6 +238,24 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
     return pdev->display->buffer_map[layer->handle];
 }
 
+static void setup_viewport_source(wp_viewport *viewport, hwc_rect_t crop, uint32_t transform)
+{
+    hwc_rect_t sourceCrop = crop;
+
+    if (transform & HWC_TRANSFORM_ROT_90) {
+        sourceCrop.left = crop.top;
+        sourceCrop.top = crop.left;
+        sourceCrop.right = crop.bottom;
+        sourceCrop.bottom = crop.right;
+    }
+
+    wp_viewport_set_source(viewport,
+                           wl_fixed_from_double(fmax(0, sourceCrop.left)),
+                           wl_fixed_from_double(fmax(0, sourceCrop.top)),
+                           wl_fixed_from_double(fmax(1, sourceCrop.right - sourceCrop.left)),
+                           wl_fixed_from_double(fmax(1, sourceCrop.bottom - sourceCrop.top)));
+}
+
 static void setup_viewport_destination(wp_viewport *viewport, hwc_rect_t frame, struct display *display)
 {
     wp_viewport_set_destination(viewport,
@@ -275,24 +293,8 @@ static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pde
         window->viewports[window->lastLayer] = viewport;
     }
 
-    hwc_rect_t sourceCrop = layer->sourceCropi;
-
-    if (layer->transform & HWC_TRANSFORM_ROT_90) {
-        sourceCrop.left = layer->sourceCropi.top;
-        sourceCrop.top = layer->sourceCropi.left;
-        sourceCrop.right = layer->sourceCropi.bottom;
-        sourceCrop.bottom = layer->sourceCropi.right;
-    }
-
     if (window->viewports[window->lastLayer]) {
-        wp_viewport_set_source(window->viewports[window->lastLayer],
-                               wl_fixed_from_double(fmax(0, pdev->display->viewporter ? sourceCrop.left : sourceCrop.left / pdev->display->scale)),
-                               wl_fixed_from_double(fmax(0, pdev->display->viewporter ? sourceCrop.top : sourceCrop.top / pdev->display->scale)),
-                               wl_fixed_from_double(fmax(1, pdev->display->viewporter ? (sourceCrop.right - sourceCrop.left) :
-                                                                                        (sourceCrop.right - sourceCrop.left) / pdev->display->scale)),
-                               wl_fixed_from_double(fmax(1, pdev->display->viewporter ? (sourceCrop.bottom - sourceCrop.top) :
-                                                                                        (sourceCrop.bottom - sourceCrop.top) / pdev->display->scale)));
-
+        setup_viewport_source(window->viewports[window->lastLayer], layer->sourceCropi, layer->transform);
         setup_viewport_destination(window->viewports[window->lastLayer], layer->displayFrame, pdev->display);
     }
 
