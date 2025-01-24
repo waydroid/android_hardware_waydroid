@@ -729,7 +729,9 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                     if (!pdev->display->viewporter && pdev->display->scale > 1) {
                         // With no viewporter the scale is guaranteed to be integer
                         wl_surface_set_buffer_scale(pdev->display->cursor_surface, (int)pdev->display->scale);
-                    } else if (pdev->display->cursor_viewport && pdev->display->scale != 1) {
+                    }
+                    if (pdev->display->cursor_viewport) {
+                        setup_viewport_source(pdev->display->cursor_viewport, fb_layer->sourceCropi, fb_layer->transform);
                         setup_viewport_destination(pdev->display->cursor_viewport, fb_layer->displayFrame, pdev->display);
                     }
 
