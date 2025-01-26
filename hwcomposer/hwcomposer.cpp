@@ -83,6 +83,12 @@ struct waydroid_hwc_composer_device_1 {
     bool multi_windows;
 };
 
+enum class ShowWindowState {
+    NONE,
+    BLACKLISTED,
+    YES
+};
+
 static int hwc_prepare(hwc_composer_device_1_t* dev,
                        size_t numDisplays, hwc_display_contents_1_t** displays) {
     struct waydroid_hwc_composer_device_1 *pdev = (struct waydroid_hwc_composer_device_1 *)dev;
@@ -508,7 +514,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
     } else if (!pdev->multi_windows) {
         // Single window mode, detecting if any unblacklisted app is on screen
-        bool showWindow = false;
+        ShowWindowState showWindow = ShowWindowState::NONE;
         for (size_t l = 0; l < contents->numHwLayers; l++) {
             std::string layer_name = pdev->display->layer_names[l];
             if (layer_name.substr(0, 4) == "TID:") {
@@ -519,10 +525,10 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                 std::string app;
                 while (std::getline(iss, app, ':')) {
                     if (app == layer_aid) {
-                        showWindow = false;
+                        showWindow = ShowWindowState::BLACKLISTED;
                         break;
                     } else {
-                        showWindow = true;
+                        showWindow = ShowWindowState::YES;
                         if (!single_layer_tid.length()) {
                             single_layer_tid = layer_tid;
                             single_layer_aid = layer_aid;
@@ -536,7 +542,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             }
         }
         // Nothing to show on screen, so clear all open windows
-        if (!showWindow) {
+        if (showWindow == ShowWindowState::BLACKLISTED) {
             for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
                 if (it->second)
                     destroy_window(it->second);
