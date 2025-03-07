@@ -606,7 +606,8 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
     }
 
     // No subsurface background for us!
-    if (!use_subsurfaces && !display->subcompositor)
+    if ((!use_subsurfaces && !display->subcompositor) ||
+        property_get_bool("persist.waydroid.no_background_subsurface", false))
         return window;
 
     int fd = syscall(SYS_memfd_create, "buffer", 0);
