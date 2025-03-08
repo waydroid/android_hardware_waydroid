@@ -845,14 +845,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                               &feedback_listener, pdev);
         }
 
-        wl_surface_commit(surface);
-
-        if (window->snapshot_buffer) {
-            // Snapshot buffer should be detached by now, clean up
-            destroy_buffer(window->snapshot_buffer);
-            window->snapshot_buffer = nullptr;
-        }
-
         const int kAcquireWarningMS = 100;
         err = sync_wait(fb_layer->acquireFenceFd, kAcquireWarningMS);
         if (err < 0 && errno == ETIME) {
@@ -860,6 +852,14 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                 fb_layer->acquireFenceFd, kAcquireWarningMS);
         }
         close(fb_layer->acquireFenceFd);
+
+        wl_surface_commit(surface);
+
+        if (window->snapshot_buffer) {
+            // Snapshot buffer should be detached by now, clean up
+            destroy_buffer(window->snapshot_buffer);
+            window->snapshot_buffer = nullptr;
+        }
     }
     // Layers order is changed from SF so we rearrange wayland surfaces
     if (pdev->display->geo_changed) {
