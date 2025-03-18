@@ -746,10 +746,11 @@ keyboard_handle_keymap(void *, struct wl_keyboard *,
 
 static void
 keyboard_handle_enter(void *data, struct wl_keyboard *,
-                      uint32_t, struct wl_surface *surface,
+                      uint32_t serial, struct wl_surface *surface,
                       struct wl_array *)
 {
     struct display *display = (struct display *)data;
+    display->keyboard_enter_serial = serial;
 
     std::lock_guard<std::mutex> lock(display->windowsMutex);
     if (display->windows.find(surface) == display->windows.end())
@@ -769,6 +770,7 @@ keyboard_handle_leave(void *data, struct wl_keyboard *,
                       uint32_t, struct wl_surface *)
 {
     struct display *display = (struct display *)data;
+
     for (size_t i = 0; i < display->keysDown.size(); i++) {
         if (display->keysDown[i] == WL_KEYBOARD_KEY_STATE_PRESSED) {
             send_key_event(display, i, WL_KEYBOARD_KEY_STATE_RELEASED);
@@ -1805,6 +1807,8 @@ registry_handle_global(void *data, struct wl_registry *registry,
         wl_seat_add_listener(d->seat, &seat_listener, d);
         if (d->tablet_manager && !d->tablet_seat)
             add_tablet_seat(d);
+        if (d->data_device_manager && !d->data_device)
+            d->data_device = wl_data_device_manager_get_data_device(d->data_device_manager, d->seat);
     } else if (strcmp(interface, "wl_shm") == 0) {
 		d->shm = (struct wl_shm *)wl_registry_bind(registry, id,
                 &wl_shm_interface, 1);
@@ -1852,6 +1856,11 @@ registry_handle_global(void *data, struct wl_registry *registry,
     } else if (strcmp(interface, wp_fractional_scale_manager_v1_interface.name) == 0) {
         d->fractional_scale_manager = (struct wp_fractional_scale_manager_v1*)wl_registry_bind(registry, id,
                 &wp_fractional_scale_manager_v1_interface, 1);
+    } else if (strcmp(interface, wl_data_device_manager_interface.name) == 0) {
+        d->data_device_manager = (struct wl_data_device_manager *)wl_registry_bind(registry, id,
+                &wl_data_device_manager_interface, 3);
+        if (d->data_device_manager && d->seat)
+            d->data_device = wl_data_device_manager_get_data_device(d->data_device_manager, d->seat);
     }
 }
 

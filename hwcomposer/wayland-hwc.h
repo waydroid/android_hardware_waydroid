@@ -120,6 +120,9 @@ struct display {
     struct zwp_relative_pointer_v1 *relative_pointer;
     struct zwp_idle_inhibit_manager_v1 *idle_manager;
     struct wp_fractional_scale_manager_v1 *fractional_scale_manager;
+    struct wl_data_device_manager *data_device_manager;
+    struct wl_data_device *data_device;
+
     int system_version;
     int gtype;
     double scale;
@@ -142,6 +145,8 @@ struct display {
     struct wl_surface *tablet_surface;
     std::list<struct zwp_tablet_tool_v2 *> tablet_tools;
     std::map<struct zwp_tablet_tool_v2 *, uint16_t> tablet_tools_evt;
+    uint32_t keyboard_enter_serial;
+    std::string clipboard;
 
     EGLDisplay egl_dpy;
     std::list<std::function<void()>> egl_work_queue;
