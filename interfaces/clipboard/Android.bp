@@ -1,0 +1,23 @@
+aidl_interface {
+    name: "vendor.waydroid.clipboard",
+    srcs: ["aidl/**/*.aidl"],
+    stability: "vintf",
+    vendor_available: true,
+    owner: "waydroid",
+    backend: {
+        java: {
+            enabled: true,
+            platform_apis: true,
+        },
+        ndk: {
+            enabled: true,
+        },
+    },
+    versions_with_info: [
+        {
+            version: "1",
+            imports: [],
+        },
+    ],
+
+}

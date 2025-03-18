@@ -28,6 +28,8 @@
 #include <sstream>
 #include <functional>
 
+#include <android/binder_manager.h>
+#include <android/binder_process.h>
 #include <log/log.h>
 #include <cutils/properties.h>
 #include <hardware/hwcomposer.h>
@@ -46,6 +48,7 @@
 #include <utils/Trace.h>
 
 #include "extension.h"
+#include "WaydroidClipboard.h"
 #include "WaydroidWindow.h"
 #include "egl-tools.h"
 
@@ -56,6 +59,8 @@ using ::vendor::waydroid::display::V1_1::IWaydroidDisplay;
 using ::vendor::waydroid::display::V1_1::implementation::WaydroidDisplay;
 using ::vendor::waydroid::window::V1_1::IWaydroidWindow;
 using ::vendor::waydroid::window::implementation::WaydroidWindow;
+using ::aidl::vendor::waydroid::clipboard::IClipboard;
+using ::aidl::vendor::waydroid::clipboard::WaydroidClipboard;
 
 using ::android::OK;
 using ::android::status_t;
@@ -68,6 +73,7 @@ struct waydroid_hwc_composer_device_1 {
     pthread_t wayland_thread;     // constant after init
     pthread_t vsync_thread;       // constant after init
     pthread_t extension_thread;   // constant after init
+    pthread_t clipboard_service_thread; // constant after init
     pthread_t window_service_thread; // constant after init
     pthread_t egl_worker_thread;  // constant after init
     int32_t vsync_period_ns;      // constant after init
@@ -1141,6 +1147,34 @@ shutdown:
     return NULL;
 }
 
+static void* hwc_clipboard_service_thread(void *data) {
+    struct waydroid_hwc_composer_device_1* pdev = (struct waydroid_hwc_composer_device_1*)data;
+    const std::string instance = std::string() + IClipboard::descriptor + "/default";
+    std::shared_ptr<IClipboard> waydroidClipboard;
+    binder_exception_t err;
+
+    waydroidClipboard = ::ndk::SharedRefBase::make<WaydroidClipboard>(pdev->display);
+    if (waydroidClipboard == nullptr) {
+        ALOGE("Can not create an instance of Waydroid Clipboard binder, exiting.");
+        goto shutdown;
+    }
+
+    ABinderProcess_setThreadPoolMaxThreadCount(1);
+    err = AServiceManager_addService(waydroidClipboard->asBinder().get(), instance.c_str());
+    if (err != EX_NONE) {
+        ALOGE("Could not register service for Waydroid Clipboard (%d).", err);
+    }
+    ABinderProcess_startThreadPool();
+
+    ALOGI("Waydroid Clipboard thread is ready.");
+    ABinderProcess_joinThreadPool();
+
+shutdown:
+    // In normal operation, we don't expect the thread pool to shutdown
+    ALOGE("Waydroid Clipboard service is shutting down.");
+    return NULL;
+}
+
 static void hwc_register_procs(struct hwc_composer_device_1* dev,
                                hwc_procs_t const* procs) {
     struct waydroid_hwc_composer_device_1* pdev = (struct waydroid_hwc_composer_device_1*)dev;
@@ -1256,6 +1290,11 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     ret = pthread_create(&pdev->window_service_thread, NULL, hwc_window_service_thread, pdev);
     if (ret) {
         ALOGE("waydroid_hw_composer could not start window_service_thread\n");
+    }
+
+    ret = pthread_create(&pdev->clipboard_service_thread, NULL, hwc_clipboard_service_thread, pdev);
+    if (ret) {
+        ALOGE("waydroid_hw_composer could not start clipboard_service_thread\n");
     }
 
     ret = pthread_create(&pdev->egl_worker_thread, NULL, egl_loop, pdev->display);
