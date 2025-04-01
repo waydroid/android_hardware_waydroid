@@ -34,6 +34,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <assert.h>
+#include <string>
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -77,6 +78,8 @@
 using ::android::hardware::hidl_string;
 
 struct buffer;
+
+#define FAKE_TOUCH_ID 1111
 
 void
 destroy_buffer(struct buffer* buf) {
@@ -812,28 +815,48 @@ static const struct wl_keyboard_listener keyboard_listener = {
 static void
 pointer_handle_enter(void *data, struct wl_pointer *pointer,
                      uint32_t serial, struct wl_surface *surface,
-                     wl_fixed_t, wl_fixed_t)
+                     wl_fixed_t sx, wl_fixed_t sy)
 {
+    ALOGI("Pointer enter event: serial=%u, surface=%p, sx=%f, sy=%f",
+        serial, surface, wl_fixed_to_double(sx), wl_fixed_to_double(sy));
     struct display *display = (struct display *)data;
     display->pointer_surface = surface;
+
+    if (display->pointer_surface) {
+        display->pointer_surface_sx = sx;
+        display->pointer_surface_sy = sy;
+    }
+
     if (display->cursor_surface)
         wl_pointer_set_cursor(pointer, serial,
                               display->cursor_surface, 0, 0);
 }
 
 static void
+touch_handle_cancel(void *data, struct wl_touch *);
+static void
 pointer_handle_leave(void *data, struct wl_pointer *pointer,
                      uint32_t serial, struct wl_surface *)
 {
+    ALOGI("Pointer leave event: serial=%u, surface=%p", serial, nullptr);
     struct display *display = (struct display *)data;
+
+    if (display->fakeTouchEnabled) {
+        display->fakeTouchEnabled = false;
+        touch_handle_cancel(display, nullptr);
+    }
+
     display->pointer_surface = NULL;
     if (display->cursor_surface)
         wl_pointer_set_cursor(pointer, serial, NULL, 0, 0);
 }
 
 static void
+touch_handle_motion(void *data, struct wl_touch *,
+            uint32_t, int32_t id, wl_fixed_t x_w, wl_fixed_t y_w);
+static void
 pointer_handle_motion(void *data, struct wl_pointer *,
-                      uint32_t, wl_fixed_t sx, wl_fixed_t sy)
+                      uint32_t time, wl_fixed_t sx, wl_fixed_t sy)
 {
     struct display* display = (struct display*)data;
     struct input_event event[5];
@@ -851,6 +874,15 @@ pointer_handle_motion(void *data, struct wl_pointer *,
         ALOGE("%s:%d error in touch clock_gettime: %s",
               __FILE__, __LINE__, strerror(errno));
     }
+
+    display->pointer_surface_sx = sx;
+    display->pointer_surface_sy = sy;
+
+    if (display->fakeTouchEnabled) {
+        touch_handle_motion(display, nullptr, time, FAKE_TOUCH_ID, sx, sy);
+        return;
+    }
+
     x = wl_fixed_to_int(sx);
     y = wl_fixed_to_int(sy);
     if (display->scale != 1) {
@@ -899,6 +931,17 @@ handle_relative_motion(void *data, struct zwp_relative_pointer_v1*,
               __FILE__, __LINE__, strerror(errno));
     }
 
+    if (display->pointer_surface) {
+        display->pointer_surface_sx += dx;
+        display->pointer_surface_sy += dy;
+
+        if (display->fakeTouchEnabled) {
+            touch_handle_motion(display, nullptr, 0, FAKE_TOUCH_ID,
+                display->pointer_surface_sx, display->pointer_surface_sy);
+            return;
+        }
+    }
+
     ADD_EVENT(EV_REL, REL_X, (int)acc_x);
     ADD_EVENT(EV_REL, REL_Y, (int)acc_y);
     ADD_EVENT(EV_SYN, SYN_REPORT, 0);
@@ -912,8 +955,15 @@ handle_relative_motion(void *data, struct zwp_relative_pointer_v1*,
 }
 
 static void
+touch_handle_down(void *data, struct wl_touch *,
+          uint32_t, uint32_t, struct wl_surface *surface,
+          int32_t id, wl_fixed_t x_w, wl_fixed_t y_w);
+static void
+touch_handle_up(void *data, struct wl_touch *,
+        uint32_t, uint32_t, int32_t id);
+static void
 pointer_handle_button(void *data, struct wl_pointer *,
-                      uint32_t, uint32_t, uint32_t button,
+                      uint32_t serial, uint32_t time, uint32_t button,
                       uint32_t state)
 {
     struct display* display = (struct display*)data;
@@ -931,6 +981,39 @@ pointer_handle_button(void *data, struct wl_pointer *,
         ALOGE("%s:%d error in touch clock_gettime: %s",
               __FILE__, __LINE__, strerror(errno));
     }
+
+    // pointer fake to touch if no touch device
+    bool fake_touch = false;
+    // force fake touch even if have a touch device
+    const bool force_fake_touch = property_get_bool("persist.waydroid.force_fake_touch_global", false);
+
+    if (force_fake_touch) {
+        fake_touch = true;
+    } else {
+        fake_touch = !display->touch && property_get_bool("persist.waydroid.fake_touch_global", false);
+    }
+
+    ALOGI("Pointer button event: button=%u, state=%u, fakeTouch=%d, pointer_surface=%p",
+          button, state, fake_touch, display->pointer_surface);
+
+    if (button == BTN_LEFT && fake_touch) {
+        const bool fake_touch = property_get_bool("persist.waydroid.fake_touch_global", false);
+        // Ensure the config can be changed at runtime
+        if (fake_touch) {
+            // to touch event
+            if (state == WL_POINTER_BUTTON_STATE_PRESSED) {
+                display->fakeTouchEnabled = true;
+                touch_handle_down(display, nullptr, serial, time,
+                            display->pointer_surface, FAKE_TOUCH_ID,
+                            display->pointer_surface_sx, display->pointer_surface_sy);
+            } else {
+                display->fakeTouchEnabled = false;
+                touch_handle_up(display, nullptr, serial, time, FAKE_TOUCH_ID);
+            }
+            return;
+        }
+    }
+
     ADD_EVENT(EV_KEY, button, state);
     ADD_EVENT(EV_SYN, SYN_REPORT, 0);
 
@@ -1064,6 +1147,8 @@ touch_handle_down(void *data, struct wl_touch *,
     int x, y;
     unsigned int res, n = 0;
 
+    ALOGI("Touch down event: id=%d, x=%f, y=%f", id, wl_fixed_to_double(x_w), wl_fixed_to_double(y_w));
+
     if (ensure_pipe(display, INPUT_TOUCH))
         return;
 
@@ -1102,6 +1187,8 @@ touch_handle_up(void *data, struct wl_touch *,
     struct input_event event[3];
     struct timespec rt;
     unsigned int res, n = 0;
+
+    ALOGI("Touch up event: id=%d", id);
 
     if (ensure_pipe(display, INPUT_TOUCH))
         return;
@@ -1261,6 +1348,8 @@ seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t wl_caps)
 {
     struct display *d = (struct display*)data;
     enum wl_seat_capability caps = (enum wl_seat_capability) wl_caps;
+    bool fakeTouch = false;
+    d->fakeTouchEnabled = false;
 
     if ((caps & WL_SEAT_CAPABILITY_POINTER) && !d->pointer) {
         d->pointer = wl_seat_get_pointer(seat);
@@ -1271,6 +1360,8 @@ seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t wl_caps)
         mkfifo(INPUT_PIPE_NAME[INPUT_POINTER], S_IRWXO | S_IRWXG | S_IRWXU);
         chown(INPUT_PIPE_NAME[INPUT_POINTER], 1000, 1000);
         wl_pointer_add_listener(d->pointer, &pointer_listener, d);
+
+        fakeTouch = !(wl_caps & WL_SEAT_CAPABILITY_TOUCH);
     } else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && d->pointer) {
         remove(INPUT_PIPE_NAME[INPUT_POINTER]);
         wl_pointer_destroy(d->pointer);
@@ -1302,6 +1393,15 @@ seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t wl_caps)
         remove(INPUT_PIPE_NAME[INPUT_TOUCH]);
         wl_touch_destroy(d->touch);
         d->touch = NULL;
+    }
+
+    if (fakeTouch) {
+        assert(!d->touch);
+        d->input_fd[INPUT_TOUCH] = -1;
+        mkfifo(INPUT_PIPE_NAME[INPUT_TOUCH], S_IRWXO | S_IRWXG | S_IRWXU);
+        chown(INPUT_PIPE_NAME[INPUT_TOUCH], 1000, 1000);
+        for (int i = 0; i < MAX_TOUCHPOINTS; i++)
+            d->touch_id[i] = -1;
     }
 }
 
