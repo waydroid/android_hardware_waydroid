@@ -28,11 +28,11 @@
 #include <wayland-client.h>
 
 static const std::vector<const std::string> MIME_TYPES = {
-    "text/plain",
     "text/plain;charset=utf-8",
+    "UTF8_STRING",
+    "text/plain",
     "TEXT",
     "STRING",
-    "UTF8_STRING",
 };
 
 static void data_source_handle_send(void *data, struct wl_data_source *, const char *mime_type, int fd) {
@@ -65,11 +65,10 @@ static const struct wl_data_source_listener data_source_listener = {
     .action = data_source_handle_action,
 };
 
-
-static void read_selection(struct display *display, struct wl_data_offer *offer) {
+static void read_selection(struct display *display, struct wl_data_offer *offer, const std::string &mime_type) {
     int fds[2];
     pipe(fds);
-    wl_data_offer_receive(offer, MIME_TYPES[0].c_str(), fds[1]);
+    wl_data_offer_receive(offer, mime_type.c_str(), fds[1]);
     close(fds[1]);
 
     /* The wl_display_roundtrip is required here because we perform blocking read calls.
@@ -97,14 +96,49 @@ static void data_device_handle_selection(void *data, struct wl_data_device *, st
     struct display *display = (struct display *)data;
     if (offer == NULL) {
         display->clipboard.clear();
+        display->clipboard_offer_mime_types.clear();
+        return;
+    }
+
+    std::string mime_type;
+    for (auto mime_type_req : MIME_TYPES) {
+        if (std::find(display->clipboard_offer_mime_types.begin(), display->clipboard_offer_mime_types.end(), mime_type_req) != display->clipboard_offer_mime_types.end()) {
+            mime_type = mime_type_req;
+            break;
+        }
+    }
+    display->clipboard_offer_mime_types.clear();
+
+    if (mime_type.empty()) {
+        // No supported mime-type
+        display->clipboard.clear();
+        wl_data_offer_destroy(offer);
         return;
     }
 
     // TODO: only read if necessary. needs careful threading
-    read_selection(display, offer);
+    read_selection(display, offer, mime_type);
 }
 
-static void data_device_handle_data_offer(void *, struct wl_data_device *, struct wl_data_offer *) {}
+static void data_offer_handle_source_actions(void *, struct wl_data_offer *, uint32_t) {}
+static void data_offer_handle_action(void *, struct wl_data_offer *, uint32_t) {}
+
+static void data_offer_handle_offer(void *data, struct wl_data_offer *, const char *mime_type) {
+    struct display *display = (struct display *)data;
+    display->clipboard_offer_mime_types.push_back(mime_type);
+}
+
+static const struct wl_data_offer_listener data_offer_listener = {
+    .offer = data_offer_handle_offer,
+    .source_actions = data_offer_handle_source_actions,
+    .action = data_offer_handle_action,
+};
+
+static void data_device_handle_data_offer(void *data, struct wl_data_device *, struct wl_data_offer *offer) {
+    // An application has created a new data source
+    struct display *display = (struct display *)data;
+    wl_data_offer_add_listener(offer, &data_offer_listener, display);
+}
 
 static const struct wl_data_device_listener data_device_listener = {
     .data_offer = data_device_handle_data_offer,
