@@ -147,6 +147,7 @@ struct display {
     std::map<struct zwp_tablet_tool_v2 *, uint16_t> tablet_tools_evt;
     uint32_t keyboard_enter_serial;
     std::string clipboard;
+    std::list<std::string> clipboard_offer_mime_types;
 
     EGLDisplay egl_dpy;
     std::list<std::function<void()>> egl_work_queue;
