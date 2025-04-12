@@ -1869,7 +1869,7 @@ registry_handle_global(void *data, struct wl_registry *registry,
                 &wp_fractional_scale_manager_v1_interface, 1);
     } else if (strcmp(interface, wl_data_device_manager_interface.name) == 0) {
         d->data_device_manager = (struct wl_data_device_manager *)wl_registry_bind(registry, id,
-                &wl_data_device_manager_interface, 3);
+                &wl_data_device_manager_interface, std::min(version,  3U));
         if (d->data_device_manager && d->seat)
             d->data_device = wl_data_device_manager_get_data_device(d->data_device_manager, d->seat);
     }
