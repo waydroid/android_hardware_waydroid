@@ -596,6 +596,9 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         for (auto it = pdev->windows.cbegin(); it != pdev->windows.cend();) {
             bool foundApp = false;
             for (size_t l = 0; l < contents->numHwLayers; l++) {
+                if (contents->hwLayers[l].compositionType != HWC_OVERLAY)
+                    continue;
+
                 std::string layer_name = pdev->display->layer_names[l];
                 if (layer_name.substr(0, 4) == "TID:") {
                     std::string layer_tid = layer_name.substr(4, layer_name.find('#') - 4);
