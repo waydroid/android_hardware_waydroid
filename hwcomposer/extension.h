@@ -13,11 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef VENDOR_WAYDROID_DISPLAY_V1_1_WAYDROIDDISPLAY_H
-#define VENDOR_WAYDROID_DISPLAY_V1_1_WAYDROIDDISPLAY_H
+#ifndef VENDOR_WAYDROID_DISPLAY_V1_2_WAYDROIDDISPLAY_H
+#define VENDOR_WAYDROID_DISPLAY_V1_2_WAYDROIDDISPLAY_H
 
 #include <android/hardware/graphics/composer/2.1/IComposer.h>
-#include <vendor/waydroid/display/1.1/IWaydroidDisplay.h>
+#include <vendor/waydroid/display/1.2/IWaydroidDisplay.h>
 #include <hidl/HidlTransportSupport.h>
 #include <hidl/MQDescriptor.h>
 #include <hidl/Status.h>
@@ -27,14 +27,14 @@
 namespace vendor {
 namespace waydroid {
 namespace display {
-namespace V1_1 {
+namespace V1_2 {
 namespace implementation {
 
 using ::android::hardware::hidl_string;
 using ::android::hardware::Return;
 using ::android::hardware::graphics::composer::V2_1::Error;
 using ::android::sp;
-using ::vendor::waydroid::display::V1_1::IWaydroidDisplay;
+using ::vendor::waydroid::display::V1_2::IWaydroidDisplay;
 
 class WaydroidDisplay : public IWaydroidDisplay {
   public:
@@ -48,14 +48,17 @@ class WaydroidDisplay : public IWaydroidDisplay {
     // Methods from ::vendor::waydroid::display::V1_1::IWaydroidDisplay follow.
     Return<Error> setLayerSize(uint32_t layer, uint32_t width, uint32_t height) override;
     Return<Error> setTargetLayerSize(uint32_t width, uint32_t height) override;
+
+    // Methods from ::vendor::waydroid::display::V1_2::IWaydroidDisplay follow.
+    Return<Error> setMouseMetadata(uint32_t layer, int32_t style, float hotspotX, float hotspotY) override;
   private:
     struct display *mDisplay;
 };
 
 }  // namespace implementation
-}  // namespace V1_1
+}  // namespace V1_2
 }  // namespace display
 }  // namespace waydroid
 }  // namespace vendor
 
-#endif  // VENDOR_WAYDROID_DISPLAY_V1_1_WAYDROIDDISPLAY_H
+#endif  // VENDOR_WAYDROID_DISPLAY_V1_2_WAYDROIDDISPLAY_H

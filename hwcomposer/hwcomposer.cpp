@@ -52,8 +52,8 @@
 using ::android::hardware::configureRpcThreadpool;
 using ::android::hardware::joinRpcThreadpool;
 
-using ::vendor::waydroid::display::V1_1::IWaydroidDisplay;
-using ::vendor::waydroid::display::V1_1::implementation::WaydroidDisplay;
+using ::vendor::waydroid::display::V1_2::IWaydroidDisplay;
+using ::vendor::waydroid::display::V1_2::implementation::WaydroidDisplay;
 using ::vendor::waydroid::window::V1_1::IWaydroidWindow;
 using ::vendor::waydroid::window::implementation::WaydroidWindow;
 using ::vendor::waydroid::clipboard::V1_0::IWaydroidClipboard;
@@ -759,6 +759,10 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                         setup_viewport_destination(pdev->display->cursor_viewport, fb_layer->displayFrame, pdev->display);
                     }
 
+                    wl_pointer_set_cursor (pdev->display->pointer, pdev->display->pointer_enter_serial,
+                                           pdev->display->cursor_surface,
+                                           int(pdev->display->cursor_hotspot.x / pdev->display->scale),
+                                           int(pdev->display->cursor_hotspot.y / pdev->display->scale));
                     wl_surface_commit(pdev->display->cursor_surface);
 
                     if (fb_layer->acquireFenceFd != -1) {
