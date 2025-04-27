@@ -19,7 +19,7 @@
 namespace vendor {
 namespace waydroid {
 namespace display {
-namespace V1_1 {
+namespace V1_2 {
 namespace implementation {
 
 WaydroidDisplay::WaydroidDisplay(struct display *display)
@@ -62,8 +62,17 @@ Return<Error> WaydroidDisplay::setTargetLayerSize(uint32_t width, uint32_t heigh
     return Error::NONE;
 }
 
+// Methods from ::vendor::waydroid::display::V1_2::IWaydroidDisplay follow.
+Return<Error> WaydroidDisplay::setMouseMetadata(uint32_t layer, int32_t style, float hotspotX, float hotspotY) {
+    (void) layer;
+    (void) style;
+    // TODO: use style for cursor-shape-v1
+    mDisplay->cursor_hotspot = {hotspotX, hotspotY};
+    return Error::NONE;
+}
+
 }  // namespace implementation
-}  // namespace V1_1
+}  // namespace V1_2
 }  // namespace display
 }  // namespace waydroid
 }  // namespace vendor

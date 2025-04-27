@@ -149,6 +149,8 @@ struct display {
     uint32_t keyboard_enter_serial;
     std::string clipboard;
     std::list<std::string> clipboard_offer_mime_types;
+    uint32_t pointer_enter_serial;
+    struct {float x; float y;} cursor_hotspot;
 
     EGLDisplay egl_dpy;
     std::list<std::function<void()>> egl_work_queue;
