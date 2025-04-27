@@ -54,6 +54,8 @@ Return<bool> WaydroidWindow::minimize(const hidl_string& packageName) {
         struct window* window = it->second;
         if (window && window->appID == packageName) {
             xdg_toplevel_set_minimized(window->xdg_toplevel);
+            wl_surface_commit(window->surface); // unclear if this is required
+            wl_display_flush(mDisplay->display);
             return true;
         }
     }
