@@ -741,12 +741,13 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             }
         }
 
-        // Detecting cursor layer
+        // Detecting special layers (like cursor and IME)
         if (!window) {
             std::string LayerRawName;
             std::istringstream issLayer(layer_name);
             std::getline(issLayer, LayerRawName, '#');
             if (LayerRawName == "Sprite" && pdev->display->pointer_surface) {
+                // Cursor layer
                 if (pdev->display->cursor_surface) {
                     struct buffer *buf = get_wl_buffer(pdev, fb_layer, layer);
                     if (!buf) {
@@ -799,6 +800,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                 }
             }
             if (LayerRawName == "InputMethod") {
+                // IME layer
                 if (pdev->windows.find(LayerRawName) == pdev->windows.end()) {
                     pdev->windows[LayerRawName] = create_window(pdev->display, pdev->use_subsurface, LayerRawName, "none", {0, 0, 0, 0});
                     std::string windows_size_str = std::to_string(pdev->windows.size());
