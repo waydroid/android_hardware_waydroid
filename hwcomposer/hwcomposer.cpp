@@ -241,9 +241,9 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
     return pdev->display->buffer_map[layer->handle];
 }
 
-static void setup_viewport_source(wp_viewport *viewport, hwc_rect_t crop, uint32_t transform)
+static void setup_viewport_source(wp_viewport *viewport, hwc_frect_t crop, uint32_t transform)
 {
-    hwc_rect_t sourceCrop = crop;
+    hwc_frect_t sourceCrop = crop;
 
     if (transform & HWC_TRANSFORM_ROT_90) {
         sourceCrop.left = crop.top;
@@ -297,7 +297,7 @@ static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pde
     }
 
     if (window->viewports[window->lastLayer]) {
-        setup_viewport_source(window->viewports[window->lastLayer], layer->sourceCropi, layer->transform);
+        setup_viewport_source(window->viewports[window->lastLayer], layer->sourceCropf, layer->transform);
         setup_viewport_destination(window->viewports[window->lastLayer], layer->displayFrame, pdev->display);
     }
 
@@ -759,7 +759,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                         wl_surface_set_buffer_scale(pdev->display->cursor_surface, (int)pdev->display->scale);
                     }
                     if (pdev->display->cursor_viewport) {
-                        setup_viewport_source(pdev->display->cursor_viewport, fb_layer->sourceCropi, fb_layer->transform);
+                        setup_viewport_source(pdev->display->cursor_viewport, fb_layer->sourceCropf, fb_layer->transform);
                         setup_viewport_destination(pdev->display->cursor_viewport, fb_layer->displayFrame, pdev->display);
                     }
 
@@ -998,6 +998,22 @@ static int hwc_get_display_configs(struct hwc_composer_device_1* dev __unused,
     return -EINVAL;
 }
 
+static int hwc_get_active_config(struct hwc_composer_device_1* dev __unused, int disp) {
+    if (disp == HWC_DISPLAY_PRIMARY)
+        return 0;
+    return -EINVAL;
+}
+
+static int hwc_set_active_config(struct hwc_composer_device_1* dev __unused, int disp, int index) {
+    if (disp == HWC_DISPLAY_PRIMARY && index == 0)
+        return 0;
+    return -EINVAL;
+}
+
+static int hwc_set_cursor_position_async(struct hwc_composer_device_1 *, int, int, int) {
+    // Ignored: Wayland compositor is managing the cursor position
+    return 0;
+}
 
 static int32_t hwc_attribute(struct waydroid_hwc_composer_device_1* pdev,
                              const uint32_t attribute) {
@@ -1196,7 +1212,7 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     }
 
     pdev->base.common.tag = HARDWARE_DEVICE_TAG;
-    pdev->base.common.version = HWC_DEVICE_API_VERSION_1_1;
+    pdev->base.common.version = HWC_DEVICE_API_VERSION_1_4;
     pdev->base.common.module = const_cast<hw_module_t *>(module);
     pdev->base.common.close = hwc_close;
 
@@ -1209,6 +1225,9 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     pdev->base.dump = hwc_dump;
     pdev->base.getDisplayConfigs = hwc_get_display_configs;
     pdev->base.getDisplayAttributes = hwc_get_display_attributes;
+    pdev->base.getActiveConfig = hwc_get_active_config;
+    pdev->base.setActiveConfig = hwc_set_active_config;
+    pdev->base.setCursorPositionAsync = hwc_set_cursor_position_async;
 
     pdev->vsync_period_ns = 1000*1000*1000/60; // vsync is 60 hz
 
