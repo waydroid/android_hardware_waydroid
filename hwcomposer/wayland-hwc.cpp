@@ -536,6 +536,16 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
     window->bg_surface = NULL;
     window->bg_subsurface = NULL;
 
+    int fd = syscall(SYS_memfd_create, "buffer", 0);
+    ftruncate(fd, 4);
+    void *shm_data = mmap(NULL, 4, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (shm_data == MAP_FAILED) {
+        ALOGE("mmap failed");
+        close(fd);
+        exit(1);
+    }
+    struct wl_shm_pool *pool = wl_shm_create_pool(display->shm, fd, 4);
+
     bool calibrating = !display->height || !display->width;
 
     if (display->wm_base) {
@@ -583,47 +593,52 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
     }
 
     wl_surface_commit(window->surface);
-
-    if (calibrating && display->fractional_scale_manager) {
-        // We only support one global scale
-        wp_fractional_scale_v1* fs = wp_fractional_scale_manager_v1_get_fractional_scale(
-                display->fractional_scale_manager, window->surface);
-        wp_fractional_scale_v1_add_listener(fs, &fractional_scale_listener, display);
-        wl_display_roundtrip(display->display);
-        wp_fractional_scale_v1_destroy(fs);
-    }
-    finished_computing_scale(display);
-
-    /* Here we retrieve objects if executed without immed, or error */
+    // Handle first configure event
     wl_display_roundtrip(display->display);
-    wl_surface_commit(window->surface);
 
     if (calibrating) {
-        // If we did not receive a window size from the compositor we have to fall back to using the whole output size
-        // At the time of writing this happens on wlroots compositors
+        wp_fractional_scale_v1* fs;
+        if (display->fractional_scale_manager) {
+            // We only support one global scale
+            fs = wp_fractional_scale_manager_v1_get_fractional_scale(
+                    display->fractional_scale_manager, window->surface);
+            wp_fractional_scale_v1_add_listener(fs, &fractional_scale_listener, display);
+        }
+        if (!display->height || !display->width) {
+            // Some compositors fail to give us a window size without a buffer attached
+            // See: https://github.com/swaywm/sway/issues/2176
+            struct wl_buffer *buf = wl_shm_pool_create_buffer(pool, 0, 1, 1, 4, WL_SHM_FORMAT_ARGB8888);
+            wl_surface_attach(window->surface, buf, 0, 0);
+            wl_surface_commit(window->surface);
+            // Try second configure event, with buffer attached
+            wl_display_roundtrip(display->display);
+        }
+        if (display->fractional_scale_manager) {
+            wl_surface_commit(window->surface);
+            wl_display_roundtrip(display->display);
+            wp_fractional_scale_v1_destroy(fs);
+        }
+
+        // If after all of this we still did not receive a proper configure event,
+        // fallback to using the full output size.
+        // NOTICE: full_width and full_heigth should be in compositor logical size!
         if (!display->height)
             display->height = display->full_height / display->scale;
         if (!display->width)
             display->width = display->full_width / display->scale;
+
+        finished_computing_scale(display);
     }
 
     // No subsurface background for us!
     if ((!use_subsurfaces && !display->subcompositor) ||
-        property_get_bool("persist.waydroid.no_background_subsurface", false))
+        property_get_bool("persist.waydroid.no_background_subsurface", false)) {
+        wl_shm_pool_destroy(pool);
         return window;
-
-    int fd = syscall(SYS_memfd_create, "buffer", 0);
-    ftruncate(fd, 4);
-    void *shm_data = mmap(NULL, 4, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (shm_data == MAP_FAILED) {
-        ALOGE("mmap failed");
-        close(fd);
-        exit(1);
     }
+
     uint32_t *buf = (uint32_t*)shm_data;
     *buf = color.a << 24 | color.r << 16 | color.g << 8 | color.b;
-
-    struct wl_shm_pool *pool = wl_shm_create_pool(display->shm, fd, 4);
     window->bg_buffer = wl_shm_pool_create_buffer(pool, 0, 1, 1, 4, WL_SHM_FORMAT_ARGB8888);
     wl_shm_pool_destroy(pool);
     close(fd);
@@ -1356,6 +1371,7 @@ output_handle_mode(void *data, struct wl_output *,
     // Fallback size
     // We can't do anything meaningful if there's more than one display, just pick one at random
     // Hopefully these won't need to be used
+    // NOTICE: Actually, this is wrong when using scaling. We should probably use xdg_output instead.
     d->full_width = width;
     d->full_height = height;
 }
