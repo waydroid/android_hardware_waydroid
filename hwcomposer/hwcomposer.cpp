@@ -774,8 +774,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
                     wl_pointer_set_cursor (pdev->display->pointer, pdev->display->pointer_enter_serial,
                                            pdev->display->cursor_surface,
-                                           int(pdev->display->cursor_hotspot.x / pdev->display->scale),
-                                           int(pdev->display->cursor_hotspot.y / pdev->display->scale));
+                                           roundf(pdev->display->cursor_hotspot.x / pdev->display->scale),
+                                           roundf(pdev->display->cursor_hotspot.y / pdev->display->scale));
                     wl_surface_commit(pdev->display->cursor_surface);
 
                     if (fb_layer->acquireFenceFd != -1) {
