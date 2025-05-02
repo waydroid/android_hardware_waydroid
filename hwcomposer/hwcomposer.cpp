@@ -119,6 +119,10 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
     }
 
     for (size_t i = 0; i < contents->numHwLayers; i++) {
+        if (contents->hwLayers[i].flags & HWC_IS_CURSOR_LAYER) {
+            contents->hwLayers[i].compositionType = HWC_OVERLAY;
+            continue;
+        }
         if (contents->hwLayers[i].compositionType == HWC_FRAMEBUFFER_TARGET)
             continue;
         if (contents->hwLayers[i].flags & HWC_SKIP_LAYER)
@@ -642,6 +646,51 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
     }
 
+    // Set Wayland cursor
+    for (size_t l = 0; l < contents->numHwLayers; l++) {
+        hwc_layer_1_t* fb_layer = &contents->hwLayers[l];
+        if ((fb_layer->flags & HWC_IS_CURSOR_LAYER) && pdev->display->cursor_surface) {
+            struct buffer *buf = get_wl_buffer(pdev, fb_layer, l);
+            if (!buf) {
+                ALOGE("Failed to get wayland buffer");
+                if (fb_layer->acquireFenceFd != -1) {
+                    close(fb_layer->acquireFenceFd);
+                }
+                break;
+            }
+
+            wl_surface_attach(pdev->display->cursor_surface, buf->buffer, 0, 0);
+            if (wl_surface_get_version(pdev->display->cursor_surface) >= WL_SURFACE_DAMAGE_BUFFER_SINCE_VERSION)
+                wl_surface_damage_buffer(pdev->display->cursor_surface, 0, 0, buf->width, buf->height);
+            else
+                wl_surface_damage(pdev->display->cursor_surface, 0, 0, buf->width, buf->height);
+            if (!pdev->display->viewporter && pdev->display->scale > 1) {
+                // With no viewporter the scale is guaranteed to be integer
+                wl_surface_set_buffer_scale(pdev->display->cursor_surface, (int)pdev->display->scale);
+            }
+            if (pdev->display->cursor_viewport) {
+                setup_viewport_source(pdev->display->cursor_viewport, fb_layer->sourceCropf, fb_layer->transform);
+                setup_viewport_destination(pdev->display->cursor_viewport, fb_layer->displayFrame, pdev->display);
+            }
+
+            wl_pointer_set_cursor (pdev->display->pointer, pdev->display->pointer_enter_serial,
+                                   pdev->display->cursor_surface,
+                                   roundf(pdev->display->cursor_hotspot.x / pdev->display->scale),
+                                   roundf(pdev->display->cursor_hotspot.y / pdev->display->scale));
+
+            const int kAcquireWarningMS = 100;
+            err = sync_wait(fb_layer->acquireFenceFd, kAcquireWarningMS);
+            if (err < 0 && errno == ETIME) {
+                ALOGE("hwcomposer waited on fence %d for %d ms",
+                    fb_layer->acquireFenceFd, kAcquireWarningMS);
+            }
+            close(fb_layer->acquireFenceFd);
+
+            wl_surface_commit(pdev->display->cursor_surface);
+            break;
+        }
+    }
+
     for (size_t l = 0; l < contents->numHwLayers; l++) {
         hwc_layer_1_t* fb_layer = &contents->hwLayers[l];
         if (fb_layer->compositionType == HWC_FRAMEBUFFER_TARGET) {
@@ -671,6 +720,14 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         hwc_layer_1_t* fb_layer = &contents->hwLayers[layer];
 
         if (fb_layer->flags & HWC_SKIP_LAYER) {
+            if (fb_layer->acquireFenceFd != -1) {
+                close(fb_layer->acquireFenceFd);
+            }
+            continue;
+        }
+
+        if ((fb_layer->flags & HWC_IS_CURSOR_LAYER) && pdev->display->cursor_surface) {
+            // Cursor was already handled separately
             if (fb_layer->acquireFenceFd != -1) {
                 close(fb_layer->acquireFenceFd);
             }
@@ -746,60 +803,23 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             std::string LayerRawName;
             std::istringstream issLayer(layer_name);
             std::getline(issLayer, LayerRawName, '#');
-            if (LayerRawName == "Sprite" && pdev->display->pointer_surface) {
-                // Cursor layer
-                if (pdev->display->cursor_surface) {
-                    struct buffer *buf = get_wl_buffer(pdev, fb_layer, layer);
-                    if (!buf) {
-                        ALOGE("Failed to get wayland buffer");
-                        if (fb_layer->acquireFenceFd != -1) {
-                            close(fb_layer->acquireFenceFd);
+            if ((fb_layer->flags & HWC_IS_CURSOR_LAYER) && !pdev->display->cursor_surface && pdev->display->pointer_surface) {
+                // Cursor layer. Without cursor_surface we draw it as a subsurface
+                for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
+                    if (it->second) {
+                        if (it->second->surface == pdev->display->pointer_surface) {
+                            window = it->second;
+                            break;
                         }
-                        continue;
-                    }
-
-                    wl_surface_attach(pdev->display->cursor_surface, buf->buffer, 0, 0);
-                    if (wl_surface_get_version(pdev->display->cursor_surface) >= WL_SURFACE_DAMAGE_BUFFER_SINCE_VERSION)
-                        wl_surface_damage_buffer(pdev->display->cursor_surface, 0, 0, buf->width, buf->height);
-                    else
-                        wl_surface_damage(pdev->display->cursor_surface, 0, 0, buf->width, buf->height);
-                    if (!pdev->display->viewporter && pdev->display->scale > 1) {
-                        // With no viewporter the scale is guaranteed to be integer
-                        wl_surface_set_buffer_scale(pdev->display->cursor_surface, (int)pdev->display->scale);
-                    }
-                    if (pdev->display->cursor_viewport) {
-                        setup_viewport_source(pdev->display->cursor_viewport, fb_layer->sourceCropf, fb_layer->transform);
-                        setup_viewport_destination(pdev->display->cursor_viewport, fb_layer->displayFrame, pdev->display);
-                    }
-
-                    wl_pointer_set_cursor (pdev->display->pointer, pdev->display->pointer_enter_serial,
-                                           pdev->display->cursor_surface,
-                                           roundf(pdev->display->cursor_hotspot.x / pdev->display->scale),
-                                           roundf(pdev->display->cursor_hotspot.y / pdev->display->scale));
-                    wl_surface_commit(pdev->display->cursor_surface);
-
-                    if (fb_layer->acquireFenceFd != -1) {
-                        close(fb_layer->acquireFenceFd);
-                    }
-                    continue;
-                } else {
-                    for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
-                        if (it->second) {
-                            if (it->second->surface == pdev->display->pointer_surface) {
+                        for (auto itt = it->second->surfaces.begin(); itt != it->second->surfaces.end(); itt++) {
+                            if (itt->second == pdev->display->pointer_surface) {
                                 window = it->second;
                                 break;
-                            }
-                            for (auto itt = it->second->surfaces.begin(); itt != it->second->surfaces.end(); itt++) {
-                                if (itt->second == pdev->display->pointer_surface) {
-                                    window = it->second;
-                                    break;
-                                }
                             }
                         }
                     }
                 }
-            }
-            if (LayerRawName == "InputMethod") {
+            } else if (LayerRawName == "InputMethod") {
                 // IME layer
                 if (pdev->windows.find(LayerRawName) == pdev->windows.end()) {
                     pdev->windows[LayerRawName] = create_window(pdev->display, pdev->use_subsurface, LayerRawName, "none", {0, 0, 0, 0});
