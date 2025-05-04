@@ -342,7 +342,7 @@ static const struct xdg_surface_listener xdg_surface_listener = {
 };
 
 
-static void
+void
 finished_computing_scale(struct display *d)
 {
     char property[PROPERTY_VALUE_MAX];
@@ -547,6 +547,10 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
     struct wl_shm_pool *pool = wl_shm_create_pool(display->shm, fd, 4);
 
     bool calibrating = !display->height || !display->width;
+    if (calibrating) {
+        // Initialize width and height with user-provided overrides if any
+        choose_width_height(display, 0, 0);
+    }
 
     if (display->wm_base) {
         window->xdg_surface =
