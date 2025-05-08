@@ -191,6 +191,9 @@ struct buffer {
     bool isShm;
     void *shm_data;
     int size;
+
+    bool invalidated;
+    bool may_change_geo;
 };
 
 struct window {
