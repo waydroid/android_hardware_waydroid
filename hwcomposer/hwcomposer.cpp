@@ -671,6 +671,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             if (pdev->display->cursor_viewport) {
                 setup_viewport_source(pdev->display->cursor_viewport, fb_layer->sourceCropf, fb_layer->transform);
                 setup_viewport_destination(pdev->display->cursor_viewport, fb_layer->displayFrame, pdev->display);
+            } else {
+                wl_surface_set_buffer_scale(pdev->display->cursor_surface, (int)ceil(pdev->display->scale));
             }
 
             wl_pointer_set_cursor (pdev->display->pointer, pdev->display->pointer_enter_serial,
@@ -1298,7 +1300,7 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     if (!property_get_bool("persist.waydroid.cursor_on_subsurface", false)) {
         pdev->display->cursor_surface =
             wl_compositor_create_surface(pdev->display->compositor);
-        if (pdev->display->viewporter) {
+        if (pdev->display->viewporter && pdev->display->supports_cursor_viewport) {
             pdev->display->cursor_viewport =
                 wp_viewporter_get_viewport(pdev->display->viewporter, pdev->display->cursor_surface);
         }
