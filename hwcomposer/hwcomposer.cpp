@@ -104,8 +104,15 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
 
     if (!contents) return 0;
 
-    if ((contents->flags & HWC_GEOMETRY_CHANGED) && pdev->use_subsurface)
-        pdev->display->geo_changed = true;
+    if (contents->flags & HWC_GEOMETRY_CHANGED) {
+        if (pdev->use_subsurface)
+            pdev->display->geo_changed = true;
+        for (auto it = pdev->display->buffer_map.begin(); it != pdev->display->buffer_map.end(); it++) {
+            if (it->second && it->second->may_change_geo) {
+                it->second->invalidated = true;
+            }
+        }
+    }
 
     std::pair<int, int> skipped(-1, -1);
     for (size_t i = 0; i < contents->numHwLayers; i++) {
@@ -219,6 +226,7 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
     int ret = 0;
 
     buf = new struct buffer();
+    buf->may_change_geo = pdev->use_subsurface;
     if (pdev->display->gtype == GRALLOC_GBM) {
         struct gralloc_handle_t *drm_handle = (struct gralloc_handle_t *)layer->handle;
         if (pdev->display->dmabuf) {
@@ -438,14 +446,17 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     size_t fb_target = -1;
     int err = 0;
 
-    if (pdev->display->geo_changed) {
-        for (auto it = pdev->display->buffer_map.begin(); it != pdev->display->buffer_map.end(); it++) {
-            if (it->second) {
-                destroy_buffer(it->second);
-            }
+    for (auto it = pdev->display->buffer_map.begin(); it != pdev->display->buffer_map.end(); /* no increment */) {
+        if (it->second && it->second->invalidated == true) {
+            destroy_buffer(it->second);
+            pdev->display->buffer_map.erase(it++);
+        } else {
+            ++it;
         }
-        pdev->display->buffer_map.clear();
     }
+    // Should be redundant, but let's call clear() for good measure...
+    if (pdev->display->geo_changed)
+        pdev->display->buffer_map.clear();
 
     std::pair<int, int> skipped(-1, -1);
     if (pdev->use_subsurface && !pdev->multi_windows) {
@@ -649,6 +660,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                 }
                 break;
             }
+            buf->may_change_geo = true;
 
             wl_surface_attach(pdev->display->cursor_surface, buf->buffer, 0, 0);
             if (wl_surface_get_version(pdev->display->cursor_surface) >= WL_SURFACE_DAMAGE_BUFFER_SINCE_VERSION)
