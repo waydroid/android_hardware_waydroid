@@ -1883,6 +1883,9 @@ registry_handle_global(void *data, struct wl_registry *registry,
                 &wl_data_device_manager_interface, std::min(version,  3U));
         if (d->data_device_manager && d->seat)
             d->data_device = wl_data_device_manager_get_data_device(d->data_device_manager, d->seat);
+    } else if (strcmp(interface, "gtk_shell1") == 0) {
+        if (version < 6)
+            d->supports_cursor_viewport = false;
     }
 }
 
@@ -1927,6 +1930,7 @@ create_display(const char *gralloc)
     display->gtype = get_gralloc_type(gralloc);
     display->refresh = 0;
     display->isMaximized = true;
+    display->supports_cursor_viewport = true;
     display->display = wl_display_connect(NULL);
     ALOGI("WAYLAND_DISPLAY: %s", getenv("WAYLAND_DISPLAY"));
     ALOGI("XDG_RUNTIME_DIR: %s", getenv("XDG_RUNTIME_DIR"));
