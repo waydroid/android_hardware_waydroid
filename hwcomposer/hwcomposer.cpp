@@ -77,6 +77,7 @@ struct waydroid_hwc_composer_device_1 {
     int32_t vsync_period_ns;      // constant after init
     struct display *display;      // constant after init
     std::map<std::string, struct window *> windows;
+    std::map<std::string, std::vector<std::string>> blacklisted_apps;
 
     pthread_mutex_t vsync_lock;
     bool vsync_callback_enabled; // protected by this->vsync_lock
@@ -441,6 +442,14 @@ static const struct wp_presentation_feedback_listener feedback_listener = {
     feedback_discarded
 };
 
+static bool is_blacklisted(struct waydroid_hwc_composer_device_1* pdev, std::string &app_id, std::string &component) {
+    auto match = pdev->blacklisted_apps.find(app_id);
+    if (match == pdev->blacklisted_apps.end())
+        return false;
+    auto &components = match->second;
+    return components.empty() || std::find(components.begin(), components.end(), component) != components.end();
+}
+
 static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                    hwc_display_contents_1_t** displays) {
     char property[PROPERTY_VALUE_MAX];
@@ -486,7 +495,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
      * In prop "waydroid.active_apps" we choose what to be shown in window
      * and here if HWC is in single mode we show the screen only if any task are in screen
      * and in multi windows mode we group layers with same task ID in a wayland window.
-     * And in prop "waydroid.blacklist_apps" we select apps to not show in display.
      * 
      * "waydroid.active_apps" prop can be: 
      * "none": No windows
@@ -495,8 +503,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
      */
     property_get("waydroid.active_apps", property, "none");
     std::string active_apps = std::string(property);
-    property_get("waydroid.blacklist_apps", property, "com.android.launcher3");
-    std::string blacklist_apps = std::string(property);
     std::string single_layer_tid;
     std::string single_layer_aid;
 
@@ -548,23 +554,21 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             if (layer_name.substr(0, 4) == "TID:") {
                 std::string layer_tid = layer_name.substr(4, layer_name.find('#') - 4);
                 std::string layer_aid = layer_name.substr(layer_name.find('#') + 1, layer_name.find('/') - layer_name.find('#') - 1);
-                
-                std::istringstream iss(blacklist_apps);
-                std::string app;
-                while (std::getline(iss, app, ':')) {
-                    if (app == layer_aid) {
+                size_t c = layer_name.find('/');
+                std::string component = layer_name.substr(c + 1, layer_name.find('#', c) - c - 1);
+
+                if (is_blacklisted(pdev, layer_aid, component)) {
+                    if (showWindow == ShowWindowState::NONE)
                         showWindow = ShowWindowState::BLACKLISTED;
-                        break;
-                    } else {
-                        showWindow = ShowWindowState::YES;
-                        if (!single_layer_tid.length()) {
-                            single_layer_tid = layer_tid;
-                            single_layer_aid = layer_aid;
-                        }
-                        if (pdev->windows.find(single_layer_tid) != pdev->windows.end()) {
-                            pdev->windows[single_layer_tid]->lastLayer = 0;
-                            pdev->windows[single_layer_tid]->last_layer_buffer = nullptr;
-                        }
+                } else {
+                    showWindow = ShowWindowState::YES;
+                    if (!single_layer_tid.length()) {
+                        single_layer_tid = layer_tid;
+                        single_layer_aid = layer_aid;
+                    }
+                    if (pdev->windows.find(single_layer_tid) != pdev->windows.end()) {
+                        pdev->windows[single_layer_tid]->lastLayer = 0;
+                        pdev->windows[single_layer_tid]->last_layer_buffer = nullptr;
                     }
                 }
             }
@@ -787,19 +791,10 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             if (layer_name.substr(0, 4) == "TID:") {
                 std::string layer_tid = layer_name.substr(4, layer_name.find('#') - 4);
                 std::string layer_aid = layer_name.substr(layer_name.find('#') + 1, layer_name.find('/') - layer_name.find('#') - 1);
+                size_t c = layer_name.find('/');
+                std::string component = layer_name.substr(c + 1, layer_name.find('#', c) - c - 1);
 
-                bool showWindow = false;
-                std::istringstream iss(blacklist_apps);
-                std::string app;
-                while (std::getline(iss, app, ':')) {
-                    if (app == layer_aid) {
-                        showWindow = false;
-                        break;
-                    } else
-                        showWindow = true;
-                }
-
-                if (showWindow) {
+                if (!is_blacklisted(pdev, layer_aid, component)) {
                     if (pdev->windows.find(layer_tid) == pdev->windows.end()) {
                         pdev->windows[layer_tid] = create_window(pdev->display, pdev->use_subsurface, layer_aid, layer_tid, {0, 0, 0, 0});
                         std::string windows_size_str = std::to_string(pdev->windows.size());
@@ -1277,6 +1272,17 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     pdev->use_subsurface = property_get_bool("persist.waydroid.use_subsurface", false) || pdev->multi_windows;
     pdev->timeline_fd = sw_sync_timeline_create();
     pdev->next_sync_point = 1;
+
+    pdev->blacklisted_apps["com.android.launcher3"] = {};
+    pdev->blacklisted_apps["com.android.settings"] = {"com.android.settings.FallbackHome"};
+    if (property_get("waydroid.blacklist_apps", property, nullptr) > 0) {
+        std::string blacklist_apps = std::string(property);
+        std::istringstream iss(blacklist_apps);
+        std::string app;
+        while (std::getline(iss, app, ':')) {
+            pdev->blacklisted_apps[app] = {};
+        }
+    }
 
     if (property_get("waydroid.xdg_runtime_dir", property, "/run/user/1000") > 0) {
         setenv("XDG_RUNTIME_DIR", property, 1);
