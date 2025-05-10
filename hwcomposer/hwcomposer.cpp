@@ -76,7 +76,6 @@ struct waydroid_hwc_composer_device_1 {
     int32_t vsync_period_ns;      // constant after init
     struct display *display;      // constant after init
     std::map<std::string, struct window *> windows;
-    struct window *calib_window;
 
     pthread_mutex_t vsync_lock;
     bool vsync_callback_enabled; // protected by this->vsync_lock
