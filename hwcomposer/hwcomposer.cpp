@@ -65,6 +65,24 @@ using ::android::status_t;
 
 #define WINDOW_DECORATION_OUTSET 15
 
+namespace {
+    std::pair<int, int> search_first_and_last_skipped_layer(hwc_display_contents_1_t *contents) {
+        assert(contents->numHwLayers <= std::numeric_limits<int>::max());
+
+        int first = -1;
+        int last = -1;
+        for (int i = 0; i < contents->numHwLayers; i++) {
+            if (!(contents->hwLayers[i].flags & HWC_SKIP_LAYER))
+                continue;
+
+            if (first == -1)
+                first = i;
+            last = i;
+        }
+        return {first, last};
+    }
+}
+
 struct waydroid_hwc_composer_device_1 {
     hwc_composer_device_1_t base; // constant after init
     const hwc_procs_t *procs;     // constant after init
@@ -113,15 +131,7 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
         }
     }
 
-    std::pair<int, int> skipped(-1, -1);
-    for (size_t i = 0; i < contents->numHwLayers; i++) {
-      if (!(contents->hwLayers[i].flags & HWC_SKIP_LAYER))
-        continue;
-
-      if (skipped.first == -1)
-        skipped.first = i;
-      skipped.second = i;
-    }
+    std::pair<int, int> skipped = search_first_and_last_skipped_layer(contents);
 
     for (size_t i = 0; i < contents->numHwLayers; i++) {
         if (contents->hwLayers[i].flags & HWC_IS_CURSOR_LAYER) {
@@ -476,14 +486,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
     std::pair<int, int> skipped(-1, -1);
     if (pdev->use_subsurface && !pdev->multi_windows) {
-        for (size_t i = 0; i < contents->numHwLayers; i++) {
-          if (!(contents->hwLayers[i].flags & HWC_SKIP_LAYER))
-            continue;
-
-          if (skipped.first == -1)
-            skipped.first = i;
-          skipped.second = i;
-        }
+        skipped = search_first_and_last_skipped_layer(contents);
     }
 
 
