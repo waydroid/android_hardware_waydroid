@@ -312,8 +312,6 @@ static void setup_viewport_destination(wp_viewport *viewport, hwc_rect_t frame, 
 
 static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, struct window *window)
 {
-    pdev->display->windows[window->surface] = window;
-
     window::layer &requested_layer = [&]() -> window::layer& {
         if (window->lastLayer >= window->layers.size()) {
             assert(window->lastLayer == window->layers.size());

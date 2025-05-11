@@ -479,13 +479,16 @@ destroy_window(struct window *window, bool keep)
         if (window->destroy_background_objects) {
             if (window->viewport)
                 wp_viewport_destroy(window->viewport);
-            if (window->surface)
+            if (window->surface) {
+                wl_surface_set_user_data(window->surface, nullptr);
                 wl_surface_destroy(window->surface);
+            }
         }
 
         wl_display_flush(window->display->display);
 
-        window->display->windows.erase(window->surface);
+        auto index = std::find(window->display->windows.cbegin(), window->display->windows.cend(), window);
+        window->display->windows.erase(index);
     }
     if (keep)
         window->isActive = false;
@@ -624,6 +627,9 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
     if (display->viewporter) {
         window->viewport = wp_viewporter_get_viewport(display->viewporter, window->surface);
     }
+
+    wl_surface_set_user_data(window->surface, window);
+    display->windows.push_back(window);
 
     // TODO: Fix background when viewport is not supported
     // No subsurface background for us!
@@ -807,12 +813,11 @@ keyboard_handle_enter(void *data, struct wl_keyboard *,
     display->keyboard_enter_serial = serial;
 
     std::scoped_lock lock(display->windowsMutex);
-    if (display->windows.find(surface) == display->windows.end())
-        return;
+    auto window = reinterpret_cast<struct window *>(wl_surface_get_user_data(surface));
+    if (!window)
+        return; // Window was destroyed in hwc_set
 
-    struct window *window = display->windows[surface];
-
-    if (window->display->task != nullptr) {
+    if (display->task != nullptr) {
         if (window->taskID != "none" && window->taskID != "0") {
             window->display->task->setFocusedTask(stoi(window->taskID));
         }
