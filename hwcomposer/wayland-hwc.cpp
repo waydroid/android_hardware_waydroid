@@ -294,7 +294,7 @@ create_shm_wl_buffer(struct display *display, struct buffer *buffer,
 
 // Call me from egl_worker_thread only!
 void snapshot_inactive_app_window(struct display *display, struct window *window) {
-    if (!window->surface || !window->last_layer_buffer
+    if (!window->layers[0].surface || !window->last_layer_buffer
         || window->last_layer_buffer->isShm || window->snapshot_buffer) {
         // Need a surface to draw and a non-SHM buffer to make snapshot from
         return;
@@ -305,7 +305,7 @@ void snapshot_inactive_app_window(struct display *display, struct window *window
     struct buffer *old_buf = window->last_layer_buffer;
     struct buffer *new_buf = new struct buffer();
     // FIXME won't work as expected if there are multiple surfaces
-    struct wl_surface *surface = window->surface;
+    struct wl_surface *surface = window->layers[0].surface;
 
     int ret = create_shm_wl_buffer(display, new_buf, old_buf->width, old_buf->height,
                                     HAL_PIXEL_FORMAT_RGBA_8888, old_buf->pixel_stride, old_buf->handle);
@@ -464,27 +464,25 @@ void
 destroy_window(struct window *window, bool keep)
 {
     if (window->isActive) {
-        window->layers.clear();
         if (window->xdg_toplevel)
             xdg_toplevel_destroy(window->xdg_toplevel);
         if (window->xdg_surface)
             xdg_surface_destroy(window->xdg_surface);
         if (window->shell_surface)
             wl_shell_surface_destroy(window->shell_surface);
-        if (window->bg_viewport)
-            wp_viewport_destroy(window->bg_viewport);
-        if (window->bg_subsurface)
-            wl_subsurface_destroy(window->bg_subsurface);
-        if (window->bg_surface)
-            wl_surface_destroy(window->bg_surface);
         if (window->bg_buffer)
             wl_buffer_destroy(window->bg_buffer);
-        if (window->viewport)
-            wp_viewport_destroy(window->viewport);
         if (window->input_region)
             wl_region_destroy(window->input_region);
 
-        wl_surface_destroy(window->surface);
+        window->layers.clear();
+        if (window->destroy_background_objects) {
+            if (window->viewport)
+                wp_viewport_destroy(window->viewport);
+            if (window->surface)
+                wl_surface_destroy(window->surface);
+        }
+
         wl_display_flush(window->display->display);
 
         window->display->windows.erase(window->surface);
@@ -522,10 +520,8 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
     window->appID = appID;
     window->taskID = taskID;
     window->isActive = true;
-    window->bg_viewport = NULL;
+    window->destroy_background_objects = true;
     window->bg_buffer = NULL;
-    window->bg_surface = NULL;
-    window->bg_subsurface = NULL;
 
     int fd = syscall(SYS_memfd_create, "buffer", 0);
     ftruncate(fd, 4);
@@ -584,7 +580,7 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
         else
             wl_shell_surface_set_title(window->shell_surface, appID.c_str());
     } else {
-        assert(0);
+        abort();
     }
 
     wl_surface_commit(window->surface);
@@ -625,11 +621,25 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
         finished_computing_scale(display);
     }
 
+    if (display->viewporter) {
+        window->viewport = wp_viewporter_get_viewport(display->viewporter, window->surface);
+    }
+
+    // TODO: Fix background when viewport is not supported
     // No subsurface background for us!
-    if ((!use_subsurfaces && !display->subcompositor) ||
+    if (!display->subcompositor ||
+        !display->viewporter ||
         property_get_bool("persist.waydroid.no_background_subsurface", false)) {
+        window->destroy_background_objects = false;
+        window->layers.emplace_back(window->surface, window->viewport);
         wl_shm_pool_destroy(pool);
         return window;
+    } else if (!use_subsurfaces) {
+        /* If we do not use subsurfaces for compositing create at least one for the window content
+         * This surface should be desync so that we don't need to send commits for the background surface.
+         * Since the surface's position will always be (0,0) committing the parent surface is not required then*/
+        window->create_new_layer();
+        wl_subsurface_set_desync(window->layers[0].subsurface);
     }
 
     uint32_t *buf = (uint32_t*)shm_data;
@@ -639,22 +649,10 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
     close(fd);
 
     struct wl_surface *surface = window->surface;
-    if (!use_subsurfaces) {
-        surface = wl_compositor_create_surface(display->compositor);
-        struct wl_subsurface *subsurface = wl_subcompositor_get_subsurface(display->subcompositor, surface, window->surface);
-        wl_subsurface_place_below(subsurface, window->surface);
-        window->bg_surface = surface;
-        window->bg_subsurface = subsurface;
-    }
-
     wl_surface_attach(surface, window->bg_buffer, 0, 0);
-    wl_surface_damage_buffer(surface, 0, 0, 1, 1);
-
-    if (display->viewporter) {
-        window->bg_viewport = wp_viewporter_get_viewport(display->viewporter, surface);
-        wp_viewport_set_source(window->bg_viewport, wl_fixed_from_int(0), wl_fixed_from_int(0), wl_fixed_from_int(1), wl_fixed_from_int(1));
-        wp_viewport_set_destination(window->bg_viewport, display->width, display->height);
-    }
+    wl_surface_damage(surface, 0, 0, INT32_MAX, INT32_MAX);
+    wp_viewport_set_source(window->viewport, wl_fixed_from_int(0), wl_fixed_from_int(0), wl_fixed_from_int(1), wl_fixed_from_int(1));
+    wp_viewport_set_destination(window->viewport, display->width, display->height);
 
     if (display->wm_base)
         xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width, display->height);
@@ -712,6 +710,16 @@ window::layer& window::layer::operator=(window::layer&& rhs) {
     rhs.viewport = nullptr;
 
     return *this;
+}
+
+window::layer& window::create_new_layer() {
+    wl_surface *surface = wl_compositor_create_surface(display->compositor);
+    wl_subsurface *subsurface = wl_subcompositor_get_subsurface(display->subcompositor, surface, this->surface);
+    wp_viewport *viewport = nullptr;
+    if (display->viewporter)
+        viewport = wp_viewporter_get_viewport(display->viewporter, surface);
+
+    return layers.emplace_back(surface, viewport, subsurface);
 }
 
 static int
