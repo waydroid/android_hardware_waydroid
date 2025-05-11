@@ -464,15 +464,7 @@ void
 destroy_window(struct window *window, bool keep)
 {
     if (window->isActive) {
-        if (window->callback)
-            wl_callback_destroy(window->callback);
-
-        for (auto it = window->surfaces.begin(); it != window->surfaces.end(); it++) {
-            if (window->viewports[it->first])
-                wp_viewport_destroy(window->viewports[it->first]);
-            wl_subsurface_destroy(window->subsurfaces[it->first]);
-            wl_surface_destroy(it->second);
-        }
+        window->layers.clear();
         if (window->xdg_toplevel)
             xdg_toplevel_destroy(window->xdg_toplevel);
         if (window->xdg_surface)
@@ -525,7 +517,6 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
     if (!window)
         return NULL;
 
-    window->callback = NULL;
     window->display = display;
     window->surface = wl_compositor_create_surface(display->compositor);
     window->appID = appID;
@@ -685,6 +676,42 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
     wl_surface_commit(surface);
 
     return window;
+}
+
+window::layer::layer(wl_surface *surface, wp_viewport *viewport, wl_subsurface *subsurface) : surface(surface), subsurface(subsurface), viewport(viewport) {}
+
+window::layer::~layer() {
+    if (viewport)
+        wp_viewport_destroy(viewport);
+    if (subsurface)
+        wl_subsurface_destroy(subsurface);
+    if (surface)
+        wl_surface_destroy(surface);
+}
+
+window::layer::layer(window::layer&& other) : surface(other.surface), subsurface(other.subsurface), viewport(other.viewport) {
+    other.surface = nullptr;
+    other.subsurface = nullptr;
+    other.viewport = nullptr;
+}
+
+window::layer& window::layer::operator=(window::layer&& rhs) {
+    if (viewport)
+        wp_viewport_destroy(viewport);
+    if (subsurface)
+        wl_subsurface_destroy(subsurface);
+    if (surface)
+        wl_surface_destroy(surface);
+
+    surface = rhs.surface;
+    subsurface = rhs.subsurface;
+    viewport = rhs.viewport;
+
+    rhs.surface = nullptr;
+    rhs.subsurface = nullptr;
+    rhs.viewport = nullptr;
+
+    return *this;
 }
 
 static int
