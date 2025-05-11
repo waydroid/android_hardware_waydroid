@@ -197,29 +197,48 @@ struct buffer {
 };
 
 struct window {
+    struct layer {
+        struct wl_surface *surface;
+        struct wl_subsurface *subsurface;
+        struct wp_viewport *viewport;
+
+        layer() = default;
+        layer(wl_surface *surface, wp_viewport *viewport, wl_subsurface *subsurface = nullptr);
+        ~layer();
+
+        layer(layer &&other);
+        layer &operator=(layer &&rhs);
+    };
+
     struct display *display;
-    struct wl_surface *surface;
-    struct wp_viewport *viewport;
+
     struct wl_shell_surface *shell_surface;
     struct xdg_surface *xdg_surface;
     struct xdg_toplevel *xdg_toplevel;
+
+    struct wl_surface *surface;
+    struct wp_viewport *viewport;
+
     struct wp_viewport *bg_viewport;
     struct wl_buffer *bg_buffer;
     struct wl_surface *bg_surface;
     struct wl_subsurface *bg_subsurface;
+
     struct wl_region* input_region;
+
     struct zwp_locked_pointer_v1 *locked_pointer;
     struct zwp_idle_inhibitor_v1 *idle_inhibitor;
-    std::map<size_t, struct wl_surface *> surfaces;
-    std::map<size_t, struct wl_subsurface *> subsurfaces;
-    std::map<size_t, struct wp_viewport *> viewports;
-    struct wl_callback *callback;
+
+    std::map<size_t, layer> layers;
+
     struct buffer *last_layer_buffer;
     struct buffer *snapshot_buffer;
+
+    bool isActive;
     int lastLayer;
+
     std::string appID;
     std::string taskID;
-    bool isActive;
 };
 
 void
