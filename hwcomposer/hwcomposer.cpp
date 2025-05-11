@@ -303,9 +303,11 @@ static void setup_viewport_source(wp_viewport *viewport, hwc_frect_t crop, uint3
 
 static void setup_viewport_destination(wp_viewport *viewport, hwc_rect_t frame, struct display *display)
 {
+    int width = static_cast<int>(ceil((frame.right - frame.left) / display->scale));
+    int height = static_cast<int>(ceil((frame.bottom - frame.top) / display->scale));
     wp_viewport_set_destination(viewport,
-            fmax(1, ceil((frame.right - frame.left) / display->scale)),
-            fmax(1, ceil((frame.bottom - frame.top) / display->scale)));
+                                std::max(1, width),
+                                std::max(1, height));
 }
 
 static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, struct window *window, bool multi)
