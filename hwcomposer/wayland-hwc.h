@@ -216,13 +216,11 @@ struct window {
     struct xdg_surface *xdg_surface;
     struct xdg_toplevel *xdg_toplevel;
 
+    /* Used for the background color */
+    bool destroy_background_objects;
     struct wl_surface *surface;
     struct wp_viewport *viewport;
-
-    struct wp_viewport *bg_viewport;
     struct wl_buffer *bg_buffer;
-    struct wl_surface *bg_surface;
-    struct wl_subsurface *bg_subsurface;
 
     struct wl_region* input_region;
 
@@ -239,6 +237,8 @@ struct window {
 
     std::string appID;
     std::string taskID;
+
+    window::layer &create_new_layer();
 };
 
 void
