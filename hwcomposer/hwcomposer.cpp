@@ -313,28 +313,11 @@ static void setup_viewport_destination(wp_viewport *viewport, hwc_rect_t frame, 
 static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, struct window *window)
 {
     pdev->display->windows[window->surface] = window;
-    if (!pdev->should_compose) {
-        pdev->display->layers[window->surface] = {
-            .x = layer->displayFrame.left,
-            .y = layer->displayFrame.top };
-        if (pdev->display->scale != 1 && pdev->display->viewporter && !window->viewport) {
-            window->viewport = wp_viewporter_get_viewport(pdev->display->viewporter, window->surface);
-            setup_viewport_destination(window->viewport, layer->displayFrame, pdev->display);
-        }
-        return window->surface;
-    }
 
     window::layer &requested_layer = [&]() -> window::layer& {
         if (window->lastLayer >= window->layers.size()) {
             assert(window->lastLayer == window->layers.size());
-
-            struct wl_surface *surface = wl_compositor_create_surface(pdev->display->compositor);
-            struct wl_subsurface *subsurface = wl_subcompositor_get_subsurface(pdev->display->subcompositor, surface, window->surface);
-            struct wp_viewport *viewport = nullptr;
-            if (pdev->display->viewporter)
-                viewport = wp_viewporter_get_viewport(pdev->display->viewporter, surface);
-
-            window->layers.emplace_back(surface, viewport, subsurface);
+            window->create_new_layer();
         }
 
         return window->layers[window->lastLayer];
@@ -345,9 +328,11 @@ static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pde
         setup_viewport_destination(requested_layer.viewport, layer->displayFrame, pdev->display);
     }
 
-    wl_subsurface_set_position(requested_layer.subsurface,
-                               floor(layer->displayFrame.left / pdev->display->scale),
-                               floor(layer->displayFrame.top / pdev->display->scale));
+    if (requested_layer.subsurface) {
+        wl_subsurface_set_position(requested_layer.subsurface,
+                                   floor(layer->displayFrame.left / pdev->display->scale),
+                                   floor(layer->displayFrame.top / pdev->display->scale));
+    }
 
     if (window->input_region) {
         wl_region_add(window->input_region,
