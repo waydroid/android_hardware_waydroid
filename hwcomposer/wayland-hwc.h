@@ -229,7 +229,7 @@ struct window {
     struct zwp_locked_pointer_v1 *locked_pointer;
     struct zwp_idle_inhibitor_v1 *idle_inhibitor;
 
-    std::map<size_t, layer> layers;
+    std::vector<layer> layers;
 
     struct buffer *last_layer_buffer;
     struct buffer *snapshot_buffer;

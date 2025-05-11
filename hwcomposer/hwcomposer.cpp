@@ -325,23 +325,19 @@ static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pde
     }
 
     window::layer &requested_layer = [&]() -> window::layer& {
-        auto find_result = window->layers.find(window->lastLayer);
-        if (find_result == window->layers.end()) {
+        if (window->lastLayer >= window->layers.size()) {
+            assert(window->lastLayer == window->layers.size());
+
             struct wl_surface *surface = wl_compositor_create_surface(pdev->display->compositor);
             struct wl_subsurface *subsurface = wl_subcompositor_get_subsurface(pdev->display->subcompositor, surface, window->surface);
             struct wp_viewport *viewport = nullptr;
             if (pdev->display->viewporter)
                 viewport = wp_viewporter_get_viewport(pdev->display->viewporter, surface);
-            auto result = window->layers.emplace(
-                    std::piecewise_construct,
-                    std::forward_as_tuple(window->lastLayer),
-                    std::forward_as_tuple(surface, viewport, subsurface)
-                    );
-            assert(result.second);
-            return result.first->second;
-        } else {
-            return find_result->second;
+
+            window->layers.emplace_back(surface, viewport, subsurface);
         }
+
+        return window->layers[window->lastLayer];
     }();
 
     if (requested_layer.viewport) {
@@ -847,8 +843,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                             window = it->second;
                             break;
                         }
-                        for (auto itt = it->second->layers.begin(); itt != it->second->layers.end(); itt++) {
-                            if (itt->second.surface == pdev->display->pointer_surface) {
+                        for (auto &window_layer : it->second->layers) {
+                            if (window_layer.surface == pdev->display->pointer_surface) {
                                 window = it->second;
                                 break;
                             }
@@ -962,10 +958,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                     continue;
                 // Neutralize unused surfaces
                 for (size_t l = it->second->lastLayer; l < it->second->layers.size(); l++) {
-                    if (it->second->layers.find(l) != it->second->layers.end()) {
-                        wl_surface_attach(it->second->layers[l].surface, NULL, 0, 0);
-                        wl_surface_commit(it->second->layers[l].surface);
-                    }
+                    wl_surface_attach(it->second->layers[l].surface, NULL, 0, 0);
+                    wl_surface_commit(it->second->layers[l].surface);
                 }
             }
         }
