@@ -310,23 +310,23 @@ static void setup_viewport_destination(wp_viewport *viewport, hwc_rect_t frame, 
                                 std::max(1, height));
 }
 
-static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, struct window *window, bool multi)
+static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, struct window *window)
 {
     pdev->display->windows[window->surface] = window;
-    if (!multi) {
+    if (!pdev->should_compose) {
         pdev->display->layers[window->surface] = {
             .x = layer->displayFrame.left,
             .y = layer->displayFrame.top };
-        if (!multi && pdev->display->scale != 1 && pdev->display->viewporter && !window->viewport) {
+        if (pdev->display->scale != 1 && pdev->display->viewporter && !window->viewport) {
             window->viewport = wp_viewporter_get_viewport(pdev->display->viewporter, window->surface);
             setup_viewport_destination(window->viewport, layer->displayFrame, pdev->display);
         }
         return window->surface;
     }
 
-    struct wl_surface *surface = NULL;
-    struct wl_subsurface *subsurface = NULL;
-    struct wp_viewport *viewport = NULL;
+    struct wl_surface *surface = nullptr;
+    struct wl_subsurface *subsurface = nullptr;
+    struct wp_viewport *viewport = nullptr;
 
     if (window->surfaces.find(window->lastLayer) == window->surfaces.end()) {
         surface = wl_compositor_create_surface(pdev->display->compositor);
@@ -883,7 +883,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         // TODO: Implement per-layer explicit synchronization
         fb_layer->releaseFenceFd = -1;
 
-        struct wl_surface *surface = get_surface(pdev, fb_layer, window, pdev->should_compose);
+        struct wl_surface *surface = get_surface(pdev, fb_layer, window);
         if (!surface) {
             ALOGE("Failed to get surface");
             continue;
