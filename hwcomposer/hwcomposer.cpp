@@ -312,14 +312,11 @@ static void setup_viewport_destination(wp_viewport *viewport, hwc_rect_t frame, 
 
 static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, struct window *window)
 {
-    window::layer &requested_layer = [&]() -> window::layer& {
-        if (window->lastLayer >= window->layers.size()) {
-            assert(window->lastLayer == window->layers.size());
-            window->create_new_layer();
-        }
-
-        return window->layers[window->lastLayer];
-    }();
+    if (window->lastLayer >= window->layers.size()) {
+        assert(window->lastLayer == window->layers.size());
+        window->create_new_layer();
+    }
+    window::layer &requested_layer = window->layers[window->lastLayer];
 
     if (requested_layer.viewport) {
         setup_viewport_source(requested_layer.viewport, layer->sourceCropf, layer->transform);
