@@ -83,8 +83,7 @@ namespace {
     }
 }
 
-struct waydroid_hwc_composer_device_1 {
-    hwc_composer_device_1_t base; // constant after init
+struct waydroid_hwc_composer_device_1 : hwc_composer_device_1_t {
     const hwc_procs_t *procs;     // constant after init
     pthread_t wayland_thread;     // constant after init
     pthread_t vsync_thread;       // constant after init
@@ -1224,23 +1223,23 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
         return -ENOMEM;
     }
 
-    pdev->base.common.tag = HARDWARE_DEVICE_TAG;
-    pdev->base.common.version = HWC_DEVICE_API_VERSION_1_4;
-    pdev->base.common.module = const_cast<hw_module_t *>(module);
-    pdev->base.common.close = hwc_close;
+    pdev->common.tag = HARDWARE_DEVICE_TAG;
+    pdev->common.version = HWC_DEVICE_API_VERSION_1_4;
+    pdev->common.module = const_cast<hw_module_t *>(module);
+    pdev->common.close = hwc_close;
 
-    pdev->base.prepare = hwc_prepare;
-    pdev->base.set = hwc_set;
-    pdev->base.eventControl = hwc_event_control;
-    pdev->base.blank = hwc_blank;
-    pdev->base.query = hwc_query;
-    pdev->base.registerProcs = hwc_register_procs;
-    pdev->base.dump = hwc_dump;
-    pdev->base.getDisplayConfigs = hwc_get_display_configs;
-    pdev->base.getDisplayAttributes = hwc_get_display_attributes;
-    pdev->base.getActiveConfig = hwc_get_active_config;
-    pdev->base.setActiveConfig = hwc_set_active_config;
-    pdev->base.setCursorPositionAsync = hwc_set_cursor_position_async;
+    pdev->prepare = hwc_prepare;
+    pdev->set = hwc_set;
+    pdev->eventControl = hwc_event_control;
+    pdev->blank = hwc_blank;
+    pdev->query = hwc_query;
+    pdev->registerProcs = hwc_register_procs;
+    pdev->dump = hwc_dump;
+    pdev->getDisplayConfigs = hwc_get_display_configs;
+    pdev->getDisplayAttributes = hwc_get_display_attributes;
+    pdev->getActiveConfig = hwc_get_active_config;
+    pdev->setActiveConfig = hwc_set_active_config;
+    pdev->setCursorPositionAsync = hwc_set_cursor_position_async;
 
     pdev->vsync_period_ns = 1000*1000*1000/60; // vsync is 60 hz
 
@@ -1330,7 +1329,7 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
         ALOGE("waydroid_hw_composer could not start egl_worker_thread");
     }
 
-    *device = &pdev->base.common;
+    *device = &pdev->common;
 
     return ret;
 }
