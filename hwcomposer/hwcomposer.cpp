@@ -147,14 +147,23 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
            everything between the first and the last skipped layer. Unfortunately,
            this can't be done in multi windows mode, which relies on layers not
            being composited, so we won't render skipped layers correctly in that mode */
-        if (!pdev->multi_windows)
-            if (skipped.first >= 0 && i > skipped.first && i < skipped.second)
+        if (!pdev->multi_windows && skipped.first != -1) {
+            if (skipped.first <= i && i <= skipped.second) {
                 contents->hwLayers[i].compositionType = HWC_FRAMEBUFFER;
+                continue;
+            }
+        }
 
-        if (contents->hwLayers[i].compositionType ==
-            (pdev->should_compose ? HWC_FRAMEBUFFER : HWC_OVERLAY))
-            contents->hwLayers[i].compositionType =
-                (pdev->should_compose ? HWC_OVERLAY : HWC_FRAMEBUFFER);
+        /* If we do composition then request a buffer for every possible layer
+         * otherwise instruct SurfaceFlinger to compose everything itself */
+        if (pdev->should_compose) {
+            if (contents->hwLayers[i].compositionType == HWC_FRAMEBUFFER) {
+                contents->hwLayers[i].compositionType = HWC_OVERLAY;
+            }
+            // TODO: Handle HWC_SIDEBAND
+        } else {
+            contents->hwLayers[i].compositionType = HWC_FRAMEBUFFER;
+        }
     }
 
     return 0;
