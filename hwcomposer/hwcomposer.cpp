@@ -81,6 +81,19 @@ namespace {
         }
         return {first, last};
     }
+
+    hwc_frect_t rect_apply_transform(hwc_frect_t src, uint32_t transform) {
+        /* Transform bits are defined so that for both 90° and 270° this bit is set */
+        if (transform & HWC_TRANSFORM_ROT_90) {
+            return hwc_frect_t {
+                .left = src.top,
+                .top = src.left,
+                .right = src.bottom,
+                .bottom = src.right
+            };
+        }
+        return src;
+    }
 }
 
 struct waydroid_hwc_composer_device_1 : hwc_composer_device_1_t {
@@ -280,15 +293,7 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
 
 static void setup_viewport_source(wp_viewport *viewport, hwc_frect_t crop, uint32_t transform)
 {
-    hwc_frect_t sourceCrop = crop;
-
-    if (transform & HWC_TRANSFORM_ROT_90) {
-        sourceCrop.left = crop.top;
-        sourceCrop.top = crop.left;
-        sourceCrop.right = crop.bottom;
-        sourceCrop.bottom = crop.right;
-    }
-
+    hwc_frect_t sourceCrop = rect_apply_transform(crop, transform);
     wp_viewport_set_source(viewport,
                            wl_fixed_from_double(fmax(0, sourceCrop.left)),
                            wl_fixed_from_double(fmax(0, sourceCrop.top)),
