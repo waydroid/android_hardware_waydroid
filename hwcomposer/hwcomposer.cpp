@@ -123,10 +123,9 @@ namespace {
              * It's possible that a new buffer got the same handle after the old one was destroyed
              * At least check for the metadata to match. This way this situation is hopefully unlikely */
             if (it->second->metadata != metadata) {
-                destroy_buffer(it->second);
                 pdev->display->buffer_map.erase(it);
             } else {
-                return it->second;
+                return it->second.get();
             }
         }
         return nullptr;
@@ -143,9 +142,9 @@ namespace {
                 ALOGE("failed to create a wayland buffer");
                 return nullptr;
             }
-            // TODO: Actually use unique_ptr
-            buf = result.release();
-            pdev->display->buffer_map[layer->handle] = buf;
+            auto emplace_result = pdev->display->buffer_map.emplace(layer->handle, std::move(result));
+            assert(emplace_result.second);
+            buf = emplace_result.first->second.get();
         }
 
         if (buf->isShm)
@@ -399,7 +398,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
     for (auto it = pdev->display->buffer_map.begin(); it != pdev->display->buffer_map.end(); /* no increment */) {
         if (it->second && it->second->invalidated == true) {
-            destroy_buffer(it->second);
             pdev->display->buffer_map.erase(it++);
         } else {
             ++it;
@@ -851,11 +849,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
         wl_surface_commit(surface);
 
-        if (window->snapshot_buffer) {
-            // Snapshot buffer should be detached by now, clean up
-            destroy_buffer(window->snapshot_buffer);
-            window->snapshot_buffer = nullptr;
-        }
+        // Snapshot buffer should be detached by now, clean up
+        window->snapshot_buffer = nullptr;
     }
     // Layers order is changed from SF so we rearrange wayland surfaces
     if (pdev->display->geo_changed) {
@@ -1038,10 +1033,6 @@ static int hwc_get_display_attributes(struct hwc_composer_device_1* dev __unused
 static int hwc_close(hw_device_t* dev) {
     auto *pdev = reinterpret_cast<waydroid_hwc_composer_device_1 *>(dev);
 
-    for (std::map<buffer_handle_t, struct buffer *>::iterator it = pdev->display->buffer_map.begin(); it != pdev->display->buffer_map.end(); it++)
-    {
-        destroy_buffer(it->second);
-    }
     pdev->display->buffer_map.clear();
 
     destroy_display(pdev->display);
