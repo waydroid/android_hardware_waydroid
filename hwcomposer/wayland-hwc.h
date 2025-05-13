@@ -193,6 +193,18 @@ struct buffer_metadata {
     uint32_t pixel_stride;
     uint32_t format;
 };
+constexpr bool operator==(const buffer_metadata &lhs, const buffer_metadata &rhs) {
+    return lhs.height == rhs.height
+           && lhs.width == rhs.width
+           && lhs.pixel_stride == rhs.pixel_stride
+           && lhs.format == rhs.format;
+}
+constexpr bool operator!=(const buffer_metadata &lhs, const buffer_metadata &rhs) {
+    return lhs.height != rhs.height
+           || lhs.width != rhs.width
+           || lhs.pixel_stride != rhs.pixel_stride
+           || lhs.format != rhs.format;
+}
 
 struct buffer {
     struct wl_buffer *buffer;
