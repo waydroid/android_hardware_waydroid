@@ -90,8 +90,8 @@ std::unique_ptr<buffer> create_shm_wl_buffer(display *display, const buffer_meta
         return nullptr;
     }
     struct wl_shm_pool *pool = wl_shm_create_pool(display->shm, fd, size);
-    buf->buffer = wl_shm_pool_create_buffer(pool, 0, metadata.width, metadata.height, shm_stride, buf->format);
-    wl_buffer_add_listener(buf->buffer, &buffer_listener, nullptr);
+    buf->wl_buffer = wl_shm_pool_create_buffer(pool, 0, metadata.width, metadata.height, shm_stride, buf->format);
+    wl_buffer_add_listener(buf->wl_buffer, &buffer_listener, nullptr);
     wl_shm_pool_destroy(pool);
     close(fd);
 
@@ -170,7 +170,7 @@ std::unique_ptr<buffer> create_dmabuf_wl_buffer(display *display, const buffer_m
 {
     assert(prime_fd >= 0);
 
-    std::unique_ptr<buffer> buf {new buffer()};
+    std::unique_ptr<buffer> buf { new buffer() };
 
     buf->metadata = metadata;
     buf->format = (drm_format >= 0) ? drm_format : ConvertHalFormatToDrm(display, metadata.format);
@@ -181,15 +181,15 @@ std::unique_ptr<buffer> create_dmabuf_wl_buffer(display *display, const buffer_m
     zwp_linux_buffer_params_v1_add(params, prime_fd, 0, offset, byte_stride, modifier >> 32, modifier & 0xffffffff);
     zwp_linux_buffer_params_v1_add_listener(params, &params_listener, nullptr);
 
-    buf->buffer = zwp_linux_buffer_params_v1_create_immed(params, buf->metadata.width, buf->metadata.height, buf->format, 0);
-    wl_buffer_add_listener(buf->buffer, &buffer_listener, nullptr);
+    buf->wl_buffer = zwp_linux_buffer_params_v1_create_immed(params, buf->metadata.width, buf->metadata.height, buf->format, 0);
+    wl_buffer_add_listener(buf->wl_buffer, &buffer_listener, nullptr);
 
     return buf;
 }
 
 std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_metadata& metadata, buffer_handle_t handle)
 {
-    std::unique_ptr<buffer> buf {new buffer()};
+    std::unique_ptr<buffer> buf { new buffer() };
 
     buf->metadata = metadata;
     buf->format = metadata.format;
@@ -206,10 +206,10 @@ std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_
         android_wlegl_handle_add_fd(wlegl_handle, handle->data[i]);
     }
 
-    buf->buffer = android_wlegl_create_buffer(display->android_wlegl, buf->metadata.width, buf->metadata.height, buf->metadata.pixel_stride, buf->format, GRALLOC_USAGE_HW_RENDER, wlegl_handle);
+    buf->wl_buffer = android_wlegl_create_buffer(display->android_wlegl, buf->metadata.width, buf->metadata.height, buf->metadata.pixel_stride, buf->format, GRALLOC_USAGE_HW_RENDER, wlegl_handle);
     android_wlegl_handle_destroy(wlegl_handle);
 
-    wl_buffer_add_listener(buf->buffer, &buffer_listener, nullptr);
+    wl_buffer_add_listener(buf->wl_buffer, &buffer_listener, nullptr);
 
     return buf;
 }

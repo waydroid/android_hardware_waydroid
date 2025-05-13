@@ -207,7 +207,7 @@ constexpr bool operator!=(const buffer_metadata &lhs, const buffer_metadata &rhs
 }
 
 struct buffer {
-    struct wl_buffer *buffer;
+    struct wl_buffer *wl_buffer;
     struct wp_presentation_feedback *feedback;
 
     buffer_handle_t handle;

@@ -82,7 +82,7 @@ struct buffer;
 
 void
 destroy_buffer(struct buffer* buf) {
-    wl_buffer_destroy(buf->buffer);
+    wl_buffer_destroy(buf->wl_buffer);
     if (buf->isShm)
         munmap(buf->shm_data, buf->size);
     delete buf;
@@ -112,7 +112,7 @@ void snapshot_inactive_app_window(struct display *display, struct window *window
 
     egl_render_to_pixels(display, new_buf);
 
-    wl_surface_attach(surface, new_buf->buffer, 0, 0);
+    wl_surface_attach(surface, new_buf->wl_buffer, 0, 0);
     if (wl_surface_get_version(surface) >= WL_SURFACE_DAMAGE_BUFFER_SINCE_VERSION)
         wl_surface_damage_buffer(surface, 0, 0, new_buf->metadata.width, new_buf->metadata.height);
     else
