@@ -116,21 +116,13 @@ namespace {
         return src;
     }
 
-    // TODO: Replace with operator== in buffer_metadata
-    bool compare_buffer_metadata(const buffer *buf, const buffer_metadata &metadata) {
-        return buf->metadata.height == metadata.height
-               && buf->metadata.width == metadata.width
-               && buf->metadata.pixel_stride == metadata.pixel_stride
-               && buf->metadata.format == metadata.format;
-    }
-
     buffer *find_cached_buffer(waydroid_hwc_composer_device_1 *pdev, const buffer_metadata &metadata, buffer_handle_t handle) {
         auto it = pdev->display->buffer_map.find(handle);
         if (it != pdev->display->buffer_map.end()) {
             /* FIXME We can't be sure that our cached buffer actually refers to the buffer corresponding to the given handle
              * It's possible that a new buffer got the same handle after the old one was destroyed
              * At least check for the metadata to match. This way this situation is hopefully unlikely */
-            if (!compare_buffer_metadata(it->second, metadata)) {
+            if (it->second->metadata != metadata) {
                 destroy_buffer(it->second);
                 pdev->display->buffer_map.erase(it);
             } else {
