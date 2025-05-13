@@ -601,7 +601,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                 }
                 buf->may_change_geo = true;
 
-                wl_surface_attach(pdev->display->cursor_surface, buf->buffer, 0, 0);
+                wl_surface_attach(pdev->display->cursor_surface, buf->wl_buffer, 0, 0);
                 if (wl_surface_get_version(pdev->display->cursor_surface) >= WL_SURFACE_DAMAGE_BUFFER_SINCE_VERSION)
                     wl_surface_damage_buffer(pdev->display->cursor_surface, 0, 0, buf->metadata.width, buf->metadata.height);
                 else
@@ -798,7 +798,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         window->last_layer_buffer = buf;
         window->lastLayer++;
 
-        wl_surface_attach(surface, buf->buffer, 0, 0);
+        wl_surface_attach(surface, buf->wl_buffer, 0, 0);
         if (wl_surface_get_version(surface) >= WL_SURFACE_DAMAGE_BUFFER_SINCE_VERSION)
             wl_surface_damage_buffer(surface, 0, 0, buf->metadata.width, buf->metadata.height);
         else
