@@ -62,6 +62,8 @@
 
 #include <xkbcommon/xkbcommon.h>
 
+#include "gralloc_handler.h"
+
 #include <wayland-client.h>
 #include <wayland-android-client-protocol.h>
 #include "linux-dmabuf-unstable-v1-client-protocol.h"
@@ -86,212 +88,6 @@ destroy_buffer(struct buffer* buf) {
     delete buf;
 }
 
-static void
-buffer_release(void *, struct wl_buffer *)
-{
-}
-
-static const struct wl_buffer_listener buffer_listener = {
-    buffer_release
-};
-
-int
-create_android_wl_buffer(struct display *display, struct buffer *buffer,
-             int width, int height, int format,
-             int pixel_stride, buffer_handle_t target)
-{
-    struct android_wlegl_handle *wlegl_handle;
-    struct wl_array ints;
-    int *the_ints;
-
-    buffer->width = width;
-    buffer->height = height;
-    buffer->format = buffer->hal_format = format;
-    buffer->pixel_stride = pixel_stride;
-    buffer->handle = target;
-
-    wl_array_init(&ints);
-    the_ints = (int *)wl_array_add(&ints, target->numInts * sizeof(int));
-    memcpy(the_ints, target->data + target->numFds, target->numInts * sizeof(int));
-    wlegl_handle = android_wlegl_create_handle(display->android_wlegl, target->numFds, &ints);
-    wl_array_release(&ints);
-
-    for (int i = 0; i < target->numFds; i++) {
-        android_wlegl_handle_add_fd(wlegl_handle, target->data[i]);
-    }
-
-    buffer->buffer = android_wlegl_create_buffer(display->android_wlegl, buffer->width, buffer->height, buffer->pixel_stride, buffer->format, GRALLOC_USAGE_HW_RENDER, wlegl_handle);
-    android_wlegl_handle_destroy(wlegl_handle);
-
-    wl_buffer_add_listener(buffer->buffer, &buffer_listener, buffer);
-
-    return 0;
-}
-
-static void
-create_succeeded(void *data,
-         struct zwp_linux_buffer_params_v1 *params,
-         struct wl_buffer *new_buffer)
-{
-    struct buffer *buffer = (struct buffer*)data;
-
-    buffer->buffer = new_buffer;
-    wl_buffer_add_listener(buffer->buffer, &buffer_listener, buffer);
-
-    zwp_linux_buffer_params_v1_destroy(params);
-}
-
-static void
-create_failed(void *data, struct zwp_linux_buffer_params_v1 *params)
-{
-    struct buffer *buffer = (struct buffer*)data;
-
-    buffer->buffer = NULL;
-
-    zwp_linux_buffer_params_v1_destroy(params);
-
-    ALOGE("%s: zwp_linux_buffer_params.create failed.", __func__);
-}
-
-static const struct zwp_linux_buffer_params_v1_listener params_listener = {
-    create_succeeded,
-    create_failed
-};
-
-bool isFormatSupported(struct display *display, uint32_t format) {
-    for (int i = 0; i < display->formats_count; i++) {
-        if (format == display->formats[i])
-            return true;
-    }
-    return false;
-}
-
-int ConvertHalFormatToDrm(struct display *display, uint32_t hal_format) {
-    uint32_t fmt;
-
-    switch (hal_format) {
-        case HAL_PIXEL_FORMAT_RGB_888:
-            fmt = DRM_FORMAT_BGR888;
-            if (!isFormatSupported(display, fmt))
-                fmt = DRM_FORMAT_RGB888;
-            break;
-        case HAL_PIXEL_FORMAT_BGRA_8888:
-            fmt = DRM_FORMAT_ARGB8888;
-            if (!isFormatSupported(display, fmt))
-                fmt = DRM_FORMAT_ABGR8888;
-            break;
-        case HAL_PIXEL_FORMAT_RGBX_8888:
-            fmt = DRM_FORMAT_XBGR8888;
-            if (!isFormatSupported(display, fmt))
-                fmt = DRM_FORMAT_XRGB8888;
-            break;
-        case HAL_PIXEL_FORMAT_RGBA_8888:
-            fmt = DRM_FORMAT_ABGR8888;
-            if (!isFormatSupported(display, fmt))
-                fmt = DRM_FORMAT_ARGB8888;
-            break;
-        case HAL_PIXEL_FORMAT_RGB_565:
-            fmt = DRM_FORMAT_BGR565;
-            if (!isFormatSupported(display, fmt))
-                fmt = DRM_FORMAT_RGB565;
-            break;
-        case HAL_PIXEL_FORMAT_YV12:
-            fmt = DRM_FORMAT_YVU420;
-            if (!isFormatSupported(display, fmt))
-                fmt = DRM_FORMAT_GR88;
-            break;
-        default:
-            ALOGE("Cannot convert hal format to drm format %u", hal_format);
-            return -EINVAL;
-    }
-    if (!isFormatSupported(display, fmt)) {
-        ALOGE("Current wayland display doesn't support hal format %u", hal_format);
-        return -EINVAL;
-    }
-    return fmt;
-}
-
-int
-create_dmabuf_wl_buffer(struct display *display, struct buffer *buffer,
-             int width, int height, int hal_format, int format,
-             int prime_fd, int pixel_stride, int byte_stride,
-             int offset, uint64_t modifier, buffer_handle_t target)
-{
-    struct zwp_linux_buffer_params_v1 *params;
-
-    assert(prime_fd >= 0);
-    buffer->hal_format = hal_format;
-    buffer->format = (format >= 0) ? format : ConvertHalFormatToDrm(display, hal_format);
-    assert(buffer->format >= 0);
-    buffer->width = width;
-    buffer->height = height;
-    buffer->pixel_stride = pixel_stride;
-    buffer->handle = target;
-
-    params = zwp_linux_dmabuf_v1_create_params(display->dmabuf);
-    zwp_linux_buffer_params_v1_add(params, prime_fd, 0, offset, byte_stride, modifier >> 32, modifier & 0xffffffff);
-    zwp_linux_buffer_params_v1_add_listener(params, &params_listener, buffer);
-
-    buffer->buffer = zwp_linux_buffer_params_v1_create_immed(params, buffer->width, buffer->height, buffer->format, 0);
-    wl_buffer_add_listener(buffer->buffer, &buffer_listener, buffer);
-
-    return 0;
-}
-
-static int 
-ConvertHalFormatToShm(uint32_t hal_format) {
-    uint32_t fmt;
-
-    switch (hal_format) {
-        case HAL_PIXEL_FORMAT_RGBX_8888:
-            fmt = WL_SHM_FORMAT_XRGB8888;
-            break;
-        case HAL_PIXEL_FORMAT_RGBA_8888:
-            fmt = WL_SHM_FORMAT_ARGB8888;
-            break;
-        default:
-            ALOGE("Cannot convert hal format to shm format %u", hal_format);
-            return -EINVAL;
-    }
-    return fmt;
-}
-
-int
-create_shm_wl_buffer(struct display *display, struct buffer *buffer,
-             int width, int height, int format, int pixel_stride, buffer_handle_t target)
-{
-    // Assume 4bpp formats or none of this is going to work
-    int shm_stride = width * 4;
-    int size = shm_stride * height;
-
-    buffer->size = size;
-    buffer->hal_format = format;
-    buffer->format = ConvertHalFormatToShm(format);
-    assert(buffer->format >= 0);
-    buffer->width = width;
-    buffer->height = height;
-    buffer->pixel_stride = pixel_stride;
-    buffer->handle = target;
-    buffer->isShm = true;
-
-    int fd = syscall(__NR_memfd_create, "buffer", MFD_ALLOW_SEALING);
-    ftruncate(fd, size);
-    buffer->shm_data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (buffer->shm_data == MAP_FAILED) {
-        ALOGE("mmap failed");
-        close(fd);
-
-        return -1;
-    }
-    struct wl_shm_pool *pool = wl_shm_create_pool(display->shm, fd, size);
-    buffer->buffer = wl_shm_pool_create_buffer(pool, 0, width, height, shm_stride, buffer->format);
-    wl_buffer_add_listener(buffer->buffer, &buffer_listener, buffer);
-    wl_shm_pool_destroy(pool);
-    close(fd);
-
-    return 0;
-}
-
 // Call me from egl_worker_thread only!
 void snapshot_inactive_app_window(struct display *display, struct window *window) {
     if (!window->layers[0].surface || !window->last_layer_buffer
@@ -303,16 +99,22 @@ void snapshot_inactive_app_window(struct display *display, struct window *window
     ALOGI("Making inactive window snapshot for %s", window->taskID.c_str());
 
     struct buffer *old_buf = window->last_layer_buffer;
-    struct buffer *new_buf = new struct buffer();
-    // FIXME won't work as expected if there are multiple surfaces
-    struct wl_surface *surface = window->layers[0].surface;
 
-    int ret = create_shm_wl_buffer(display, new_buf, old_buf->width, old_buf->height,
-                                    HAL_PIXEL_FORMAT_RGBA_8888, old_buf->pixel_stride, old_buf->handle);
-    if (ret) {
+    buffer_metadata metadata {
+        old_buf->height,
+        old_buf->width,
+        old_buf->pixel_stride,
+        old_buf->hal_format
+    };
+    // TODO: Actually use unique_ptr
+    struct buffer *new_buf = create_shm_wl_buffer(display, metadata, old_buf->handle).release();
+    if (!new_buf) {
         ALOGE("failed to create a wayland buffer for window snapshot");
         return;
     }
+
+    // FIXME won't work as expected if there are multiple surfaces
+    struct wl_surface *surface = window->layers[0].surface;
 
     egl_render_to_pixels(display, new_buf);
 

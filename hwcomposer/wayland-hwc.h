@@ -81,6 +81,13 @@ enum {
     GRALLOC_DEFAULT
 };
 
+enum class GrallocType {
+    GRALLOC_ANDROID = GRALLOC_ANDROID,
+    GRALLOC_GBM = GRALLOC_GBM,
+    GRALLOC_CROS = GRALLOC_CROS,
+    GRALLOC_DEFAULT = GRALLOC_DEFAULT
+};
+
 #define MAX_TOUCHPOINTS 10
 
 struct layerFrame {
@@ -162,8 +169,11 @@ struct display {
     int full_width;
     int full_height;
     int refresh;
+
+    //TODO: Replace array with set
     uint32_t *formats;
     int formats_count;
+
     std::map<uint32_t, std::vector<uint64_t>> modifiers;
     bool geo_changed;
     std::map<uint32_t, std::string> layer_names;
@@ -182,10 +192,10 @@ struct buffer {
     struct wp_presentation_feedback *feedback;
 
     buffer_handle_t handle;
-    int width;
-    int height;
-    unsigned long pixel_stride;
-    int format;
+    uint32_t width;
+    uint32_t height;
+    uint32_t pixel_stride;
+    uint32_t format;
     uint32_t hal_format;
 
     bool isShm;
@@ -247,21 +257,6 @@ handle_relative_motion(void *data, struct zwp_relative_pointer_v1*,
 
 void
 destroy_buffer(struct buffer* buf);
-
-int
-create_android_wl_buffer(struct display *display, struct buffer *buffer,
-             int width, int height, int format,
-             int pixel_stride, buffer_handle_t target);
-
-int
-create_dmabuf_wl_buffer(struct display *display, struct buffer *buffer,
-             int width, int height, int hal_format, int format,
-             int prime_fd, int pixel_stride, int byte_stride,
-             int offset, uint64_t modifier, buffer_handle_t target);
-
-int
-create_shm_wl_buffer(struct display *display, struct buffer *buffer,
-             int width, int height, int format, int pixel_stride, buffer_handle_t target);
 
 void
 snapshot_inactive_app_window(struct display *display, struct window *window);
