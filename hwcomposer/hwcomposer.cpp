@@ -118,10 +118,10 @@ namespace {
 
     // TODO: Replace with operator== in buffer_metadata
     bool compare_buffer_metadata(const buffer *buf, const buffer_metadata &metadata) {
-        return buf->height == metadata.height
-               && buf->width == metadata.width
-               && buf->pixel_stride == metadata.pixel_stride
-               && buf->hal_format == metadata.format;
+        return buf->metadata.height == metadata.height
+               && buf->metadata.width == metadata.width
+               && buf->metadata.pixel_stride == metadata.pixel_stride
+               && buf->metadata.format == metadata.format;
     }
 
     buffer *find_cached_buffer(waydroid_hwc_composer_device_1 *pdev, const buffer_metadata &metadata, buffer_handle_t handle) {
@@ -611,9 +611,9 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
                 wl_surface_attach(pdev->display->cursor_surface, buf->buffer, 0, 0);
                 if (wl_surface_get_version(pdev->display->cursor_surface) >= WL_SURFACE_DAMAGE_BUFFER_SINCE_VERSION)
-                    wl_surface_damage_buffer(pdev->display->cursor_surface, 0, 0, buf->width, buf->height);
+                    wl_surface_damage_buffer(pdev->display->cursor_surface, 0, 0, buf->metadata.width, buf->metadata.height);
                 else
-                    wl_surface_damage(pdev->display->cursor_surface, 0, 0, buf->width, buf->height);
+                    wl_surface_damage(pdev->display->cursor_surface, 0, 0, buf->metadata.width, buf->metadata.height);
                 if (!pdev->display->viewporter && pdev->display->scale > 1) {
                     // With no viewporter the scale is guaranteed to be integer
                     wl_surface_set_buffer_scale(pdev->display->cursor_surface, (int)pdev->display->scale);
@@ -808,9 +808,9 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
         wl_surface_attach(surface, buf->buffer, 0, 0);
         if (wl_surface_get_version(surface) >= WL_SURFACE_DAMAGE_BUFFER_SINCE_VERSION)
-            wl_surface_damage_buffer(surface, 0, 0, buf->width, buf->height);
+            wl_surface_damage_buffer(surface, 0, 0, buf->metadata.width, buf->metadata.height);
         else
-            wl_surface_damage(surface, 0, 0, buf->width, buf->height);
+            wl_surface_damage(surface, 0, 0, buf->metadata.width, buf->metadata.height);
         if (!pdev->display->viewporter && pdev->display->scale > 1) {
             // With no viewporter the scale is guaranteed to be integer
             wl_surface_set_buffer_scale(surface, (int)pdev->display->scale);

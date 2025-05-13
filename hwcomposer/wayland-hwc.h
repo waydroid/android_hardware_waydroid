@@ -187,16 +187,20 @@ struct display {
     sp<IWaydroidTask> task;
 };
 
+struct buffer_metadata {
+    uint32_t height;
+    uint32_t width;
+    uint32_t pixel_stride;
+    uint32_t format;
+};
+
 struct buffer {
     struct wl_buffer *buffer;
     struct wp_presentation_feedback *feedback;
 
     buffer_handle_t handle;
-    uint32_t width;
-    uint32_t height;
-    uint32_t pixel_stride;
+    buffer_metadata metadata;
     uint32_t format;
-    uint32_t hal_format;
 
     bool isShm;
     void *shm_data;

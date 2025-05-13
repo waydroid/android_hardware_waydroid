@@ -30,13 +30,6 @@
 
 #include "wayland-hwc.h"
 
-struct buffer_metadata {
-    uint32_t height;
-    uint32_t width;
-    uint32_t pixel_stride;
-    uint32_t format;
-};
-
 std::unique_ptr<buffer> create_shm_wl_buffer(display *display, const buffer_metadata& metadata, buffer_handle_t handle);
 std::unique_ptr<buffer> create_dmabuf_wl_buffer(display *display, const buffer_metadata& metadata,
                                                                 int prime_fd, int format, int byte_stride,
