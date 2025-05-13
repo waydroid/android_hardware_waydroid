@@ -75,12 +75,9 @@ std::unique_ptr<buffer> create_shm_wl_buffer(display *display, const buffer_meta
     int size = shm_stride * metadata.height;
 
     buf->size = size;
-    buf->hal_format = metadata.format;
+    buf->metadata = metadata;
     buf->format = ConvertHalFormatToShm(metadata.format);
     assert(buf->format >= 0);
-    buf->width = metadata.width;
-    buf->height = metadata.height;
-    buf->pixel_stride = metadata.pixel_stride;
     buf->handle = handle;
     buf->isShm = true;
 
@@ -175,19 +172,16 @@ std::unique_ptr<buffer> create_dmabuf_wl_buffer(display *display, const buffer_m
 
     std::unique_ptr<buffer> buf {new buffer()};
 
-    buf->hal_format = metadata.format;
+    buf->metadata = metadata;
     buf->format = (drm_format >= 0) ? drm_format : ConvertHalFormatToDrm(display, metadata.format);
     assert(buf->format >= 0);
-    buf->width = metadata.width;
-    buf->height = metadata.height;
-    buf->pixel_stride = metadata.pixel_stride;
     buf->handle = handle;
 
     zwp_linux_buffer_params_v1 *params = zwp_linux_dmabuf_v1_create_params(display->dmabuf);
     zwp_linux_buffer_params_v1_add(params, prime_fd, 0, offset, byte_stride, modifier >> 32, modifier & 0xffffffff);
     zwp_linux_buffer_params_v1_add_listener(params, &params_listener, nullptr);
 
-    buf->buffer = zwp_linux_buffer_params_v1_create_immed(params, buf->width, buf->height, buf->format, 0);
+    buf->buffer = zwp_linux_buffer_params_v1_create_immed(params, buf->metadata.width, buf->metadata.height, buf->format, 0);
     wl_buffer_add_listener(buf->buffer, &buffer_listener, nullptr);
 
     return buf;
@@ -197,10 +191,8 @@ std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_
 {
     std::unique_ptr<buffer> buf {new buffer()};
 
-    buf->width = metadata.width;
-    buf->height = metadata.height;
-    buf->format = buf->hal_format = metadata.format;
-    buf->pixel_stride = metadata.pixel_stride;
+    buf->metadata = metadata;
+    buf->format = metadata.format;
     buf->handle = handle;
 
     struct wl_array ints;
@@ -214,7 +206,7 @@ std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_
         android_wlegl_handle_add_fd(wlegl_handle, handle->data[i]);
     }
 
-    buf->buffer = android_wlegl_create_buffer(display->android_wlegl, buf->width, buf->height, buf->pixel_stride, buf->format, GRALLOC_USAGE_HW_RENDER, wlegl_handle);
+    buf->buffer = android_wlegl_create_buffer(display->android_wlegl, buf->metadata.width, buf->metadata.height, buf->metadata.pixel_stride, buf->format, GRALLOC_USAGE_HW_RENDER, wlegl_handle);
     android_wlegl_handle_destroy(wlegl_handle);
 
     wl_buffer_add_listener(buf->buffer, &buffer_listener, nullptr);
@@ -286,11 +278,11 @@ void update_shm_buffer_generic(display *display, buffer *buffer) {
 void update_shm_buffer_default(display *, buffer *buffer) {
     void *data;
     uint32_t shm_stride, src_stride;
-    android::Rect bounds(buffer->width, buffer->height);
+    android::Rect bounds(buffer->metadata.width, buffer->metadata.height);
     if (android::GraphicBufferMapper::get().lock(buffer->handle, GRALLOC_USAGE_SW_READ_OFTEN, bounds, &data) == 0) {
-        src_stride = buffer->pixel_stride;
-        shm_stride = buffer->width;
-        for (int i = 0; i < buffer->height; i++) {
+        src_stride = buffer->metadata.pixel_stride;
+        shm_stride = buffer->metadata.width;
+        for (int i = 0; i < buffer->metadata.height; i++) {
             uint32_t* source = (uint32_t*)data + (i * src_stride);
             uint32_t* dist = (uint32_t*)buffer->shm_data + (i * shm_stride);
             uint32_t* end = dist + shm_stride;
