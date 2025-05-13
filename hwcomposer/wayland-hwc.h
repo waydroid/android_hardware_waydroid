@@ -55,6 +55,7 @@
 #include <EGL/eglext.h>
 
 #include <functional>
+#include <unordered_map>
 
 using ::android::sp;
 using ::vendor::waydroid::task::V1_0::IWaydroidTask;
@@ -103,6 +104,7 @@ struct handleExt {
 };
 
 struct window;
+struct buffer;
 
 struct display {
     struct wl_display *display;
@@ -179,7 +181,7 @@ struct display {
     std::map<uint32_t, std::string> layer_names;
     std::map<uint32_t, struct handleExt> layer_handles_ext;
     struct handleExt target_layer_handle_ext;
-    std::map<buffer_handle_t, struct buffer *> buffer_map;
+    std::unordered_map<buffer_handle_t, std::unique_ptr<buffer>> buffer_map;
     std::array<uint8_t, 239> keysDown;
     bool supports_cursor_viewport;
 
@@ -220,6 +222,8 @@ struct buffer {
 
     bool invalidated;
     bool may_change_geo;
+
+    ~buffer();
 };
 
 struct window {
@@ -256,7 +260,7 @@ struct window {
     std::vector<layer> layers;
 
     struct buffer *last_layer_buffer;
-    struct buffer *snapshot_buffer;
+    std::unique_ptr<buffer> snapshot_buffer;
 
     bool isActive;
     int lastLayer;
@@ -270,9 +274,6 @@ struct window {
 void
 handle_relative_motion(void *data, struct zwp_relative_pointer_v1*,
         uint32_t, uint32_t, wl_fixed_t dx, wl_fixed_t dy, wl_fixed_t, wl_fixed_t);
-
-void
-destroy_buffer(struct buffer* buf);
 
 void
 snapshot_inactive_app_window(struct display *display, struct window *window);

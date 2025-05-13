@@ -80,12 +80,10 @@ using ::android::hardware::hidl_string;
 
 struct buffer;
 
-void
-destroy_buffer(struct buffer* buf) {
-    wl_buffer_destroy(buf->wl_buffer);
-    if (buf->isShm)
-        munmap(buf->shm_data, buf->size);
-    delete buf;
+buffer::~buffer() {
+    wl_buffer_destroy(wl_buffer);
+    if (isShm)
+        munmap(shm_data, size);
 }
 
 // Call me from egl_worker_thread only!
@@ -100,9 +98,8 @@ void snapshot_inactive_app_window(struct display *display, struct window *window
 
     struct buffer *old_buf = window->last_layer_buffer;
 
-    // TODO: Actually use unique_ptr
-    struct buffer *new_buf = create_shm_wl_buffer(display, old_buf->metadata, old_buf->handle).release();
-    if (!new_buf) {
+    window->snapshot_buffer = create_shm_wl_buffer(display, old_buf->metadata, old_buf->handle);
+    if (!window->snapshot_buffer) {
         ALOGE("failed to create a wayland buffer for window snapshot");
         return;
     }
@@ -110,20 +107,13 @@ void snapshot_inactive_app_window(struct display *display, struct window *window
     // FIXME won't work as expected if there are multiple surfaces
     struct wl_surface *surface = window->layers[0].surface;
 
-    egl_render_to_pixels(display, new_buf);
+    egl_render_to_pixels(display, window->snapshot_buffer.get());
 
-    wl_surface_attach(surface, new_buf->wl_buffer, 0, 0);
-    if (wl_surface_get_version(surface) >= WL_SURFACE_DAMAGE_BUFFER_SINCE_VERSION)
-        wl_surface_damage_buffer(surface, 0, 0, new_buf->metadata.width, new_buf->metadata.height);
-    else
-        wl_surface_damage(surface, 0, 0, new_buf->metadata.width, new_buf->metadata.height);
-    if (!display->viewporter && display->scale > 1) {
-        // With no viewporter the scale is guaranteed to be integer
-        wl_surface_set_buffer_scale(surface, (int)display->scale);
-    }
+    wl_surface_attach(surface, window->snapshot_buffer->wl_buffer, 0, 0);
+    wl_surface_damage(surface, 0, 0, INT32_MAX, INT32_MAX);
     wl_surface_commit(surface);
 
-    window->snapshot_buffer = new_buf;
+    window->last_layer_buffer = nullptr;
 }
 
 static void
