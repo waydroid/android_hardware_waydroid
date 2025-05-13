@@ -169,16 +169,6 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
     hwc_display_contents_1_t *contents = displays[HWC_DISPLAY_PRIMARY];
     assert(contents);
 
-    if (contents->flags & HWC_GEOMETRY_CHANGED) {
-        if (pdev->should_compose)
-            pdev->display->geo_changed = true;
-        for (auto it = pdev->display->buffer_map.begin(); it != pdev->display->buffer_map.end(); it++) {
-            if (it->second && it->second->may_change_geo) {
-                it->second->invalidated = true;
-            }
-        }
-    }
-
     std::pair<int, int> skipped = search_first_and_last_skipped_layer(contents);
 
     for (size_t i = 0; i < contents->numHwLayers; i++) {
@@ -396,17 +386,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     int err = 0;
     bool found_cursor = false;
 
-    for (auto it = pdev->display->buffer_map.begin(); it != pdev->display->buffer_map.end(); /* no increment */) {
-        if (it->second && it->second->invalidated == true) {
-            pdev->display->buffer_map.erase(it++);
-        } else {
-            ++it;
-        }
-    }
-    // Should be redundant, but let's call clear() for good measure...
-    if (pdev->display->geo_changed)
-        pdev->display->buffer_map.clear();
-
     std::pair<int, int> skipped(-1, -1);
     if (pdev->should_compose && !pdev->multi_windows) {
         skipped = search_first_and_last_skipped_layer(contents);
@@ -597,7 +576,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                     }
                     break;
                 }
-                buf->may_change_geo = true;
 
                 wl_surface_attach(pdev->display->cursor_surface, buf->wl_buffer, 0, 0);
                 if (wl_surface_get_version(pdev->display->cursor_surface) >= WL_SURFACE_DAMAGE_BUFFER_SINCE_VERSION)
@@ -853,7 +831,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         window->snapshot_buffer = nullptr;
     }
     // Layers order is changed from SF so we rearrange wayland surfaces
-    if (pdev->display->geo_changed) {
+    if (pdev->should_compose && (contents->flags & HWC_GEOMETRY_CHANGED)) {
         for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
             if (it->second) {
                 // This window has no changes in layers, leaving it
@@ -866,7 +844,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                 }
             }
         }
-        pdev->display->geo_changed = false;
     }
 
     for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++)
@@ -895,7 +872,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 sync:
     sw_sync_timeline_inc(pdev->timeline_fd, 1);
     contents->retireFenceFd = sw_sync_fence_create(pdev->timeline_fd, "hwc_contents_release", ++pdev->next_sync_point);
-
     return err;
 }
 
