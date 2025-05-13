@@ -31,8 +31,6 @@
 #include <log/log.h>
 #include <cutils/properties.h>
 #include <hardware/hwcomposer.h>
-#include <ui/Rect.h>
-#include <ui/GraphicBufferMapper.h>
 #include <libsync/sw_sync.h>
 #include <sync/sync.h>
 #include <drm_fourcc.h>
@@ -49,6 +47,7 @@
 #include "WaydroidClipboard.h"
 #include "WaydroidWindow.h"
 #include "egl-tools.h"
+#include "gralloc_handler.h"
 
 using ::android::hardware::configureRpcThreadpool;
 using ::android::hardware::joinRpcThreadpool;
@@ -64,6 +63,28 @@ using ::android::OK;
 using ::android::status_t;
 
 #define WINDOW_DECORATION_OUTSET 15
+
+struct waydroid_hwc_composer_device_1 : hwc_composer_device_1_t {
+    const hwc_procs_t *procs;        // constant after init
+    pthread_t wayland_thread;        // constant after init
+    pthread_t vsync_thread;          // constant after init
+    pthread_t binder_thread;         // constant after init
+    pthread_t egl_worker_thread;     // constant after init
+    int32_t vsync_period_ns;         // constant after init
+    struct display *display;         // constant after init
+    gralloc_handler gralloc_handler; // constant after init
+    std::map<std::string, struct window *> windows;
+    std::map<std::string, std::vector<std::string>> blacklisted_apps;
+
+    pthread_mutex_t vsync_lock;
+    bool vsync_callback_enabled; // protected by this->vsync_lock
+    uint64_t last_vsync_ns;
+
+    int timeline_fd;
+    int next_sync_point;
+    bool should_compose;
+    bool multi_windows;
+};
 
 namespace {
     std::pair<int, int> search_first_and_last_skipped_layer(hwc_display_contents_1_t *contents) {
@@ -94,28 +115,52 @@ namespace {
         }
         return src;
     }
+
+    // TODO: Replace with operator== in buffer_metadata
+    bool compare_buffer_metadata(const buffer *buf, const buffer_metadata &metadata) {
+        return buf->height == metadata.height
+               && buf->width == metadata.width
+               && buf->pixel_stride == metadata.pixel_stride
+               && buf->hal_format == metadata.format;
+    }
+
+    buffer *find_cached_buffer(waydroid_hwc_composer_device_1 *pdev, const buffer_metadata &metadata, buffer_handle_t handle) {
+        auto it = pdev->display->buffer_map.find(handle);
+        if (it != pdev->display->buffer_map.end()) {
+            /* FIXME We can't be sure that our cached buffer actually refers to the buffer corresponding to the given handle
+             * It's possible that a new buffer got the same handle after the old one was destroyed
+             * At least check for the metadata to match. This way this situation is hopefully unlikely */
+            if (!compare_buffer_metadata(it->second, metadata)) {
+                destroy_buffer(it->second);
+                pdev->display->buffer_map.erase(it);
+            } else {
+                return it->second;
+            }
+        }
+        return nullptr;
+    }
+
+    buffer *get_wl_buffer(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, size_t pos) {
+        const auto& gralloc_handler = pdev->gralloc_handler;
+        auto metadata = gralloc_handler.get_buffer_metadata(pdev->display, layer, pos);
+        buffer *buf = find_cached_buffer(pdev, metadata, layer->handle);
+
+        if (!buf) {
+            auto result = gralloc_handler.create_buffer(pdev->display, metadata, layer->handle);
+            if (!result) {
+                ALOGE("failed to create a wayland buffer");
+                return nullptr;
+            }
+            // TODO: Actually use unique_ptr
+            buf = result.release();
+            pdev->display->buffer_map[layer->handle] = buf;
+        }
+
+        if (buf->isShm)
+            gralloc_handler.update_shm_buffer(pdev->display, buf);
+        return buf;
+    }
 }
-
-struct waydroid_hwc_composer_device_1 : hwc_composer_device_1_t {
-    const hwc_procs_t *procs;     // constant after init
-    pthread_t wayland_thread;     // constant after init
-    pthread_t vsync_thread;       // constant after init
-    pthread_t binder_thread;      // constant after init
-    pthread_t egl_worker_thread;  // constant after init
-    int32_t vsync_period_ns;      // constant after init
-    struct display *display;      // constant after init
-    std::map<std::string, struct window *> windows;
-    std::map<std::string, std::vector<std::string>> blacklisted_apps;
-
-    pthread_mutex_t vsync_lock;
-    bool vsync_callback_enabled; // protected by this->vsync_lock
-    uint64_t last_vsync_ns;
-
-    int timeline_fd;
-    int next_sync_point;
-    bool should_compose;
-    bool multi_windows;
-};
 
 enum class ShowWindowState {
     NONE,
@@ -180,115 +225,6 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
     }
 
     return 0;
-}
-
-static void update_shm_buffer(struct display* display, struct buffer *buffer)
-{
-    // Slower but always correct
-    if (display->gtype != GRALLOC_DEFAULT) {
-        display->egl_work_queue.push_back(std::bind(egl_render_to_pixels, display, buffer));
-        sem_post(&display->egl_go);
-        sem_wait(&display->egl_done);
-        return;
-    }
-
-    // Fast path for when the buffer is guaranteed to be linear and 4bpp
-    void *data;
-    int shm_stride, src_stride;
-    android::Rect bounds(buffer->width, buffer->height);
-    if (android::GraphicBufferMapper::get().lock(buffer->handle, GRALLOC_USAGE_SW_READ_OFTEN, bounds, &data) == 0) {
-        src_stride = buffer->pixel_stride;
-        shm_stride = buffer->width;
-        for (int i = 0; i < buffer->height; i++) {
-            uint32_t* source = (uint32_t*)data + (i * src_stride);
-            uint32_t* dist = (uint32_t*)buffer->shm_data + (i * shm_stride);
-            uint32_t* end = dist + shm_stride;
-
-            while (dist < end) {
-                uint32_t c = *source;
-                *dist = (c & 0xFF00FF00) | ((c & 0xFF0000) >> 16) | ((c & 0xFF) << 16);
-                source++;
-                dist++;
-            }
-        }
-        android::GraphicBufferMapper::get().unlock(buffer->handle);
-    }
-}
-
-static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, size_t pos)
-{
-    uint32_t format;
-    uint32_t pixel_stride;
-    uint32_t width;
-    uint32_t height;
-    if (layer->compositionType == HWC_FRAMEBUFFER_TARGET) {
-        format = pdev->display->target_layer_handle_ext.format;
-        pixel_stride = pdev->display->target_layer_handle_ext.stride;
-        width = pdev->display->target_layer_handle_ext.width;
-        height = pdev->display->target_layer_handle_ext.height;
-    } else {
-        format = pdev->display->layer_handles_ext[pos].format;
-        pixel_stride = pdev->display->layer_handles_ext[pos].stride;
-        width = pdev->display->layer_handles_ext[pos].width;
-        height = pdev->display->layer_handles_ext[pos].height;
-    }
-
-    if (!width)
-        width = layer->displayFrame.right - layer->displayFrame.left;
-    if (!height)
-        height = layer->displayFrame.bottom - layer->displayFrame.top;
-
-    auto it = pdev->display->buffer_map.find(layer->handle);
-    if (it != pdev->display->buffer_map.end()) {
-        if (it->second->isShm) {
-            if (width != it->second->width || height != it->second->height) {
-                destroy_buffer(it->second);
-                pdev->display->buffer_map.erase(it);
-            } else {
-                update_shm_buffer(pdev->display, it->second);
-                return it->second;
-            }
-        } else
-            return it->second;
-    }
-
-    struct buffer *buf;
-    int ret = 0;
-
-    buf = new struct buffer();
-    buf->may_change_geo = pdev->should_compose;
-    if (pdev->display->gtype == GRALLOC_GBM) {
-        struct gralloc_handle_t *drm_handle = (struct gralloc_handle_t *)layer->handle;
-        if (pdev->display->dmabuf) {
-            ret = create_dmabuf_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, -1 /* compute drm format */, drm_handle->prime_fd, pixel_stride, drm_handle->stride, 0 /* offset */, drm_handle->modifier, layer->handle);
-        } else {
-            ret = create_shm_wl_buffer(pdev->display, buf, drm_handle->width, drm_handle->height, drm_handle->format, pixel_stride, layer->handle);
-            update_shm_buffer(pdev->display, buf);
-        }
-    } else if (pdev->display->gtype == GRALLOC_CROS) {
-        const struct cros_gralloc_handle *cros_handle = (const struct cros_gralloc_handle *)layer->handle;
-        if (pdev->display->dmabuf) {
-            ret = create_dmabuf_wl_buffer(pdev->display, buf, cros_handle->width, cros_handle->height, cros_handle->droid_format, cros_handle->format, cros_handle->fds[0], pixel_stride, cros_handle->strides[0], cros_handle->offsets[0], cros_handle->format_modifier, layer->handle);
-        } else {
-            ret = create_shm_wl_buffer(pdev->display, buf, cros_handle->width, cros_handle->height, cros_handle->droid_format, pixel_stride, layer->handle);
-            update_shm_buffer(pdev->display, buf);
-        }
-    } else {
-        if (pdev->display->gtype == GRALLOC_ANDROID) {
-            ret = create_android_wl_buffer(pdev->display, buf, width, height, format, pixel_stride, layer->handle);
-        } else {
-            ret = create_shm_wl_buffer(pdev->display, buf, width, height, format, pixel_stride, layer->handle);
-            update_shm_buffer(pdev->display, buf);
-        }
-    }
-
-    if (ret) {
-        ALOGE("failed to create a wayland buffer");
-        return NULL;
-    }
-    pdev->display->buffer_map[layer->handle] = buf;
-
-    return pdev->display->buffer_map[layer->handle];
 }
 
 static void setup_viewport_source(wp_viewport *viewport, hwc_frect_t crop, uint32_t transform)
@@ -1260,6 +1196,7 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     if (property_get("ro.hardware.gralloc", property, "default") > 0) {
         pdev->display = create_display(property);
     }
+    pdev->gralloc_handler = gralloc_handler(pdev->display);
     if (!pdev->display) {
         ALOGE("failed to open wayland connection");
         return -ENODEV;

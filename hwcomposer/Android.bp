@@ -48,6 +48,7 @@ cc_library_shared {
     ],
     srcs: [
         "extension.cpp",
+        "gralloc_handler.cpp",
         "hwcomposer.cpp",
         "wayland-hwc.cpp",
         "WaydroidClipboard.cpp",
