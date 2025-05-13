@@ -177,7 +177,6 @@ struct display {
     int formats_count;
 
     std::map<uint32_t, std::vector<uint64_t>> modifiers;
-    bool geo_changed;
     std::map<uint32_t, std::string> layer_names;
     std::map<uint32_t, struct handleExt> layer_handles_ext;
     struct handleExt target_layer_handle_ext;
@@ -219,9 +218,6 @@ struct buffer {
     bool isShm;
     void *shm_data;
     int size;
-
-    bool invalidated;
-    bool may_change_geo;
 
     ~buffer();
 };
