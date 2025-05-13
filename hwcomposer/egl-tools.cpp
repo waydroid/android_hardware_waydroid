@@ -95,9 +95,9 @@ void egl_render_to_pixels(struct display* display, struct buffer* buf) {
     // Wrap native handle into ANativeWindowBuffer for eglCreateImageKHR
     android::sp<android::GraphicBuffer> graphicBuffer = new android::GraphicBuffer(
             (native_handle_t*)buf->handle, android::GraphicBuffer::WRAP_HANDLE,
-            buf->width, buf->height, buf->hal_format, 1 /* layers */,
+            buf->metadata.width, buf->metadata.height, buf->metadata.format, 1 /* layers */,
             (uint64_t) android::GraphicBuffer::USAGE_HW_TEXTURE,
-            buf->pixel_stride);
+            buf->metadata.pixel_stride);
 
     EGLint image_attrs[] = { EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE };
     auto image = eglCreateImageKHR(display->egl_dpy, EGL_NO_CONTEXT,
@@ -113,7 +113,7 @@ void egl_render_to_pixels(struct display* display, struct buffer* buf) {
 
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
 
-    glReadPixels(0, 0, buf->width, buf->height, GL_BGRA_EXT, GL_UNSIGNED_BYTE, buf->shm_data);
+    glReadPixels(0, 0, buf->metadata.width, buf->metadata.height, GL_BGRA_EXT, GL_UNSIGNED_BYTE, buf->shm_data);
 
     glDeleteTextures(1, &texture);
     eglDestroyImageKHR(display->egl_dpy, image);

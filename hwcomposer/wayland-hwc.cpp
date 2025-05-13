@@ -100,14 +100,8 @@ void snapshot_inactive_app_window(struct display *display, struct window *window
 
     struct buffer *old_buf = window->last_layer_buffer;
 
-    buffer_metadata metadata {
-        old_buf->height,
-        old_buf->width,
-        old_buf->pixel_stride,
-        old_buf->hal_format
-    };
     // TODO: Actually use unique_ptr
-    struct buffer *new_buf = create_shm_wl_buffer(display, metadata, old_buf->handle).release();
+    struct buffer *new_buf = create_shm_wl_buffer(display, old_buf->metadata, old_buf->handle).release();
     if (!new_buf) {
         ALOGE("failed to create a wayland buffer for window snapshot");
         return;
@@ -120,9 +114,9 @@ void snapshot_inactive_app_window(struct display *display, struct window *window
 
     wl_surface_attach(surface, new_buf->buffer, 0, 0);
     if (wl_surface_get_version(surface) >= WL_SURFACE_DAMAGE_BUFFER_SINCE_VERSION)
-        wl_surface_damage_buffer(surface, 0, 0, new_buf->width, new_buf->height);
+        wl_surface_damage_buffer(surface, 0, 0, new_buf->metadata.width, new_buf->metadata.height);
     else
-        wl_surface_damage(surface, 0, 0, new_buf->width, new_buf->height);
+        wl_surface_damage(surface, 0, 0, new_buf->metadata.width, new_buf->metadata.height);
     if (!display->viewporter && display->scale > 1) {
         // With no viewporter the scale is guaranteed to be integer
         wl_surface_set_buffer_scale(surface, (int)display->scale);
