@@ -188,24 +188,38 @@ static void
 xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
 {
     struct window *window = (struct window *)data;
+    struct display *display = window->display;
 
     // simulate user input to restart idle timeout (TODO: find a better way)
     send_key_event(window->display, 0, WL_KEYBOARD_KEY_STATE_PRESSED);
     send_key_event(window->display, 0, WL_KEYBOARD_KEY_STATE_RELEASED);
 
-    if (window->display->task != nullptr) {
+    if (display->task != nullptr) {
         if (window->taskID != "none") {
             if (window->taskID == "0") {
                 property_set("waydroid.active_apps", "none");
-                window->display->task->removeAllVisibleRecentTasks();
+                display->task->removeAllVisibleRecentTasks();
             } else {
-                window->display->task->removeTask(stoi(window->taskID));
+                display->task->removeTask(stoi(window->taskID));
             }
         }
     }
 
     std::scoped_lock lock(window->display->windowsMutex);
-    destroy_window(window, true);
+    if (window->taskID != "0" && window->taskID != "none") {
+        display->ignored_apps.insert(window->taskID);
+        auto it = display->windows.find(window->taskID);
+        assert(it != display->windows.end());
+        display->windows.erase(it);
+    } else {
+        display->ignored_apps.insert(window->appID);
+        auto it = display->windows.find(window->appID);
+        assert(it != display->windows.end());
+        display->windows.erase(it);
+    }
+    destroy_window(window);
+    std::string windows_size_str = std::to_string(display->windows.size());
+    property_set("waydroid.open_windows", windows_size_str.c_str());
 }
 
 static const struct xdg_toplevel_listener xdg_toplevel_listener = {
@@ -247,36 +261,32 @@ struct wl_shell_surface_listener shell_surface_listener = {
 };
 
 void
-destroy_window(struct window *window, bool keep)
+destroy_window(struct window *window)
 {
-    if (window->isActive) {
-        if (window->xdg_toplevel)
-            xdg_toplevel_destroy(window->xdg_toplevel);
-        if (window->xdg_surface)
-            xdg_surface_destroy(window->xdg_surface);
-        if (window->shell_surface)
-            wl_shell_surface_destroy(window->shell_surface);
-        if (window->bg_buffer)
-            wl_buffer_destroy(window->bg_buffer);
-        if (window->input_region)
-            wl_region_destroy(window->input_region);
+    if (window->xdg_toplevel)
+        xdg_toplevel_destroy(window->xdg_toplevel);
+    if (window->xdg_surface)
+        xdg_surface_destroy(window->xdg_surface);
+    if (window->shell_surface)
+        wl_shell_surface_destroy(window->shell_surface);
+    if (window->bg_buffer)
+        wl_buffer_destroy(window->bg_buffer);
+    if (window->input_region)
+        wl_region_destroy(window->input_region);
 
-        window->layers.clear();
-        if (window->destroy_background_objects) {
-            if (window->viewport)
-                wp_viewport_destroy(window->viewport);
-            if (window->surface) {
-                wl_surface_set_user_data(window->surface, nullptr);
-                wl_surface_destroy(window->surface);
-            }
+    window->layers.clear();
+    if (window->destroy_background_objects) {
+        if (window->viewport)
+            wp_viewport_destroy(window->viewport);
+        if (window->surface) {
+            wl_surface_set_user_data(window->surface, nullptr);
+            wl_surface_destroy(window->surface);
         }
-
-        wl_display_flush(window->display->display);
     }
-    if (keep)
-        window->isActive = false;
-    else
-        delete window;
+
+    wl_display_flush(window->display->display);
+
+    delete window;
 }
 
 static void fractional_scale_handle_preferred_scale(void *data, struct wp_fractional_scale_v1 *,
@@ -305,7 +315,6 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
     window->surface = wl_compositor_create_surface(display->compositor);
     window->appID = appID;
     window->taskID = taskID;
-    window->isActive = true;
     window->destroy_background_objects = true;
     window->bg_buffer = NULL;
 
