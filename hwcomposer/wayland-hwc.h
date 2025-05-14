@@ -146,7 +146,8 @@ struct display {
     bool reverseScroll;
     int touch_id[MAX_TOUCHPOINTS];
     std::map<struct wl_surface *, struct layerFrame> layers;
-    std::vector<struct window *> windows;
+    std::map<std::string, struct window *> windows;
+
     std::mutex windowsMutex;
     std::map<int, struct wl_surface *> touch_surfaces;
     struct wl_surface *pointer_surface;
