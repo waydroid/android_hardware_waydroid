@@ -272,9 +272,6 @@ destroy_window(struct window *window, bool keep)
         }
 
         wl_display_flush(window->display->display);
-
-        auto index = std::find(window->display->windows.cbegin(), window->display->windows.cend(), window);
-        window->display->windows.erase(index);
     }
     if (keep)
         window->isActive = false;
@@ -415,7 +412,6 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
     }
 
     wl_surface_set_user_data(window->surface, window);
-    display->windows.push_back(window);
 
     // TODO: Fix background when viewport is not supported
     // No subsurface background for us!
