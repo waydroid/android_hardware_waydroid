@@ -157,6 +157,27 @@ namespace {
         int size = property_get(key, property, default_value);
         return std::string(property, size);
     }
+
+    int32_t hwc_transform_to_wayland_transform(uint32_t hwc_transform) {
+        switch (hwc_transform) {
+            case HWC_TRANSFORM_FLIP_H:
+                return WL_OUTPUT_TRANSFORM_FLIPPED_180;
+            case HWC_TRANSFORM_FLIP_V:
+                return WL_OUTPUT_TRANSFORM_FLIPPED;
+            case HWC_TRANSFORM_ROT_90:
+                return WL_OUTPUT_TRANSFORM_90;
+            case HWC_TRANSFORM_ROT_180:
+                return WL_OUTPUT_TRANSFORM_180;
+            case HWC_TRANSFORM_ROT_270:
+                return WL_OUTPUT_TRANSFORM_270;
+            case HWC_TRANSFORM_FLIP_H_ROT_90:
+                return WL_OUTPUT_TRANSFORM_FLIPPED_270;
+            case HWC_TRANSFORM_FLIP_V_ROT_90:
+                return WL_OUTPUT_TRANSFORM_FLIPPED_90;
+            default:
+                return WL_OUTPUT_TRANSFORM_NORMAL;
+        }
+    }
 }
 
 enum class ShowWindowState {
@@ -777,32 +798,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             // With no viewporter the scale is guaranteed to be integer
             wl_surface_set_buffer_scale(surface, (int)pdev->display->scale);
         }
-        switch (fb_layer->transform) {
-            case HWC_TRANSFORM_FLIP_H:
-                wl_surface_set_buffer_transform(surface, WL_OUTPUT_TRANSFORM_FLIPPED_180);
-                break;
-            case HWC_TRANSFORM_FLIP_V:
-                wl_surface_set_buffer_transform(surface, WL_OUTPUT_TRANSFORM_FLIPPED);
-                break;
-            case HWC_TRANSFORM_ROT_90:
-                wl_surface_set_buffer_transform(surface, WL_OUTPUT_TRANSFORM_90);
-                break;
-            case HWC_TRANSFORM_ROT_180:
-                wl_surface_set_buffer_transform(surface, WL_OUTPUT_TRANSFORM_180);
-                break;
-            case HWC_TRANSFORM_ROT_270:
-                wl_surface_set_buffer_transform(surface, WL_OUTPUT_TRANSFORM_270);
-                break;
-            case HWC_TRANSFORM_FLIP_H_ROT_90:
-                wl_surface_set_buffer_transform(surface, WL_OUTPUT_TRANSFORM_FLIPPED_270);
-                break;
-            case HWC_TRANSFORM_FLIP_V_ROT_90:
-                wl_surface_set_buffer_transform(surface, WL_OUTPUT_TRANSFORM_FLIPPED_90);
-                break;
-            default:
-                wl_surface_set_buffer_transform(surface, WL_OUTPUT_TRANSFORM_NORMAL);
-                break;
-        }
+        wl_surface_set_buffer_transform(surface, hwc_transform_to_wayland_transform(fb_layer->transform));
 
         struct wp_presentation *pres = window->display->presentation;
         if (pres) {
