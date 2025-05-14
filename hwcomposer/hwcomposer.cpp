@@ -151,6 +151,12 @@ namespace {
             gralloc_handler.update_shm_buffer(pdev->display, buf);
         return buf;
     }
+
+    std::string property_get_string(const char *key, const char *default_value) {
+        char property[PROPERTY_VALUE_MAX];
+        int size = property_get(key, property, default_value);
+        return std::string(property, size);
+    }
 }
 
 enum class ShowWindowState {
@@ -363,8 +369,6 @@ static bool is_blacklisted(struct waydroid_hwc_composer_device_1* pdev, std::str
 
 static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                    hwc_display_contents_1_t** displays) {
-    char property[PROPERTY_VALUE_MAX];
-
     if (HWC_DISPLAY_PRIMARY >= numDisplays || !displays)
         return 0;
 
@@ -383,7 +387,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     }
 
     /*
-     * In prop "persist.waydroid.multi_windows" we detect HWC let SF rander layers 
+     * In prop "persist.waydroid.multi_windows" we detect HWC let SF render layers
      * And just show the target client layer (single windows mode) or
      * render each layers in wayland surface and subsurfaces.
      * In prop "waydroid.active_apps" we choose what to be shown in window
@@ -395,8 +399,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
      * "Waydroid": Shows android screen in a single window
      * "AppID": Shows apps in related windows as explained above
      */
-    property_get("waydroid.active_apps", property, "none");
-    std::string active_apps = std::string(property);
+    std::string active_apps = property_get_string("waydroid.active_apps", "none");
     std::string single_layer_tid;
     std::string single_layer_aid;
 
