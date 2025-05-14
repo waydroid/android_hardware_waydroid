@@ -47,8 +47,8 @@ Return<bool> WaydroidWindow::minimize(const hidl_string& packageName) {
         return false;
 
     std::scoped_lock lock(mDisplay->windowsMutex);
-    for (auto &window : mDisplay->windows){
-        if (window->appID == packageName) {
+    for (auto& [id, window] : mDisplay->windows){
+        if (window->isActive && window->appID == packageName) {
             xdg_toplevel_set_minimized(window->xdg_toplevel);
             wl_surface_commit(window->surface); // unclear if this is required
             wl_display_flush(mDisplay->display);
@@ -74,8 +74,8 @@ Return<void> WaydroidWindow::setPointerCapture(const hidl_string& packageName, b
         windowName = "Waydroid";
 
     std::scoped_lock lock(mDisplay->windowsMutex);
-    for (auto &window : mDisplay->windows) {
-        if (window->appID == windowName) {
+    for (auto& [id, window] : mDisplay->windows) {
+        if (window->isActive && window->appID == windowName) {
             if (enabled && window->locked_pointer == nullptr) {
                 window->locked_pointer = zwp_pointer_constraints_v1_lock_pointer(
                         mDisplay->pointer_constraints,
@@ -90,7 +90,7 @@ Return<void> WaydroidWindow::setPointerCapture(const hidl_string& packageName, b
                 zwp_locked_pointer_v1_destroy(window->locked_pointer);
                 window->locked_pointer = nullptr;
 
-                if (!std::any_of(mDisplay->windows.begin(), mDisplay->windows.end(), [](struct window *window){ return window->locked_pointer; })) {
+                if (!std::any_of(mDisplay->windows.begin(), mDisplay->windows.end(), [](auto& pair){ return pair.second->locked_pointer; })) {
                     zwp_relative_pointer_v1_destroy(mDisplay->relative_pointer);
                     mDisplay->relative_pointer = nullptr;
                 }
@@ -114,7 +114,7 @@ Return<void> WaydroidWindow::setIdleInhibit(const hidl_string& task, bool enable
         taskID = "0";
 
     std::scoped_lock lock(mDisplay->windowsMutex);
-    for (auto &window : mDisplay->windows) {
+    for (auto& [id, window] : mDisplay->windows) {
         if (window && window->isActive && (window->taskID == taskID || taskID == "*")) {
             ALOGI("%sinhibiting sleep from %s#%s", enabled ? "" : "not ", window->appID.c_str(), window->taskID.c_str());
             if (enabled && window->idle_inhibitor == nullptr) {
