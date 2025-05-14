@@ -27,6 +27,7 @@
 #include <string>
 #include <sstream>
 #include <functional>
+#include <atomic>
 
 #include <log/log.h>
 #include <cutils/properties.h>
@@ -76,9 +77,8 @@ struct waydroid_hwc_composer_device_1 : hwc_composer_device_1_t {
     std::map<std::string, struct window *> windows;
     std::map<std::string, std::vector<std::string>> blacklisted_apps;
 
-    pthread_mutex_t vsync_lock;
-    bool vsync_callback_enabled; // protected by this->vsync_lock
-    uint64_t last_vsync_ns;
+    std::atomic<bool> vsync_callback_enabled;
+    std::atomic<uint64_t> last_vsync_ns;
 
     int timeline_fd;
     int next_sync_point;
@@ -282,10 +282,7 @@ static void* hwc_vsync_thread(void* data) {
 
     struct timespec wait_time;
     wait_time.tv_sec = 0;
-
-    pthread_mutex_lock(&pdev->vsync_lock);
     wait_time.tv_nsec = time_to_sleep_to_next_vsync(&rt, pdev->last_vsync_ns, pdev->vsync_period_ns);
-    pthread_mutex_unlock(&pdev->vsync_lock);
 
     while (true) {
         ATRACE_BEGIN("hwc_vsync_thread");
@@ -299,18 +296,14 @@ static void* hwc_vsync_thread(void* data) {
             continue;
         }
 
-        pthread_mutex_lock(&pdev->vsync_lock);
         vsync_enabled = pdev->vsync_callback_enabled;
-        pthread_mutex_unlock(&pdev->vsync_lock);
 
         if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
             ALOGE("%s:%d error in vsync thread clock_gettime: %s",
                   __FILE__, __LINE__, strerror(errno));
         }
 
-        pthread_mutex_lock(&pdev->vsync_lock);
         wait_time.tv_nsec = time_to_sleep_to_next_vsync(&rt, pdev->last_vsync_ns, pdev->vsync_period_ns);
-        pthread_mutex_unlock(&pdev->vsync_lock);
 
         if (!vsync_enabled || !pdev->procs || !pdev->procs->vsync) {
             ATRACE_END();
@@ -345,9 +338,7 @@ feedback_presented(void *data,
     auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(data);
     wp_presentation_feedback_destroy(feedback);
 
-    pthread_mutex_lock(&pdev->vsync_lock);
     pdev->last_vsync_ns = (((uint64_t)tv_sec_hi << 32) + tv_sec_lo) * 1e9 + tv_nsec;
-    pthread_mutex_unlock(&pdev->vsync_lock);
 }
 
 static void
@@ -897,9 +888,7 @@ static int hwc_event_control(struct hwc_composer_device_1* dev, int dpy __unused
     // enabled can only be 0 or 1
     if (!(enabled & ~1)) {
         if (event == HWC_EVENT_VSYNC) {
-            pthread_mutex_lock(&pdev->vsync_lock);
             pdev->vsync_callback_enabled = enabled;
-            pthread_mutex_unlock(&pdev->vsync_lock);
             ret = 0;
         }
     }
@@ -1162,7 +1151,6 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     }
     ALOGE("wayland display %p", pdev->display);
 
-    pthread_mutex_init(&pdev->vsync_lock, NULL);
     pdev->vsync_callback_enabled = true;
 
     auto first_window = create_window(pdev->display, pdev->should_compose, "Waydroid", "0", {0, 0, 0, 255});
