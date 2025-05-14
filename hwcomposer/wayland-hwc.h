@@ -44,6 +44,7 @@
 #include <errno.h>
 #include <map>
 #include <list>
+#include <set>
 #include <pthread.h>
 #include <semaphore.h>
 #include <hardware/hwcomposer.h>
@@ -146,9 +147,11 @@ struct display {
     bool reverseScroll;
     int touch_id[MAX_TOUCHPOINTS];
     std::map<struct wl_surface *, struct layerFrame> layers;
-    std::map<std::string, struct window *> windows;
 
+    std::map<std::string, struct window *> windows;
+    std::set<std::string> ignored_apps;
     std::mutex windowsMutex;
+
     std::map<int, struct wl_surface *> touch_surfaces;
     struct wl_surface *pointer_surface;
     struct wl_surface *cursor_surface;
@@ -259,7 +262,6 @@ struct window {
     struct buffer *last_layer_buffer;
     std::unique_ptr<buffer> snapshot_buffer;
 
-    bool isActive;
     int lastLayer;
 
     std::string appID;
@@ -281,6 +283,6 @@ void
 destroy_display(struct display *display);
 
 void
-destroy_window(struct window *window, bool keep = false);
+destroy_window(struct window *window);
 struct window *
 create_window(struct display *display, bool with_dummy, std::string appID, std::string taskID, hwc_color_t color);

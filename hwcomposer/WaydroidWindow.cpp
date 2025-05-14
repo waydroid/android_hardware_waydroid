@@ -51,7 +51,7 @@ Return<bool> WaydroidWindow::minimize(const hidl_string& packageName) {
 
     std::scoped_lock lock(mDisplay->windowsMutex);
     for (auto& [id, window] : mDisplay->windows){
-        if (window->isActive && window->appID == packageName) {
+        if (window->appID == packageName) {
             xdg_toplevel_set_minimized(window->xdg_toplevel);
             wl_surface_commit(window->surface); // unclear if this is required
             wl_display_flush(mDisplay->display);
@@ -78,7 +78,7 @@ Return<void> WaydroidWindow::setPointerCapture(const hidl_string& packageName, b
 
     std::scoped_lock lock(mDisplay->windowsMutex);
     for (auto& [id, window] : mDisplay->windows) {
-        if (window->isActive && window->appID == windowName) {
+        if (window->appID == windowName) {
             if (enabled && window->locked_pointer == nullptr) {
                 window->locked_pointer = zwp_pointer_constraints_v1_lock_pointer(
                         mDisplay->pointer_constraints,
@@ -118,7 +118,7 @@ Return<void> WaydroidWindow::setIdleInhibit(const hidl_string& task, bool enable
 
     std::scoped_lock lock(mDisplay->windowsMutex);
     for (auto& [id, window] : mDisplay->windows) {
-        if (window && window->isActive && (window->taskID == taskID || taskID == "*")) {
+        if (window && (window->taskID == taskID || taskID == "*")) {
             ALOGI("%sinhibiting sleep from %s#%s", enabled ? "" : "not ", window->appID.c_str(), window->taskID.c_str());
             if (enabled && window->idle_inhibitor == nullptr) {
                 window->idle_inhibitor = zwp_idle_inhibit_manager_v1_create_inhibitor(
