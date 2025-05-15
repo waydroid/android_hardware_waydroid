@@ -435,20 +435,20 @@ static bool is_blacklisted(struct waydroid_hwc_composer_device_1* pdev, const st
     return components.empty() || std::find(components.begin(), components.end(), component) != components.end();
 }
 
-static void apply_surface_scale(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 * hwc_layer, window::layer &window_layer) {
-    if (window_layer.viewport) {
-        setup_viewport_source(window_layer.viewport, hwc_layer->sourceCropf, hwc_layer->transform);
-        setup_viewport_destination(window_layer.viewport, hwc_layer->displayFrame, pdev->display);
-    } else if (!pdev->display->viewporter) {
+static void apply_surface_scale(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 * hwc_layer, surface_context &surface_context) {
+    if (surface_context.viewport) {
+        setup_viewport_source(surface_context.viewport, hwc_layer->sourceCropf, hwc_layer->transform);
+        setup_viewport_destination(surface_context.viewport, hwc_layer->displayFrame, pdev->display);
+    } else {
         // Usually with no viewporter the scale is guaranteed to be integer
         // When supports_cursor_viewport == false, this might not be the case
         // thus use ceil anyway
         int scale = static_cast<int>(ceil(pdev->display->scale));
-        wl_surface_set_buffer_scale(window_layer.surface, scale);
+        wl_surface_set_buffer_scale(surface_context.surface, scale);
     }
 }
 
-static int apply_hwc_layer_to_window_layer(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index, window::layer &window_layer, buffer *buf = nullptr) {
+static int apply_hwc_layer_to_surface_context(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index, surface_context &surface_context, buffer *buf = nullptr) {
     constexpr int acquireWarningMS = 100;
     int res = -1;
 
@@ -463,10 +463,10 @@ static int apply_hwc_layer_to_window_layer(waydroid_hwc_composer_device_1 *pdev,
     // TODO: Implement per-hwc_layer explicit synchronization
     hwc_layer->releaseFenceFd = -1;
 
-    wl_surface_attach(window_layer.surface, buf->wl_buffer, 0, 0);
-    wl_surface_damage(window_layer.surface, 0, 0, INT32_MAX, INT32_MAX);
-    apply_surface_scale(pdev, hwc_layer, window_layer);
-    wl_surface_set_buffer_transform(window_layer.surface, hwc_transform_to_wayland_transform(hwc_layer->transform));
+    wl_surface_attach(surface_context.surface, buf->wl_buffer, 0, 0);
+    wl_surface_damage(surface_context.surface, 0, 0, INT32_MAX, INT32_MAX);
+    apply_surface_scale(pdev, hwc_layer, surface_context);
+    wl_surface_set_buffer_transform(surface_context.surface, hwc_transform_to_wayland_transform(hwc_layer->transform));
 
     // TODO: Implement explicit synchronization
     if (hwc_layer->acquireFenceFd != -1) {
@@ -479,7 +479,7 @@ static int apply_hwc_layer_to_window_layer(waydroid_hwc_composer_device_1 *pdev,
         res = 0;
     }
 
-    wl_surface_commit(window_layer.surface);
+    wl_surface_commit(surface_context.surface);
 
 out:
     if (hwc_layer->acquireFenceFd != -1) {
@@ -503,7 +503,7 @@ static int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_l
     window->lastLayer++;
     window->last_layer_buffer = buf;
 
-    if (apply_hwc_layer_to_window_layer(pdev, hwc_layer, hwc_layer_index, window_layer, buf) != 0) {
+    if (apply_hwc_layer_to_surface_context(pdev, hwc_layer, hwc_layer_index, window_layer, buf) != 0) {
         return -1;
     }
 
