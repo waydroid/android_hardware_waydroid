@@ -260,32 +260,33 @@ struct wl_shell_surface_listener shell_surface_listener = {
 	&shell_surface_popup_done
 };
 
-void
-destroy_window(struct window *window)
-{
-    if (window->xdg_toplevel)
-        xdg_toplevel_destroy(window->xdg_toplevel);
-    if (window->xdg_surface)
-        xdg_surface_destroy(window->xdg_surface);
-    if (window->shell_surface)
-        wl_shell_surface_destroy(window->shell_surface);
-    if (window->bg_buffer)
-        wl_buffer_destroy(window->bg_buffer);
-    if (window->input_region)
-        wl_region_destroy(window->input_region);
+window::~window() {
+    if (xdg_toplevel)
+        xdg_toplevel_destroy(xdg_toplevel);
+    if (xdg_surface)
+        xdg_surface_destroy(xdg_surface);
+    if (shell_surface)
+        wl_shell_surface_destroy(shell_surface);
+    if (bg_buffer)
+        wl_buffer_destroy(bg_buffer);
+    if (input_region)
+        wl_region_destroy(input_region);
 
-    window->layers.clear();
-    if (window->destroy_background_objects) {
-        if (window->viewport)
-            wp_viewport_destroy(window->viewport);
-        if (window->surface) {
-            wl_surface_set_user_data(window->surface, nullptr);
-            wl_surface_destroy(window->surface);
+    layers.clear();
+    if (destroy_background_objects) {
+        if (viewport)
+            wp_viewport_destroy(viewport);
+        if (surface) {
+            wl_surface_set_user_data(surface, nullptr);
+            wl_surface_destroy(surface);
         }
     }
 
-    wl_display_flush(window->display->display);
+    wl_display_flush(display->display);
+}
 
+void
+destroy_window(struct window *window) {
     delete window;
 }
 
