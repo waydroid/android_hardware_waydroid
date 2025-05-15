@@ -178,6 +178,14 @@ namespace {
                 return WL_OUTPUT_TRANSFORM_NORMAL;
         }
     }
+
+    void close_all_acquire_fences(hwc_display_contents_1 *content) {
+        std::for_each(content->hwLayers, content->hwLayers + content->numHwLayers, [](const auto &layer) {
+            if (layer.acquireFenceFd != -1) {
+                close(layer.acquireFenceFd);
+            }
+        });
+    }
 }
 
 enum class ShowWindowState {
@@ -439,14 +447,11 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     if (active_apps == "none") {
         // Clear all open windows
         pdev->display->windows.clear();
-        pdev->display->ignored_apps.clear();
-        for (size_t layer = 0; layer < contents->numHwLayers; layer++) {
-            hwc_layer_1_t* fb_layer = &contents->hwLayers[layer];
-            if (fb_layer->acquireFenceFd != -1)
-                close(fb_layer->acquireFenceFd);
-        }
-
         property_set("waydroid.open_windows", "0");
+
+        pdev->display->ignored_apps.clear();
+
+        close_all_acquire_fences(contents);
         goto sync;
     } else if (active_apps == "Waydroid") {
         // Clear all open windows if there's any and just keep "Waydroid"
@@ -487,13 +492,11 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         // Nothing to show on screen, so clear all open windows
         if (showWindow == ShowWindowState::BLACKLISTED) {
             pdev->display->windows.clear();
-            for (size_t layer = 0; layer < contents->numHwLayers; layer++) {
-                hwc_layer_1_t* fb_layer = &contents->hwLayers[layer];
-                if (fb_layer->acquireFenceFd != -1)
-                    close(fb_layer->acquireFenceFd);
-            }
-
             property_set("waydroid.open_windows", "0");
+
+            pdev->display->ignored_apps.clear();
+
+            close_all_acquire_fences(contents);
             goto sync;
         }
         bool shouldCloseLeftover = true;
