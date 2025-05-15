@@ -466,38 +466,47 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
     return window;
 }
 
-window::layer::layer(wl_surface *surface, wp_viewport *viewport, wl_subsurface *subsurface) : surface(surface), subsurface(subsurface), viewport(viewport) {}
-
-window::layer::~layer() {
+surface_context::surface_context(wl_surface *surface, wp_viewport *viewport) : surface(surface), viewport(viewport) {}
+surface_context::~surface_context() {
     if (viewport)
         wp_viewport_destroy(viewport);
-    if (subsurface)
-        wl_subsurface_destroy(subsurface);
     if (surface)
         wl_surface_destroy(surface);
 }
-
-window::layer::layer(window::layer&& other) : surface(other.surface), subsurface(other.subsurface), viewport(other.viewport) {
+surface_context::surface_context(surface_context&& other) : surface(other.surface), viewport(other.viewport) {
     other.surface = nullptr;
-    other.subsurface = nullptr;
     other.viewport = nullptr;
 }
-
-window::layer& window::layer::operator=(window::layer&& rhs) {
+surface_context& surface_context::operator=(surface_context&& rhs) {
     if (viewport)
         wp_viewport_destroy(viewport);
-    if (subsurface)
-        wl_subsurface_destroy(subsurface);
     if (surface)
         wl_surface_destroy(surface);
 
     surface = rhs.surface;
-    subsurface = rhs.subsurface;
     viewport = rhs.viewport;
 
     rhs.surface = nullptr;
-    rhs.subsurface = nullptr;
     rhs.viewport = nullptr;
+
+    return *this;
+}
+
+window::layer::layer(wl_surface *surface, wp_viewport *viewport, wl_subsurface *subsurface) : surface_context(surface, viewport), subsurface(subsurface) {}
+window::layer::~layer() {
+    if (subsurface)
+        wl_subsurface_destroy(subsurface);
+}
+window::layer::layer(window::layer&& other) : surface_context(std::move(static_cast<surface_context&>(other))), subsurface(other.subsurface) {
+    other.subsurface = nullptr;
+}
+window::layer& window::layer::operator=(window::layer&& rhs) {
+    if (subsurface)
+        wl_subsurface_destroy(subsurface);
+    subsurface = rhs.subsurface;
+    rhs.subsurface = nullptr;
+
+    surface_context::operator=(std::move(rhs));
 
     return *this;
 }

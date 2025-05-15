@@ -227,11 +227,21 @@ struct buffer {
     ~buffer();
 };
 
+struct surface_context {
+    struct wl_surface *surface;
+    struct wp_viewport *viewport;
+
+    surface_context() = default;
+    surface_context(wl_surface *surface, wp_viewport *viewport);
+    ~surface_context();
+
+    surface_context(surface_context &&other);
+    surface_context &operator=(surface_context &&rhs);
+};
+
 struct window {
-    struct layer {
-        struct wl_surface *surface;
+    struct layer : surface_context {
         struct wl_subsurface *subsurface;
-        struct wp_viewport *viewport;
 
         layer() = default;
         layer(wl_surface *surface, wp_viewport *viewport, wl_subsurface *subsurface = nullptr);
