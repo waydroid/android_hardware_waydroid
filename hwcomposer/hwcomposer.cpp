@@ -439,6 +439,97 @@ static bool is_blacklisted(struct waydroid_hwc_composer_device_1* pdev, const st
     return components.empty() || std::find(components.begin(), components.end(), component) != components.end();
 }
 
+static void apply_surface_scale(waydroid_hwc_composer_device_1 *pdev, wl_surface *surface) {
+    // TODO: Move viewport setup here
+    if (!pdev->display->viewporter && pdev->display->scale > 1) {
+        // With no viewporter the scale is guaranteed to be integer
+        wl_surface_set_buffer_scale(surface, (int)pdev->display->scale);
+    }
+}
+
+static int apply_layer_to_surface(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *layer, size_t layer_index, wl_surface *surface, buffer *buf = nullptr) {
+    constexpr int acquireWarningMS = 100;
+    int res = -1;
+
+    if (!buf) {
+        buf = get_wl_buffer(pdev, layer, layer_index);
+        if (!buf) {
+            ALOGE("Failed to get wayland buffer");
+            goto out;
+        }
+    }
+
+    // TODO: Implement per-layer explicit synchronization
+    layer->releaseFenceFd = -1;
+
+    wl_surface_attach(surface, buf->wl_buffer, 0, 0);
+    wl_surface_damage(surface, 0, 0, INT32_MAX, INT32_MAX);
+    apply_surface_scale(pdev, surface);
+    wl_surface_set_buffer_transform(surface, hwc_transform_to_wayland_transform(layer->transform));
+
+    // TODO: Implement explicit synchronization
+    if (layer->acquireFenceFd != -1) {
+        res = sync_wait(layer->acquireFenceFd, acquireWarningMS);
+        if (res < 0 && errno == ETIME) {
+            ALOGE("hwcomposer waited on fence %d for %d ms", layer->acquireFenceFd,
+                  acquireWarningMS);
+        }
+    } else {
+        res = 0;
+    }
+
+    wl_surface_commit(surface);
+
+out:
+    if (layer->acquireFenceFd != -1) {
+        close(layer->acquireFenceFd);
+    }
+    return res;
+}
+
+static int apply_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *layer, size_t layer_index, window *window) {
+    buffer *buf;
+    wl_surface *surface;
+    wp_presentation *pres;
+
+    surface = get_surface(pdev, layer, window);
+    if (!surface) {
+        ALOGE("Failed to get surface");
+        if (layer->acquireFenceFd != -1) {
+            close(layer->acquireFenceFd);
+        }
+        return -1;
+    }
+
+
+    buf = get_wl_buffer(pdev, layer, layer_index);
+    if (!buf) {
+        ALOGE("Failed to get wayland buffer");
+        if (layer->acquireFenceFd != -1) {
+            close(layer->acquireFenceFd);
+        }
+        return -1;
+    }
+
+    window->last_layer_buffer = buf;
+    window->lastLayer++;
+
+    if (apply_layer_to_surface(pdev, layer, layer_index, surface, buf) != 0) {
+        return -1;
+    }
+
+    if (window->display->presentation) {
+        buf->feedback = wp_presentation_feedback(window->display->presentation, surface);
+        wp_presentation_feedback_add_listener(buf->feedback,
+                                              &feedback_listener, pdev);
+    }
+
+    // Snapshot buffer should be detached by now, clean up
+    window->snapshot_buffer = nullptr;
+
+    return 0;
+}
+
 static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                    hwc_display_contents_1_t** displays) {
     if (HWC_DISPLAY_PRIMARY >= numDisplays || !displays)
@@ -775,56 +866,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             continue;
         }
 
-        struct buffer *buf = get_wl_buffer(pdev, fb_layer, layer);
-        if (!buf) {
-            ALOGE("Failed to get wayland buffer");
-            if (fb_layer->acquireFenceFd != -1) {
-               close(fb_layer->acquireFenceFd);
-            }
-            continue;
-        }
-
-        // TODO: Implement per-layer explicit synchronization
-        fb_layer->releaseFenceFd = -1;
-
-        struct wl_surface *surface = get_surface(pdev, fb_layer, window);
-        if (!surface) {
-            ALOGE("Failed to get surface");
-            continue;
-        }
-        window->last_layer_buffer = buf;
-        window->lastLayer++;
-
-        wl_surface_attach(surface, buf->wl_buffer, 0, 0);
-        if (wl_surface_get_version(surface) >= WL_SURFACE_DAMAGE_BUFFER_SINCE_VERSION)
-            wl_surface_damage_buffer(surface, 0, 0, buf->metadata.width, buf->metadata.height);
-        else
-            wl_surface_damage(surface, 0, 0, buf->metadata.width, buf->metadata.height);
-        if (!pdev->display->viewporter && pdev->display->scale > 1) {
-            // With no viewporter the scale is guaranteed to be integer
-            wl_surface_set_buffer_scale(surface, (int)pdev->display->scale);
-        }
-        wl_surface_set_buffer_transform(surface, hwc_transform_to_wayland_transform(fb_layer->transform));
-
-        struct wp_presentation *pres = window->display->presentation;
-        if (pres) {
-            buf->feedback = wp_presentation_feedback(pres, surface);
-            wp_presentation_feedback_add_listener(buf->feedback,
-                              &feedback_listener, pdev);
-        }
-
-        const int kAcquireWarningMS = 100;
-        err = sync_wait(fb_layer->acquireFenceFd, kAcquireWarningMS);
-        if (err < 0 && errno == ETIME) {
-            ALOGE("hwcomposer waited on fence %d for %d ms",
-                fb_layer->acquireFenceFd, kAcquireWarningMS);
-        }
-        close(fb_layer->acquireFenceFd);
-
-        wl_surface_commit(surface);
-
-        // Snapshot buffer should be detached by now, clean up
-        window->snapshot_buffer = nullptr;
+        apply_layer_to_window(pdev, fb_layer, layer, window);
     }
     // Layers order is changed from SF so we rearrange wayland surfaces
     if (pdev->should_compose && (contents->flags & HWC_GEOMETRY_CHANGED)) {
