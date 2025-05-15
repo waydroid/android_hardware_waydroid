@@ -305,19 +305,19 @@ static const struct wp_fractional_scale_v1_listener fractional_scale_listener = 
     .preferred_scale = fractional_scale_handle_preferred_scale
 };
 
-struct window *
-create_window(struct display *display, bool use_subsurfaces, std::string appID, std::string taskID, hwc_color_t color)
+std::unique_ptr<window>
+window::create(struct display *display, bool use_subsurfaces, std::string appID, std::string taskID, hwc_color_t color)
 {
-    struct window *window = new struct window();
+    std::unique_ptr<window> window { new struct window() };
     if (!window)
-        return NULL;
+        return nullptr;
 
     window->display = display;
     window->surface = wl_compositor_create_surface(display->compositor);
-    window->appID = appID;
-    window->taskID = taskID;
+    window->appID = std::move(appID);
+    window->taskID = std::move(taskID);
     window->destroy_background_objects = true;
-    window->bg_buffer = NULL;
+    window->bg_buffer = nullptr;
 
     int fd = syscall(SYS_memfd_create, "buffer", 0);
     ftruncate(fd, 4);
@@ -341,40 +341,38 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
         assert(window->xdg_surface);
         
         xdg_surface_add_listener(window->xdg_surface,
-                                     &xdg_surface_listener, window);
+                                     &xdg_surface_listener, window.get());
 
         window->xdg_toplevel = xdg_surface_get_toplevel(window->xdg_surface);
         assert(window->xdg_toplevel);
-        xdg_toplevel_add_listener(window->xdg_toplevel, &xdg_toplevel_listener, window);
+        xdg_toplevel_add_listener(window->xdg_toplevel, &xdg_toplevel_listener, window.get());
         if (display->isMaximized || !display->height || !display->width)
             xdg_toplevel_set_maximized(window->xdg_toplevel);
-        const hidl_string appID_hidl(appID);
-        hidl_string appName_hidl(appID);
-        if (appID != "Waydroid" && display->task)
+        const hidl_string appID_hidl(window->appID);
+        if (window->appID != "Waydroid" && display->task)
             display->task->getAppName(appID_hidl, [&](const hidl_string &value)
                                       { xdg_toplevel_set_title(window->xdg_toplevel, value.c_str()); });
         else
             xdg_toplevel_set_title(window->xdg_toplevel, appID.c_str());
 
-        if (appID != "Waydroid")
-            appID = "waydroid." + appID;
-        xdg_toplevel_set_app_id(window->xdg_toplevel, appID.c_str());
+        if (window->appID != "Waydroid")
+            window->appID = "waydroid." + window->appID;
+        xdg_toplevel_set_app_id(window->xdg_toplevel, window->appID.c_str());
     } else if (display->shell) {
         window->shell_surface =
             wl_shell_get_shell_surface(display->shell, window->surface);
         assert(window->shell_surface);
 
-        wl_shell_surface_add_listener(window->shell_surface, &shell_surface_listener, window);
+        wl_shell_surface_add_listener(window->shell_surface, &shell_surface_listener, window.get());
         wl_shell_surface_set_toplevel(window->shell_surface);
         if (display->isMaximized || !display->height || !display->width)
             wl_shell_surface_set_maximized(window->shell_surface, display->output);
-        const hidl_string appID_hidl(appID);
-        hidl_string appName_hidl(appID);
-        if (appID != "Waydroid" && display->task)
+        const hidl_string appID_hidl(window->appID);
+        if (window->appID != "Waydroid" && display->task)
             display->task->getAppName(appID_hidl, [&](const hidl_string &value)
                                       { wl_shell_surface_set_title(window->shell_surface, value.c_str()); });
         else
-            wl_shell_surface_set_title(window->shell_surface, appID.c_str());
+            wl_shell_surface_set_title(window->shell_surface, window->appID.c_str());
     } else {
         abort();
     }
@@ -421,7 +419,7 @@ create_window(struct display *display, bool use_subsurfaces, std::string appID, 
         window->viewport = wp_viewporter_get_viewport(display->viewporter, window->surface);
     }
 
-    wl_surface_set_user_data(window->surface, window);
+    wl_surface_set_user_data(window->surface, window.get());
 
     // TODO: Fix background when viewport is not supported
     // No subsurface background for us!

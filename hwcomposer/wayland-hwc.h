@@ -269,7 +269,12 @@ struct window {
 
     ~window();
 
+    static std::unique_ptr<window> create(struct display *display, bool with_dummy, std::string appID, std::string taskID, hwc_color_t color);
+
     window::layer &create_new_layer();
+
+  private:
+    window() = default;
 };
 
 void
@@ -286,5 +291,3 @@ destroy_display(struct display *display);
 
 void
 destroy_window(struct window *window);
-struct window *
-create_window(struct display *display, bool with_dummy, std::string appID, std::string taskID, hwc_color_t color);
