@@ -148,7 +148,7 @@ struct display {
     int touch_id[MAX_TOUCHPOINTS];
     std::map<struct wl_surface *, struct layerFrame> layers;
 
-    std::map<std::string, struct window *> windows;
+    std::map<std::string, std::unique_ptr<window>> windows;
     std::set<std::string> ignored_apps;
     std::mutex windowsMutex;
 
@@ -288,6 +288,3 @@ struct display *
 create_display(const char* gralloc);
 void
 destroy_display(struct display *display);
-
-void
-destroy_window(struct window *window);
