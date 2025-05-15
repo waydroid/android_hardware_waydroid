@@ -267,6 +267,8 @@ struct window {
     std::string appID;
     std::string taskID;
 
+    ~window();
+
     window::layer &create_new_layer();
 };
 
