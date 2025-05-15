@@ -438,10 +438,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     std::scoped_lock lock(pdev->display->windowsMutex);
     if (active_apps == "none") {
         // Clear all open windows
-        for (auto it = pdev->display->windows.begin(); it != pdev->display->windows.end(); it++) {
-            if (it->second)
-                destroy_window(it->second);
-        }
         pdev->display->windows.clear();
         pdev->display->ignored_apps.clear();
         for (size_t layer = 0; layer < contents->numHwLayers; layer++) {
@@ -455,11 +451,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     } else if (active_apps == "Waydroid") {
         // Clear all open windows if there's any and just keep "Waydroid"
         if (pdev->display->windows.find(active_apps) == pdev->display->windows.end()) {
-            for (auto it = pdev->display->windows.begin(); it != pdev->display->windows.end(); it++) {
-                if (it->second) {
-                    destroy_window(it->second);
-                }
-            }
             pdev->display->windows.clear();
             pdev->display->ignored_apps.clear();
         } else {
@@ -495,10 +486,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
         // Nothing to show on screen, so clear all open windows
         if (showWindow == ShowWindowState::BLACKLISTED) {
-            for (auto it = pdev->display->windows.begin(); it != pdev->display->windows.end(); it++) {
-                if (it->second)
-                    destroy_window(it->second);
-            }
             pdev->display->windows.clear();
             for (size_t layer = 0; layer < contents->numHwLayers; layer++) {
                 hwc_layer_1_t* fb_layer = &contents->hwLayers[layer];
@@ -525,7 +512,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                         }
                     }
                     if (shouldCloseLeftover) {
-                        destroy_window(it->second);
                         pdev->display->windows.erase(it++);
                         shouldCloseLeftover = true;
                         std::string windows_size_str = std::to_string(pdev->display->windows.size());
@@ -589,8 +575,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             }
             // This window ID doesn't match with any selected app IDs from prop, so kill it
             if (!foundApp) {
-                if (it->second)
-                    destroy_window(it->second);
                 pdev->display->windows.erase(it++);
                 std::string windows_size_str = std::to_string(pdev->display->windows.size());
                 property_set("waydroid.open_windows", windows_size_str.c_str());
@@ -718,22 +702,22 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         if (active_apps == "Waydroid") {
             // Show everything in a single window
             if (pdev->display->windows.find(active_apps) == pdev->display->windows.end()) {
-                pdev->display->windows[active_apps] = window::create(pdev->display, pdev->should_compose, active_apps, "0", {0, 0, 0, 255}).release();
+                pdev->display->windows[active_apps] = window::create(pdev->display, pdev->should_compose, active_apps, "0", {0, 0, 0, 255});
                 std::string windows_size_str = std::to_string(pdev->display->windows.size());
                 property_set("waydroid.open_windows", windows_size_str.c_str());
             }
-            window = pdev->display->windows[active_apps];
+            window = pdev->display->windows[active_apps].get();
         } else if (!pdev->multi_windows) {
             if (single_layer_tid.length()) {
                 if (pdev->display->windows.find(single_layer_tid) == pdev->display->windows.end()) {
                     if (pdev->display->ignored_apps.count(single_layer_tid) == 0) {
-                        pdev->display->windows[single_layer_tid] = window::create(pdev->display, pdev->should_compose, single_layer_aid, single_layer_tid, {0, 0, 0, 255}).release();
+                        pdev->display->windows[single_layer_tid] = window::create(pdev->display, pdev->should_compose, single_layer_aid, single_layer_tid, {0, 0, 0, 255});
                         std::string windows_size_str = std::to_string(pdev->display->windows.size());
                         property_set("waydroid.open_windows", windows_size_str.c_str());
-                        window = pdev->display->windows[single_layer_tid];
+                        window = pdev->display->windows[single_layer_tid].get();
                     }
                 } else {
-                    window = pdev->display->windows[single_layer_tid];
+                    window = pdev->display->windows[single_layer_tid].get();
                 }
             }
         } else {
@@ -746,12 +730,12 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
                 if (!is_blacklisted(pdev, layer_aid, component)) {
                     if (pdev->display->windows.find(layer_tid) == pdev->display->windows.end()) {
-                        pdev->display->windows[layer_tid] = window::create(pdev->display, pdev->should_compose, layer_aid, layer_tid, {0, 0, 0, 0}).release();
+                        pdev->display->windows[layer_tid] = window::create(pdev->display, pdev->should_compose, layer_aid, layer_tid, {0, 0, 0, 0});
                         std::string windows_size_str = std::to_string(pdev->display->windows.size());
                         property_set("waydroid.open_windows", windows_size_str.c_str());
                     }
                     if (pdev->display->windows.find(layer_tid) != pdev->display->windows.end())
-                        window = pdev->display->windows[layer_tid];
+                        window = pdev->display->windows[layer_tid].get();
                 }
             }
         }
@@ -766,12 +750,12 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                 for (auto it = pdev->display->windows.begin(); it != pdev->display->windows.end(); it++) {
                     if (it->second) {
                         if (it->second->surface == pdev->display->pointer_surface) {
-                            window = it->second;
+                            window = it->second.get();
                             break;
                         }
                         for (auto &window_layer : it->second->layers) {
                             if (window_layer.surface == pdev->display->pointer_surface) {
-                                window = it->second;
+                                window = it->second.get();
                                 break;
                             }
                         }
@@ -780,12 +764,12 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             } else if (LayerRawName == "InputMethod") {
                 // IME layer
                 if (pdev->display->windows.find(LayerRawName) == pdev->display->windows.end()) {
-                    pdev->display->windows[LayerRawName] = window::create(pdev->display, pdev->should_compose, LayerRawName, "none", {0, 0, 0, 0}).release();
+                    pdev->display->windows[LayerRawName] = window::create(pdev->display, pdev->should_compose, LayerRawName, "none", {0, 0, 0, 0});
                     std::string windows_size_str = std::to_string(pdev->display->windows.size());
                     property_set("waydroid.open_windows", windows_size_str.c_str());
                 }
                 if (pdev->display->windows.find(LayerRawName) != pdev->display->windows.end())
-                    window = pdev->display->windows[LayerRawName];
+                    window = pdev->display->windows[LayerRawName].get();
             }
         }
 
@@ -871,7 +855,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         for (auto const& [layer_tid, window] : pdev->display->windows) {
             // Replace inactive app window buffer with snapshot in staged mode
             if (layer_tid != single_layer_tid && !window->snapshot_buffer) {
-                pdev->display->egl_work_queue.push_back(std::bind(snapshot_inactive_app_window, pdev->display, window));
+                pdev->display->egl_work_queue.push_back(std::bind(snapshot_inactive_app_window, pdev->display, window.get()));
             }
         }
         if (!pdev->display->egl_work_queue.empty()) {
@@ -1179,13 +1163,13 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
 
     pdev->vsync_callback_enabled = true;
 
-    auto first_window = window::create(pdev->display, pdev->should_compose, "Waydroid", "0", {0, 0, 0, 255}).release();
+    auto first_window = window::create(pdev->display, pdev->should_compose, "Waydroid", "0", {0, 0, 0, 255});
     if (!property_get_bool("waydroid.background_start", true)) {
-        pdev->display->windows["Waydroid"] = first_window;
+        pdev->display->windows["Waydroid"] = std::move(first_window);
         property_set("waydroid.active_apps", "Waydroid");
         property_set("waydroid.open_windows", "1");
     } else {
-        destroy_window(first_window);
+        first_window.reset();
     }
 
     if (pdev->display->refresh > 1000 && pdev->display->refresh < 1000000)

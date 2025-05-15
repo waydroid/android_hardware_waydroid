@@ -217,7 +217,6 @@ xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
         assert(it != display->windows.end());
         display->windows.erase(it);
     }
-    destroy_window(window);
     std::string windows_size_str = std::to_string(display->windows.size());
     property_set("waydroid.open_windows", windows_size_str.c_str());
 }
@@ -283,11 +282,6 @@ window::~window() {
     }
 
     wl_display_flush(display->display);
-}
-
-void
-destroy_window(struct window *window) {
-    delete window;
 }
 
 static void fractional_scale_handle_preferred_scale(void *data, struct wp_fractional_scale_v1 *,
