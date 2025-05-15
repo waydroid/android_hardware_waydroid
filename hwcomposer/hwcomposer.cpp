@@ -313,12 +313,6 @@ static window::layer &get_next_window_layer(struct waydroid_hwc_composer_device_
     }
     window::layer &requested_layer = window->layers[window->lastLayer];
 
-    if (requested_layer.subsurface) {
-        wl_subsurface_set_position(requested_layer.subsurface,
-                                   floor(layer->displayFrame.left / pdev->display->scale),
-                                   floor(layer->displayFrame.top / pdev->display->scale));
-    }
-
     if (window->input_region) {
         wl_region_add(window->input_region,
                 -WINDOW_DECORATION_OUTSET + floor(layer->displayFrame.left / pdev->display->scale),
@@ -488,7 +482,7 @@ out:
     return res;
 }
 
-static int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 * hwc_layer, size_t hwc_layer_index, window *window) {
+static int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index, window *window) {
     auto &window_layer = get_next_window_layer(pdev, hwc_layer, window);
 
     buffer *buf = get_wl_buffer(pdev, hwc_layer, hwc_layer_index);
@@ -505,6 +499,12 @@ static int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_l
 
     if (apply_hwc_layer_to_surface_context(pdev, hwc_layer, hwc_layer_index, window_layer, buf) != 0) {
         return -1;
+    }
+
+    if (window_layer.subsurface) {
+        wl_subsurface_set_position(window_layer.subsurface,
+                                   floor(hwc_layer->displayFrame.left / pdev->display->scale),
+                                   floor(hwc_layer->displayFrame.top / pdev->display->scale));
     }
 
     if (window->display->presentation) {
