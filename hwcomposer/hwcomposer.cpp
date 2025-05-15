@@ -305,18 +305,13 @@ static void setup_viewport_destination(wp_viewport *viewport, hwc_rect_t frame, 
                                 std::max(1, height));
 }
 
-static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, struct window *window)
+static window::layer &get_next_window_layer(struct waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, struct window *window)
 {
     if (window->lastLayer >= window->layers.size()) {
         assert(window->lastLayer == window->layers.size());
         window->create_new_layer();
     }
     window::layer &requested_layer = window->layers[window->lastLayer];
-
-    if (requested_layer.viewport) {
-        setup_viewport_source(requested_layer.viewport, layer->sourceCropf, layer->transform);
-        setup_viewport_destination(requested_layer.viewport, layer->displayFrame, pdev->display);
-    }
 
     if (requested_layer.subsurface) {
         wl_subsurface_set_position(requested_layer.subsurface,
@@ -335,7 +330,8 @@ static struct wl_surface *get_surface(struct waydroid_hwc_composer_device_1 *pde
     pdev->display->layers[requested_layer.surface] = {
         .x = layer->displayFrame.left,
         .y = layer->displayFrame.top };
-    return requested_layer.surface;
+
+    return requested_layer;
 }
 
 static long time_to_sleep_to_next_vsync(struct timespec *rt, uint64_t last_vsync_ns, unsigned vsync_period_ns)
@@ -439,87 +435,80 @@ static bool is_blacklisted(struct waydroid_hwc_composer_device_1* pdev, const st
     return components.empty() || std::find(components.begin(), components.end(), component) != components.end();
 }
 
-static void apply_surface_scale(waydroid_hwc_composer_device_1 *pdev, wl_surface *surface) {
-    // TODO: Move viewport setup here
-    if (!pdev->display->viewporter && pdev->display->scale > 1) {
-        // With no viewporter the scale is guaranteed to be integer
-        wl_surface_set_buffer_scale(surface, (int)pdev->display->scale);
+static void apply_surface_scale(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 * hwc_layer, window::layer &window_layer) {
+    if (window_layer.viewport) {
+        setup_viewport_source(window_layer.viewport, hwc_layer->sourceCropf, hwc_layer->transform);
+        setup_viewport_destination(window_layer.viewport, hwc_layer->displayFrame, pdev->display);
+    } else if (!pdev->display->viewporter) {
+        // Usually with no viewporter the scale is guaranteed to be integer
+        // When supports_cursor_viewport == false, this might not be the case
+        // thus use ceil anyway
+        int scale = static_cast<int>(ceil(pdev->display->scale));
+        wl_surface_set_buffer_scale(window_layer.surface, scale);
     }
 }
 
-static int apply_layer_to_surface(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *layer, size_t layer_index, wl_surface *surface, buffer *buf = nullptr) {
+static int apply_hwc_layer_to_window_layer(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index, window::layer &window_layer, buffer *buf = nullptr) {
     constexpr int acquireWarningMS = 100;
     int res = -1;
 
     if (!buf) {
-        buf = get_wl_buffer(pdev, layer, layer_index);
+        buf = get_wl_buffer(pdev, hwc_layer, hwc_layer_index);
         if (!buf) {
             ALOGE("Failed to get wayland buffer");
             goto out;
         }
     }
 
-    // TODO: Implement per-layer explicit synchronization
-    layer->releaseFenceFd = -1;
+    // TODO: Implement per-hwc_layer explicit synchronization
+    hwc_layer->releaseFenceFd = -1;
 
-    wl_surface_attach(surface, buf->wl_buffer, 0, 0);
-    wl_surface_damage(surface, 0, 0, INT32_MAX, INT32_MAX);
-    apply_surface_scale(pdev, surface);
-    wl_surface_set_buffer_transform(surface, hwc_transform_to_wayland_transform(layer->transform));
+    wl_surface_attach(window_layer.surface, buf->wl_buffer, 0, 0);
+    wl_surface_damage(window_layer.surface, 0, 0, INT32_MAX, INT32_MAX);
+    apply_surface_scale(pdev, hwc_layer, window_layer);
+    wl_surface_set_buffer_transform(window_layer.surface, hwc_transform_to_wayland_transform(hwc_layer->transform));
 
     // TODO: Implement explicit synchronization
-    if (layer->acquireFenceFd != -1) {
-        res = sync_wait(layer->acquireFenceFd, acquireWarningMS);
+    if (hwc_layer->acquireFenceFd != -1) {
+        res = sync_wait(hwc_layer->acquireFenceFd, acquireWarningMS);
         if (res < 0 && errno == ETIME) {
-            ALOGE("hwcomposer waited on fence %d for %d ms", layer->acquireFenceFd,
+            ALOGE("hwcomposer waited on fence %d for %d ms", hwc_layer->acquireFenceFd,
                   acquireWarningMS);
         }
     } else {
         res = 0;
     }
 
-    wl_surface_commit(surface);
+    wl_surface_commit(window_layer.surface);
 
 out:
-    if (layer->acquireFenceFd != -1) {
-        close(layer->acquireFenceFd);
+    if (hwc_layer->acquireFenceFd != -1) {
+        close(hwc_layer->acquireFenceFd);
     }
     return res;
 }
 
-static int apply_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *layer, size_t layer_index, window *window) {
-    buffer *buf;
-    wl_surface *surface;
-    wp_presentation *pres;
+static int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 * hwc_layer, size_t hwc_layer_index, window *window) {
+    auto &window_layer = get_next_window_layer(pdev, hwc_layer, window);
 
-    surface = get_surface(pdev, layer, window);
-    if (!surface) {
-        ALOGE("Failed to get surface");
-        if (layer->acquireFenceFd != -1) {
-            close(layer->acquireFenceFd);
-        }
-        return -1;
-    }
-
-
-    buf = get_wl_buffer(pdev, layer, layer_index);
+    buffer *buf = get_wl_buffer(pdev, hwc_layer, hwc_layer_index);
     if (!buf) {
         ALOGE("Failed to get wayland buffer");
-        if (layer->acquireFenceFd != -1) {
-            close(layer->acquireFenceFd);
+        if (hwc_layer->acquireFenceFd != -1) {
+            close(hwc_layer->acquireFenceFd);
         }
         return -1;
     }
 
-    window->last_layer_buffer = buf;
     window->lastLayer++;
+    window->last_layer_buffer = buf;
 
-    if (apply_layer_to_surface(pdev, layer, layer_index, surface, buf) != 0) {
+    if (apply_hwc_layer_to_window_layer(pdev, hwc_layer, hwc_layer_index, window_layer, buf) != 0) {
         return -1;
     }
 
     if (window->display->presentation) {
-        buf->feedback = wp_presentation_feedback(window->display->presentation, surface);
+        buf->feedback = wp_presentation_feedback(window->display->presentation, window_layer.surface);
         wp_presentation_feedback_add_listener(buf->feedback,
                                               &feedback_listener, pdev);
     }
@@ -866,7 +855,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             continue;
         }
 
-        apply_layer_to_window(pdev, fb_layer, layer, window);
+        apply_hwc_layer_to_window(pdev, fb_layer, layer, window);
     }
     // Layers order is changed from SF so we rearrange wayland surfaces
     if (pdev->should_compose && (contents->flags & HWC_GEOMETRY_CHANGED)) {
