@@ -106,6 +106,15 @@ struct handleExt {
 
 struct window;
 struct buffer;
+struct display;
+struct waydroid_hwc_composer_device_1;
+
+struct cursor_handler {
+    virtual ~cursor_handler() = default;
+    virtual int apply_cursor(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index) = 0;
+    virtual int reset_cursor(waydroid_hwc_composer_device_1 *pdev __unused) { return 0; }
+    virtual int cursor_enter(display *display __unused) { return 0; };
+};
 
 struct display {
     struct wl_display *display;
@@ -154,8 +163,6 @@ struct display {
 
     std::map<int, struct wl_surface *> touch_surfaces;
     struct wl_surface *pointer_surface;
-    struct wl_surface *cursor_surface;
-    struct wp_viewport *cursor_viewport;
     struct wl_surface *tablet_surface;
     std::list<struct zwp_tablet_tool_v2 *> tablet_tools;
     std::map<struct zwp_tablet_tool_v2 *, uint16_t> tablet_tools_evt;
@@ -186,6 +193,8 @@ struct display {
     struct handleExt target_layer_handle_ext;
     std::unordered_map<buffer_handle_t, std::unique_ptr<buffer>> buffer_map;
     std::array<uint8_t, 239> keysDown;
+
+    std::unique_ptr<cursor_handler> cursor_handler;
     bool supports_cursor_viewport;
 
     bool isMaximized;
