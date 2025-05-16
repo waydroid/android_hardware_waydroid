@@ -14,6 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+#include "hwcomposer.h"
+
 #include <errno.h>
 #include <pthread.h>
 #include <semaphore.h>
@@ -27,7 +30,6 @@
 #include <string>
 #include <sstream>
 #include <functional>
-#include <atomic>
 
 #include <log/log.h>
 #include <cutils/properties.h>
@@ -64,27 +66,6 @@ using ::android::OK;
 using ::android::status_t;
 
 #define WINDOW_DECORATION_OUTSET 15
-
-struct waydroid_hwc_composer_device_1 : hwc_composer_device_1_t {
-    const hwc_procs_t *procs;        // constant after init
-    pthread_t wayland_thread;        // constant after init
-    pthread_t vsync_thread;          // constant after init
-    pthread_t binder_thread;         // constant after init
-    pthread_t egl_worker_thread;     // constant after init
-    int32_t vsync_period_ns;         // constant after init
-    struct display *display;         // constant after init
-    gralloc_handler gralloc_handler; // constant after init
-
-    std::map<std::string, std::vector<std::string>> blacklisted_apps;
-
-    std::atomic<bool> vsync_callback_enabled;
-    std::atomic<uint64_t> last_vsync_ns;
-
-    int timeline_fd;
-    int next_sync_point;
-    bool should_compose;
-    bool multi_windows;
-};
 
 namespace {
     std::pair<int, int> search_first_and_last_skipped_layer(hwc_display_contents_1_t *contents) {
@@ -669,59 +650,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         pdev->display->ignored_apps.clear();
     }
 
-    // Set Wayland cursor
-    if (pdev->display->pointer) {
-        for (size_t l = 0; l < contents->numHwLayers; l++) {
-            hwc_layer_1_t* fb_layer = &contents->hwLayers[l];
-            if ((fb_layer->flags & HWC_IS_CURSOR_LAYER) && pdev->display->cursor_surface) {
-                struct buffer *buf = get_wl_buffer(pdev, fb_layer, l);
-                if (!buf) {
-                    ALOGE("Failed to get wayland buffer");
-                    if (fb_layer->acquireFenceFd != -1) {
-                        close(fb_layer->acquireFenceFd);
-                    }
-                    break;
-                }
-
-                wl_surface_attach(pdev->display->cursor_surface, buf->wl_buffer, 0, 0);
-                if (wl_surface_get_version(pdev->display->cursor_surface) >= WL_SURFACE_DAMAGE_BUFFER_SINCE_VERSION)
-                    wl_surface_damage_buffer(pdev->display->cursor_surface, 0, 0, buf->metadata.width, buf->metadata.height);
-                else
-                    wl_surface_damage(pdev->display->cursor_surface, 0, 0, buf->metadata.width, buf->metadata.height);
-                if (!pdev->display->viewporter && pdev->display->scale > 1) {
-                    // With no viewporter the scale is guaranteed to be integer
-                    wl_surface_set_buffer_scale(pdev->display->cursor_surface, (int)pdev->display->scale);
-                }
-                if (pdev->display->cursor_viewport) {
-                    setup_viewport_source(pdev->display->cursor_viewport, fb_layer->sourceCropf, fb_layer->transform);
-                    setup_viewport_destination(pdev->display->cursor_viewport, fb_layer->displayFrame, pdev->display);
-                } else {
-                    wl_surface_set_buffer_scale(pdev->display->cursor_surface, (int)ceil(pdev->display->scale));
-                }
-
-                wl_pointer_set_cursor (pdev->display->pointer, pdev->display->pointer_enter_serial,
-                                       pdev->display->cursor_surface,
-                                       roundf(pdev->display->cursor_hotspot.x / pdev->display->scale),
-                                       roundf(pdev->display->cursor_hotspot.y / pdev->display->scale));
-
-                const int kAcquireWarningMS = 100;
-                err = sync_wait(fb_layer->acquireFenceFd, kAcquireWarningMS);
-                if (err < 0 && errno == ETIME) {
-                    ALOGE("hwcomposer waited on fence %d for %d ms",
-                        fb_layer->acquireFenceFd, kAcquireWarningMS);
-                }
-                close(fb_layer->acquireFenceFd);
-
-                wl_surface_commit(pdev->display->cursor_surface);
-                found_cursor = true;
-                break;
-            }
-        }
-        if (!found_cursor) {
-            wl_pointer_set_cursor (pdev->display->pointer, pdev->display->pointer_enter_serial, NULL, 0, 0);
-        }
-    }
-
     for (size_t l = 0; l < contents->numHwLayers; l++) {
         hwc_layer_1_t* fb_layer = &contents->hwLayers[l];
         if (fb_layer->compositionType == HWC_FRAMEBUFFER_TARGET) {
@@ -757,11 +685,9 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             continue;
         }
 
-        if ((fb_layer->flags & HWC_IS_CURSOR_LAYER) && pdev->display->cursor_surface) {
-            // Cursor was already handled separately
-            if (fb_layer->acquireFenceFd != -1) {
-                close(fb_layer->acquireFenceFd);
-            }
+        if (fb_layer->flags & HWC_IS_CURSOR_LAYER) {
+            found_cursor = true;
+            pdev->display->cursor_handler->apply_cursor(pdev, fb_layer, l);
             continue;
         }
 
@@ -821,23 +747,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
         // Detecting special layers (like cursor and IME)
         if (!window) {
-            if ((fb_layer->flags & HWC_IS_CURSOR_LAYER) && !pdev->display->cursor_surface && pdev->display->pointer_surface) {
-                // Cursor layer. Without cursor_surface we draw it as a subsurface
-                for (auto it = pdev->display->windows.begin(); it != pdev->display->windows.end(); it++) {
-                    if (it->second) {
-                        if (it->second->surface == pdev->display->pointer_surface) {
-                            window = it->second.get();
-                            break;
-                        }
-                        for (auto &window_layer : it->second->layers) {
-                            if (window_layer.surface == pdev->display->pointer_surface) {
-                                window = it->second.get();
-                                break;
-                            }
-                        }
-                    }
-                }
-            } else if (layer_info.type == LayerSplitType::RawName && layer_info.aid == "InputMethod") {
+            if (layer_info.type == LayerSplitType::RawName && layer_info.aid == "InputMethod") {
                 // IME layer
                 if (pdev->display->windows.find(layer_info.aid) == pdev->display->windows.end()) {
                     pdev->display->windows[layer_info.aid] = window::create(pdev->display, pdev->should_compose, layer_info.aid, layer_info.tid, {0, 0, 0, 0});
@@ -857,6 +767,11 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
         apply_hwc_layer_to_window(pdev, fb_layer, layer, window);
     }
+
+    if (!found_cursor) {
+        pdev->display->cursor_handler->reset_cursor(pdev);
+    }
+
     // Layers order is changed from SF so we rearrange wayland surfaces
     if (pdev->should_compose && (contents->flags & HWC_GEOMETRY_CHANGED)) {
         for (auto it = pdev->display->windows.begin(); it != pdev->display->windows.end(); it++) {
@@ -1202,12 +1117,9 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
         pdev->vsync_period_ns = 1000 * 1000 * 1000 / (pdev->display->refresh / 1000);
 
     if (!property_get_bool("persist.waydroid.cursor_on_subsurface", false)) {
-        pdev->display->cursor_surface =
-            wl_compositor_create_surface(pdev->display->compositor);
-        if (pdev->display->viewporter && pdev->display->supports_cursor_viewport) {
-            pdev->display->cursor_viewport =
-                wp_viewporter_get_viewport(pdev->display->viewporter, pdev->display->cursor_surface);
-        }
+        pdev->display->cursor_handler.reset(new wl_cursor_cursor_handler(pdev));
+    } else {
+        pdev->display->cursor_handler.reset(new subsurface_cursor_handler());
     }
 
 
@@ -1244,6 +1156,73 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     *device = &pdev->common;
 
     return ret;
+}
+
+int subsurface_cursor_handler::apply_cursor(waydroid_hwc_composer_device_1* pdev, hwc_layer_1* hwc_layer, size_t hwc_layer_index) {
+    if (!pdev->display->pointer_surface) {
+        if (hwc_layer->acquireFenceFd != -1) {
+            close(hwc_layer->acquireFenceFd);
+        }
+        return 0;
+    }
+
+    auto window_it = std::find_if(pdev->display->windows.begin(), pdev->display->windows.end(), [&](const auto &it){
+        auto &window = it.second;
+        return window->surface == pdev->display->pointer_surface
+               || std::any_of(window->layers.begin(), window->layers.end(), [&](const auto &layer) {
+                      return layer.surface == pdev->display->pointer_surface;
+                  });
+    });
+    if (window_it == pdev->display->windows.end()) {
+        if (hwc_layer->acquireFenceFd != -1) {
+            close(hwc_layer->acquireFenceFd);
+        }
+        return 0;
+    }
+
+    return apply_hwc_layer_to_window(pdev, hwc_layer, hwc_layer_index, window_it->second.get());
+}
+
+wl_cursor_cursor_handler::wl_cursor_cursor_handler(waydroid_hwc_composer_device_1* pdev) {
+    cursor_surface_context.surface = wl_compositor_create_surface(pdev->display->compositor);
+    if (pdev->display->viewporter && pdev->display->supports_cursor_viewport) {
+        cursor_surface_context.viewport =
+                wp_viewporter_get_viewport(pdev->display->viewporter, cursor_surface_context.surface);
+    }
+}
+
+void wl_cursor_cursor_handler::set_cursor(display* display) const {
+    assert(display->pointer);
+    wl_pointer_set_cursor (display->pointer, display->pointer_enter_serial,
+                          cursor_surface_context.surface,
+                          round(display->cursor_hotspot.x / display->scale),
+                          round(display->cursor_hotspot.y / display->scale));
+}
+
+int wl_cursor_cursor_handler::apply_cursor(waydroid_hwc_composer_device_1* pdev, hwc_layer_1* hwc_layer, size_t hwc_layer_index) {
+    if (pdev->display->pointer) {
+        if (apply_hwc_layer_to_surface_context(pdev, hwc_layer, hwc_layer_index, cursor_surface_context) != 0) {
+            ALOGE("Failed to prepare cursur surface");
+            return -1;
+        }
+        set_cursor(pdev->display);
+    }
+    return 0;
+}
+
+int wl_cursor_cursor_handler::reset_cursor(waydroid_hwc_composer_device_1* pdev) {
+    if (pdev->display->pointer) {
+        wl_pointer_set_cursor(pdev->display->pointer, pdev->display->pointer_enter_serial,
+                              nullptr,
+                              0,
+                              0);
+    }
+    return 0;
+}
+
+int wl_cursor_cursor_handler::cursor_enter(display* display) {
+    set_cursor(display);
+    return 0;
 }
 
 

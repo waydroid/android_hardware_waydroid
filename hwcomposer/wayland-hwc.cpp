@@ -662,27 +662,22 @@ static const struct wl_keyboard_listener keyboard_listener = {
 };
 
 static void
-pointer_handle_enter(void *data, struct wl_pointer *pointer,
+pointer_handle_enter(void *data, struct wl_pointer *,
                      uint32_t serial, struct wl_surface *surface,
                      wl_fixed_t, wl_fixed_t)
 {
     struct display *display = (struct display *)data;
     display->pointer_surface = surface;
     display->pointer_enter_serial = serial;
-    if (display->cursor_surface)
-        wl_pointer_set_cursor(pointer, serial, display->cursor_surface,
-                              int(display->cursor_hotspot.x / display->scale),
-                              int(display->cursor_hotspot.y / display->scale));
+    display->cursor_handler->cursor_enter(display);
 }
 
 static void
-pointer_handle_leave(void *data, struct wl_pointer *pointer,
-                     uint32_t serial, struct wl_surface *)
+pointer_handle_leave(void *data, struct wl_pointer *,
+                     uint32_t, struct wl_surface *)
 {
     struct display *display = (struct display *)data;
     display->pointer_surface = NULL;
-    if (display->cursor_surface)
-        wl_pointer_set_cursor(pointer, serial, NULL, 0, 0);
 }
 
 static void
