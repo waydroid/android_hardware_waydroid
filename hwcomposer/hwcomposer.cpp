@@ -805,10 +805,9 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
     }
 
-    if (pdev->should_compose)
-        for (auto it = pdev->display->windows.begin(); it != pdev->display->windows.end(); it++)
-            if (it->second)
-                wl_surface_commit(it->second->surface);
+    for (auto it = pdev->display->windows.begin(); it != pdev->display->windows.end(); it++)
+        if (it->second)
+            wl_surface_commit(it->second->surface);
     wl_display_flush(pdev->display->display);
 
 sync:
