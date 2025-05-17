@@ -576,19 +576,28 @@ static int hwc_query(struct hwc_composer_device_1 *, int what, int *value) {
     return 0;
 }
 
-static int hwc_event_control(struct hwc_composer_device_1* dev, int dpy __unused,
+static int hwc_event_control(struct hwc_composer_device_1* dev, int disp,
                              int event, int enabled) {
     auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(dev);
-    int ret = -EINVAL;
 
     // enabled can only be 0 or 1
-    if (!(enabled & ~1)) {
-        if (event == HWC_EVENT_VSYNC) {
-            pdev->vsync_callback_enabled = enabled;
-            ret = 0;
-        }
+    if (enabled & ~1) {
+        return -EINVAL;
     }
-    return ret;
+
+    if (disp != HWC_DISPLAY_PRIMARY) {
+        return 0;
+    }
+
+    switch (event) {
+        case HWC_EVENT_VSYNC:
+            pdev->vsync_callback_enabled = enabled;
+            return 0;
+        default:
+            // unsupported event
+            ALOGE("%s badness unsupported event event=%d", __FUNCTION__, event);
+            return -EINVAL;
+    }
 }
 
 static int hwc_blank(struct hwc_composer_device_1* dev __unused, int disp __unused,
