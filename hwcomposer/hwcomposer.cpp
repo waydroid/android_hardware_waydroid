@@ -600,8 +600,7 @@ static int hwc_event_control(struct hwc_composer_device_1* dev, int disp,
     }
 }
 
-static int hwc_blank(struct hwc_composer_device_1* dev __unused, int disp __unused,
-                     int blank __unused) {
+static int hwc_set_power_move(struct hwc_composer_device_1 *dev __unused, int disp __unused, int mode __unused) {
     return 0;
 }
 
@@ -812,7 +811,7 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     pdev->prepare = hwc_prepare;
     pdev->set = hwc_set;
     pdev->eventControl = hwc_event_control;
-    pdev->blank = hwc_blank;
+    pdev->setPowerMode = hwc_set_power_move;
     pdev->query = hwc_query;
     pdev->registerProcs = hwc_register_procs;
     pdev->dump = hwc_dump;
