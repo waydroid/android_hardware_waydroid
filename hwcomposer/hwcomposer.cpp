@@ -604,13 +604,6 @@ static int hwc_set_power_move(struct hwc_composer_device_1 *dev __unused, int di
     return 0;
 }
 
-static void hwc_dump(hwc_composer_device_1* dev __unused, char* buff __unused,
-                     int buff_len __unused) {
-    // This is run when running dumpsys.
-    // No-op for now.
-}
-
-
 static int hwc_get_display_configs(struct hwc_composer_device_1* dev __unused,
                                    int disp, uint32_t* configs, size_t* numConfigs) {
     if (*numConfigs == 0) {
@@ -814,7 +807,7 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     pdev->setPowerMode = hwc_set_power_move;
     pdev->query = hwc_query;
     pdev->registerProcs = hwc_register_procs;
-    pdev->dump = hwc_dump;
+    pdev->dump = nullptr;
     pdev->getDisplayConfigs = hwc_get_display_configs;
     pdev->getDisplayAttributes = hwc_get_display_attributes;
     pdev->getActiveConfig = hwc_get_active_config;
