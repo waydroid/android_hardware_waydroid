@@ -364,7 +364,7 @@ bool is_blacklisted(struct waydroid_hwc_composer_device_1* pdev, const std::stri
     return components.empty() || std::find(components.begin(), components.end(), component) != components.end();
 }
 
-static void apply_surface_scale(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 * hwc_layer, surface_context &surface_context) {
+static void apply_surface_scale(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, surface_context &surface_context) {
     if (surface_context.viewport) {
         setup_viewport_source(surface_context.viewport, hwc_layer->sourceCropf, hwc_layer->transform);
         setup_viewport_destination(surface_context.viewport, hwc_layer->displayFrame, pdev->display);
@@ -375,6 +375,25 @@ static void apply_surface_scale(waydroid_hwc_composer_device_1 *pdev, hwc_layer_
         int scale = static_cast<int>(ceil(pdev->display->scale));
         wl_surface_set_buffer_scale(surface_context.surface, scale);
     }
+}
+
+static void apply_surface_damage(hwc_layer_1 *hwc_layer, surface_context &surface_context) {
+    auto &surface_damage = hwc_layer->surfaceDamage;
+
+    if (surface_damage.numRects == 0
+        || wl_surface_get_version(surface_context.surface) < WL_SURFACE_DAMAGE_BUFFER_SINCE_VERSION) {
+        wl_surface_damage(surface_context.surface, 0, 0, INT32_MAX, INT32_MAX);
+    }
+
+    std::for_each(surface_damage.rects, surface_damage.rects + surface_damage.numRects, [&](const auto &rect){
+        wl_surface_damage_buffer(
+            surface_context.surface,
+            rect.left,
+            rect.top,
+            rect.right - rect.left,
+            rect.bottom - rect.top
+        );
+    });
 }
 
 static int apply_hwc_layer_to_surface_context(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index, surface_context &surface_context, buffer *buf = nullptr) {
@@ -393,7 +412,7 @@ static int apply_hwc_layer_to_surface_context(waydroid_hwc_composer_device_1 *pd
     hwc_layer->releaseFenceFd = -1;
 
     wl_surface_attach(surface_context.surface, buf->wl_buffer, 0, 0);
-    wl_surface_damage(surface_context.surface, 0, 0, INT32_MAX, INT32_MAX);
+    apply_surface_damage(hwc_layer, surface_context);
     apply_surface_scale(pdev, hwc_layer, surface_context);
     wl_surface_set_buffer_transform(surface_context.surface, hwc_transform_to_wayland_transform(hwc_layer->transform));
 
@@ -797,7 +816,7 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     }
 
     pdev->common.tag = HARDWARE_DEVICE_TAG;
-    pdev->common.version = HWC_DEVICE_API_VERSION_1_4;
+    pdev->common.version = HWC_DEVICE_API_VERSION_1_5;
     pdev->common.module = const_cast<hw_module_t *>(module);
     pdev->common.close = hwc_close;
 
