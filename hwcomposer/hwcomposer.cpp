@@ -559,11 +559,14 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     return 0;
 }
 
-static int hwc_query(struct hwc_composer_device_1* dev, int what, int* value) {
-    auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(dev);
+static int hwc_query(struct hwc_composer_device_1 *, int what, int *value) {
     switch (what) {
-        case HWC_VSYNC_PERIOD:
-            value[0] = pdev->vsync_period_ns;
+        case HWC_BACKGROUND_LAYER_SUPPORTED:
+            // TODO: Support background layer
+            *value = 0;
+            break;
+        case HWC_DISPLAY_TYPES_SUPPORTED:
+            *value = HWC_DISPLAY_PRIMARY;
             break;
         default:
             // unsupported query
