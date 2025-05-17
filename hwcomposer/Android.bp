@@ -54,6 +54,11 @@ cc_library_shared {
         "WaydroidClipboard.cpp",
         "WaydroidWindow.cpp",
         "egl-tools.cpp",
+        "modes/waydroid_mode.cpp",
+        "modes/closed.cpp",
+        "modes/full-ui.cpp",
+        "modes/multi-window.cpp",
+        "modes/single-window.cpp",
     ],
     header_libs: [
         "libsystem_headers",
