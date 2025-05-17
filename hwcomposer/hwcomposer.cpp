@@ -559,23 +559,6 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     return 0;
 }
 
-static int hwc_query(struct hwc_composer_device_1 *, int what, int *value) {
-    switch (what) {
-        case HWC_BACKGROUND_LAYER_SUPPORTED:
-            // TODO: Support background layer
-            *value = 0;
-            break;
-        case HWC_DISPLAY_TYPES_SUPPORTED:
-            *value = HWC_DISPLAY_PRIMARY;
-            break;
-        default:
-            // unsupported query
-            ALOGE("%s badness unsupported query what=%d", __FUNCTION__, what);
-            return -EINVAL;
-    }
-    return 0;
-}
-
 static int hwc_event_control(struct hwc_composer_device_1* dev, int disp,
                              int event, int enabled) {
     auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(dev);
@@ -604,6 +587,29 @@ static int hwc_set_power_move(struct hwc_composer_device_1 *dev __unused, int di
     return 0;
 }
 
+static int hwc_query(struct hwc_composer_device_1 *, int what, int *value) {
+    switch (what) {
+        case HWC_BACKGROUND_LAYER_SUPPORTED:
+            // TODO: Support background layer
+            *value = 0;
+            break;
+        case HWC_DISPLAY_TYPES_SUPPORTED:
+            *value = HWC_DISPLAY_PRIMARY;
+            break;
+        default:
+            // unsupported query
+            ALOGE("%s badness unsupported query what=%d", __FUNCTION__, what);
+            return -EINVAL;
+    }
+    return 0;
+}
+
+static void hwc_register_procs(struct hwc_composer_device_1* dev,
+                               hwc_procs_t const* procs) {
+    auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(dev);
+    pdev->procs = procs;
+}
+
 static int hwc_get_display_configs(struct hwc_composer_device_1* dev __unused,
                                    int disp, uint32_t* configs, size_t* numConfigs) {
     if (*numConfigs == 0) {
@@ -617,23 +623,6 @@ static int hwc_get_display_configs(struct hwc_composer_device_1* dev __unused,
     }
 
     return -EINVAL;
-}
-
-static int hwc_get_active_config(struct hwc_composer_device_1* dev __unused, int disp) {
-    if (disp == HWC_DISPLAY_PRIMARY)
-        return 0;
-    return -EINVAL;
-}
-
-static int hwc_set_active_config(struct hwc_composer_device_1* dev __unused, int disp, int index) {
-    if (disp == HWC_DISPLAY_PRIMARY && index == 0)
-        return 0;
-    return -EINVAL;
-}
-
-static int hwc_set_cursor_position_async(struct hwc_composer_device_1 *, int, int, int) {
-    // Ignored: Wayland compositor is managing the cursor position
-    return 0;
 }
 
 static int32_t hwc_attribute(struct waydroid_hwc_composer_device_1* pdev,
@@ -673,7 +662,7 @@ static int32_t hwc_attribute(struct waydroid_hwc_composer_device_1* pdev,
     }
 }
 
-static int hwc_get_display_attributes(struct hwc_composer_device_1* dev __unused,
+static int hwc_get_display_attributes(struct hwc_composer_device_1* dev,
                                       int disp, uint32_t config __unused,
                                       const uint32_t* attributes, int32_t* values) {
     auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(dev);
@@ -689,6 +678,23 @@ static int hwc_get_display_attributes(struct hwc_composer_device_1* dev __unused
         }
     }
 
+    return 0;
+}
+
+static int hwc_get_active_config(struct hwc_composer_device_1* dev __unused, int disp) {
+    if (disp == HWC_DISPLAY_PRIMARY)
+        return 0;
+    return -EINVAL;
+}
+
+static int hwc_set_active_config(struct hwc_composer_device_1* dev __unused, int disp, int index) {
+    if (disp == HWC_DISPLAY_PRIMARY && index == 0)
+        return 0;
+    return -EINVAL;
+}
+
+static int hwc_set_cursor_position_async(struct hwc_composer_device_1 *, int, int, int) {
+    // Ignored: Wayland compositor is managing the cursor position
     return 0;
 }
 
@@ -772,12 +778,6 @@ shutdown:
     // In normal operation, we don't expect the thread pool to shutdown
     ALOGE("Waydroid hwcomposer services shutting down.");
     return NULL;
-}
-
-static void hwc_register_procs(struct hwc_composer_device_1* dev,
-                               hwc_procs_t const* procs) {
-    auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(dev);
-    pdev->procs = procs;
 }
 
 static int hwc_open(const struct hw_module_t* module, const char* name,
