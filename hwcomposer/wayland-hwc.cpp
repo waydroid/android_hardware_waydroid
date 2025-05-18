@@ -61,6 +61,7 @@
 #include <cutils/properties.h>
 
 #include <xkbcommon/xkbcommon.h>
+#include <cinttypes>
 
 #include "gralloc_handler.h"
 
@@ -258,6 +259,80 @@ struct wl_shell_surface_listener shell_surface_listener = {
 	&shell_surface_configure,
 	&shell_surface_popup_done
 };
+
+
+BufferTransform hwc_transform_to_buffer_transform(uint32_t hwc_transform) {
+    switch (hwc_transform) {
+        case 0:
+            return BufferTransform::Normal;
+        case HWC_TRANSFORM_FLIP_H:
+            return BufferTransform::Flip_Rot_180;
+        case HWC_TRANSFORM_FLIP_V:
+            return BufferTransform::Flip;
+        case HWC_TRANSFORM_ROT_90:
+            return BufferTransform::Rot_90;
+        case HWC_TRANSFORM_ROT_180:
+            return BufferTransform::Rot_180;
+        case HWC_TRANSFORM_ROT_270:
+            return BufferTransform::Rot_270;
+        case HWC_TRANSFORM_FLIP_H_ROT_90:
+            return BufferTransform::Flip_Rot_270;
+        case HWC_TRANSFORM_FLIP_V_ROT_90:
+            return BufferTransform::Flip_Rot_90;
+        default:
+            ALOGE("Invalid hwc_transform: %" PRIu32, hwc_transform);
+            abort();
+    }
+}
+
+void surface_context::attach_buffer(buffer& buf) {
+    wl_surface_attach(surface, buf.wl_buffer, 0, 0);
+}
+
+void surface_context::damage_surface(int32_t x, int32_t y, int32_t width, int32_t height) {
+    wl_surface_damage(surface, x, y, width, height);
+}
+
+void surface_context::set_buffer_transform(BufferTransform transform) {
+    wl_surface_set_buffer_transform(surface, static_cast<int32_t>(transform));
+}
+
+void surface_context::set_buffer_scale(double d_scale) {
+    assert(!viewport);
+
+    // Usually with no viewporter the scale is guaranteed to be integer
+    // When supports_cursor_viewport == false, this might not be the case
+    // thus use ceil anyway
+    int32_t scale = static_cast<int32_t>(ceil(d_scale));
+    wl_surface_set_buffer_scale(surface, scale);
+}
+
+void surface_context::set_crop(hwc_frect_t crop) {
+    assert(viewport);
+
+    float x = fmax(0, crop.left);
+    float y = fmax(0, crop.top);
+    float width = fmax(1, crop.right - crop.left);
+    float height = fmax(1, crop.bottom - crop.top);
+
+    wp_viewport_set_source(viewport,
+                           wl_fixed_from_double(x),
+                           wl_fixed_from_double(y),
+                           wl_fixed_from_double(width),
+                           wl_fixed_from_double(height));
+}
+
+void surface_context::set_display_frame(hwc_rect_t rect, double scale) {
+    assert(viewport);
+
+    int width = static_cast<int>(ceil((rect.right - rect.left) / scale));
+    int height = static_cast<int>(ceil((rect.bottom - rect.top) / scale));
+
+    wp_viewport_set_destination(viewport,
+                                std::max(1, width),
+                                std::max(1, height));
+}
+
 
 window::~window() {
     if (xdg_toplevel)
