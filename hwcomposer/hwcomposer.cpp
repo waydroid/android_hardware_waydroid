@@ -70,9 +70,7 @@ struct waydroid_hwc_composer_device_1 {
     const hwc_procs_t *procs;     // constant after init
     pthread_t wayland_thread;     // constant after init
     pthread_t vsync_thread;       // constant after init
-    pthread_t extension_thread;   // constant after init
-    pthread_t clipboard_service_thread; // constant after init
-    pthread_t window_service_thread; // constant after init
+    pthread_t binder_thread;      // constant after init
     pthread_t egl_worker_thread;  // constant after init
     int32_t vsync_period_ns;      // constant after init
     struct display *display;      // constant after init
@@ -1140,89 +1138,57 @@ static void* hwc_wayland_thread(void* data) {
     return NULL;
 }
 
-static void* hwc_extension_thread(void* data) {
+static void* hwc_binder_thread(void* data) {
     struct waydroid_hwc_composer_device_1* pdev = (struct waydroid_hwc_composer_device_1*)data;
-    sp<IWaydroidDisplay> waydroidDisplay;
     status_t status;
 
+    sp<IWaydroidDisplay> waydroidDisplay;
+    sp<IWaydroidWindow> waydroidWindow;
+    sp<IWaydroidClipboard> waydroidClipboard;
+
     setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
+    configureRpcThreadpool(1, true /*callerWillJoin*/);
 
     waydroidDisplay = new WaydroidDisplay(pdev->display);
     if (waydroidDisplay == nullptr) {
         ALOGE("Can not create an instance of Waydroid Display HAL, exiting.");
         goto shutdown;
     }
-
-    configureRpcThreadpool(1, true /*callerWillJoin*/);
-
     status = waydroidDisplay->registerAsService();
     if (status != OK) {
         ALOGE("Could not register service for Waydroid Display HAL (%d).", status);
+        goto shutdown;
     }
-
-    ALOGI("Waydroid Display HAL thread is ready.");
-    joinRpcThreadpool();
-    // Should not pass this line
-
-shutdown:
-    // In normal operation, we don't expect the thread pool to shutdown
-    ALOGE("Waydroid Display HAL service is shutting down.");
-    return NULL;
-}
-
-static void* hwc_window_service_thread(void* data) {
-    struct waydroid_hwc_composer_device_1* pdev = (struct waydroid_hwc_composer_device_1*)data;
-    sp<IWaydroidWindow> waydroidWindow;
-    status_t status;
 
     waydroidWindow = new WaydroidWindow(pdev->display);
     if (waydroidWindow == nullptr) {
         ALOGE("Can not create an instance of Waydroid Window HAL, exiting.");
         goto shutdown;
     }
-
-    configureRpcThreadpool(1, true /*callerWillJoin*/);
-
     status = waydroidWindow->registerAsService();
     if (status != OK) {
         ALOGE("Could not register service for Waydroid Window HAL (%d).", status);
+        goto shutdown;
     }
-
-    ALOGI("Waydroid Window HAL thread is ready.");
-    joinRpcThreadpool();
-    // Should not pass this line
-
-shutdown:
-    // In normal operation, we don't expect the thread pool to shutdown
-    ALOGE("Waydroid Window HAL service is shutting down.");
-    return NULL;
-}
-
-static void* hwc_clipboard_service_thread(void *data) {
-    struct waydroid_hwc_composer_device_1* pdev = (struct waydroid_hwc_composer_device_1*)data;
-    sp<IWaydroidClipboard> waydroidClipboard;
-    status_t status;
 
     waydroidClipboard = new WaydroidClipboard(pdev->display);
     if (waydroidClipboard == nullptr) {
         ALOGE("Can not create an instance of Waydroid Clipboard HAL, exiting.");
         goto shutdown;
     }
-
-    configureRpcThreadpool(1, true /*callerWillJoin*/);
-
     status = waydroidClipboard->registerAsService();
     if (status != OK) {
         ALOGE("Could not register service for Waydroid Clipboard HAL (%d).", status);
+        goto shutdown;
     }
 
-    ALOGI("Waydroid Clipboard HAL thread is ready.");
+    ALOGI("Waydroid hwcomposer services are ready.");
     joinRpcThreadpool();
     // Should not pass this line
 
 shutdown:
     // In normal operation, we don't expect the thread pool to shutdown
-    ALOGE("Waydroid Clipboard HAL service is shutting down.");
+    ALOGE("Waydroid hwcomposer services shutting down.");
     return NULL;
 }
 
@@ -1344,19 +1310,9 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
         ALOGE("waydroid_hw_composer could not start wayland_thread\n");
     }
 
-    ret = pthread_create (&pdev->extension_thread, NULL, hwc_extension_thread, pdev);
+    ret = pthread_create (&pdev->binder_thread, NULL, hwc_binder_thread, pdev);
     if (ret) {
-        ALOGE("waydroid_hw_composer could not start extension_thread\n");
-    }
-
-    ret = pthread_create(&pdev->window_service_thread, NULL, hwc_window_service_thread, pdev);
-    if (ret) {
-        ALOGE("waydroid_hw_composer could not start window_service_thread\n");
-    }
-
-    ret = pthread_create(&pdev->clipboard_service_thread, NULL, hwc_clipboard_service_thread, pdev);
-    if (ret) {
-        ALOGE("waydroid_hw_composer could not start clipboard_service_thread\n");
+        ALOGE("waydroid_hw_composer could not start binder thread");
     }
 
     ret = pthread_create(&pdev->egl_worker_thread, NULL, egl_loop, pdev->display);
