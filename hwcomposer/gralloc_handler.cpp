@@ -334,6 +334,6 @@ gralloc_handler::update_shm_buffer_func gralloc_handler::select_update_shm_buffe
 }
 
 gralloc_handler::gralloc_handler(display *display)
-    : get_buffer_metadata_impl(select_get_buffer_metadata_impl((GrallocType)display->gtype))
-    , create_buffer_impl(select_create_buffer_impl(display, (GrallocType)display->gtype))
-    , update_shm_buffer_impl(select_update_shm_buffer_impl((GrallocType)display->gtype)) { }
+    : get_buffer_metadata_impl(select_get_buffer_metadata_impl(display->gtype))
+    , create_buffer_impl(select_create_buffer_impl(display, display->gtype))
+    , update_shm_buffer_impl(select_update_shm_buffer_impl(display->gtype)) { }

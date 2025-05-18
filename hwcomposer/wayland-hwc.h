@@ -77,18 +77,11 @@ static const char *INPUT_PIPE_NAME[INPUT_TOTAL] = {
     "/dev/input/wl_tablet_events"
 };
 
-enum {
+enum class GrallocType {
     GRALLOC_ANDROID,
     GRALLOC_GBM,
     GRALLOC_CROS,
     GRALLOC_DEFAULT
-};
-
-enum class GrallocType {
-    GRALLOC_ANDROID = GRALLOC_ANDROID,
-    GRALLOC_GBM = GRALLOC_GBM,
-    GRALLOC_CROS = GRALLOC_CROS,
-    GRALLOC_DEFAULT = GRALLOC_DEFAULT
 };
 
 #define MAX_TOUCHPOINTS 10
@@ -145,7 +138,7 @@ struct display {
     struct wl_data_device *data_device;
 
     int system_version;
-    int gtype;
+    GrallocType gtype;
     double scale;
 
     int input_fd[INPUT_TOTAL];
