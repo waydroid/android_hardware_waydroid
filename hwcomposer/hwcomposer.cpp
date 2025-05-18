@@ -407,9 +407,8 @@ int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 
     );
 
     if (window->display->presentation) {
-        buf->feedback = wp_presentation_feedback(window->display->presentation, window_layer.surface);
-        wp_presentation_feedback_add_listener(buf->feedback,
-                                              &feedback_listener, pdev);
+        auto feedback = wp_presentation_feedback(window->display->presentation, window_layer.surface);
+        wp_presentation_feedback_add_listener(feedback,&feedback_listener, pdev);
     }
 
     // Snapshot buffer should be detached by now, clean up
