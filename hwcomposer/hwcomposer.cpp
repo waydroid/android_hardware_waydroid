@@ -145,12 +145,6 @@ namespace {
     }
 }
 
-enum class ShowWindowState {
-    NONE,
-    BLACKLISTED,
-    YES
-};
-
 static int hwc_prepare(hwc_composer_device_1_t* dev,
                        size_t numDisplays, hwc_display_contents_1_t** displays) {
     if (HWC_DISPLAY_PRIMARY >= numDisplays || !displays)
