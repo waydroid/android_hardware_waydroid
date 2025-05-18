@@ -401,11 +401,10 @@ int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 
         return -1;
     }
 
-    if (window_layer.subsurface) {
-        wl_subsurface_set_position(window_layer.subsurface,
-                                   floor(hwc_layer->displayFrame.left / pdev->display->scale),
-                                   floor(hwc_layer->displayFrame.top / pdev->display->scale));
-    }
+    window_layer.set_position(
+        floor(hwc_layer->displayFrame.left / pdev->display->scale),
+        floor(hwc_layer->displayFrame.top / pdev->display->scale)
+    );
 
     if (window->display->presentation) {
         buf->feedback = wp_presentation_feedback(window->display->presentation, window_layer.surface);
