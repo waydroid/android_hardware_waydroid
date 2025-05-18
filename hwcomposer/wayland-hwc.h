@@ -287,26 +287,27 @@ struct window {
     struct wp_viewport *viewport;
     struct wl_buffer *bg_buffer;
 
-    struct wl_region* input_region;
-
     struct zwp_locked_pointer_v1 *locked_pointer;
     struct zwp_idle_inhibitor_v1 *idle_inhibitor;
 
     std::vector<layer> layers;
 
-    struct buffer *last_layer_buffer;
     std::unique_ptr<buffer> snapshot_buffer;
-
-    int lastLayer;
 
     std::string appID;
     std::string taskID;
+
+    // Reset every hwc_set cycle
+    struct wl_region* input_region;
+    int lastLayer;
+    struct buffer *last_layer_buffer;
 
     ~window();
 
     static std::unique_ptr<window> create(struct display *display, bool with_dummy, std::string appID, std::string taskID, hwc_color_t color);
 
     window::layer &create_new_layer();
+    void reset_per_set_state();
 
   private:
     window() = default;

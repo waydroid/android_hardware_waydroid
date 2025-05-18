@@ -455,11 +455,7 @@ static std::unique_ptr<waydroid_mode> select_mode(waydroid_hwc_composer_device_1
 
 static void reset_per_commit_state_window(waydroid_hwc_composer_device_1 *pdev) {
     for (auto& [id, window] : pdev->display->windows) {
-        window->lastLayer = 0;
-        window->last_layer_buffer = nullptr;
-        if (window->input_region) {
-            wl_region_subtract(window->input_region, 0, 0, INT_MAX, INT_MAX);
-        }
+        window->reset_per_set_state();
     }
 }
 
