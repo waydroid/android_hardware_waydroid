@@ -341,6 +341,14 @@ void window::reset_per_set_state() {
     }
 }
 
+void window::minimize() {
+    if (xdg_toplevel) {
+        xdg_toplevel_set_minimized(xdg_toplevel);
+        wl_surface_commit(surface); // unclear if this is required
+        wl_display_flush(display->display);
+    }
+}
+
 window::~window() {
     if (xdg_toplevel)
         xdg_toplevel_destroy(xdg_toplevel);
