@@ -586,6 +586,13 @@ window::layer& window::layer::operator=(window::layer&& rhs) {
     return *this;
 }
 
+void window::layer::set_position(int32_t x, int32_t y) {
+    assert(subsurface || (x == 0 && y == 0));
+    if (subsurface) {
+        wl_subsurface_set_position(subsurface, x, y);
+    }
+}
+
 window::layer& window::create_new_layer() {
     wl_surface *surface = wl_compositor_create_surface(display->compositor);
     wl_subsurface *subsurface = wl_subcompositor_get_subsurface(display->subcompositor, surface, this->surface);

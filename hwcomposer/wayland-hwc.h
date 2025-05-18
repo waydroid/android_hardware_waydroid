@@ -272,7 +272,7 @@ struct surface_context {
 };
 
 struct window {
-    struct layer : surface_context {
+    struct layer : public surface_context {
         struct wl_subsurface *subsurface;
 
         layer() = default;
@@ -281,6 +281,8 @@ struct window {
 
         layer(layer &&other);
         layer &operator=(layer &&rhs);
+
+        void set_position(int32_t x, int32_t y);
     };
 
     struct display *display;
