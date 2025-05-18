@@ -451,6 +451,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     hwc_display_contents_1_t* contents = displays[HWC_DISPLAY_PRIMARY];
     size_t fb_target = -1;
     int err = 0;
+    bool found_cursor = false;
 
     for (auto it = pdev->display->buffer_map.begin(); it != pdev->display->buffer_map.end(); /* no increment */) {
         if (it->second && it->second->invalidated == true) {
@@ -693,8 +694,12 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             close(fb_layer->acquireFenceFd);
 
             wl_surface_commit(pdev->display->cursor_surface);
+            found_cursor = true;
             break;
         }
+    }
+    if (!found_cursor) {
+        wl_pointer_set_cursor (pdev->display->pointer, pdev->display->pointer_enter_serial, NULL, 0, 0);
     }
 
     for (size_t l = 0; l < contents->numHwLayers; l++) {
