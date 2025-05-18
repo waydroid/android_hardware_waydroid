@@ -219,7 +219,6 @@ struct buffer {
 
     buffer_handle_t handle;
     buffer_metadata metadata;
-    uint32_t format;
 
     bool isShm;
     void *shm_data;
