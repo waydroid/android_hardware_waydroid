@@ -40,6 +40,7 @@
 #include <system/graphics.h>
 
 #include <gbm.h>
+#include <drm/drm_fourcc.h>
 
 #include "gralloc_gbm_priv.h"
 #include <android/gralloc_handle.h>
@@ -276,7 +277,12 @@ static struct gbm_bo *gbm_alloc(struct gbm_device *gbm,
 	      handle->width, handle->height, handle->format, usage);
 	std::vector<uint64_t> modifiers = get_supported_modifiers(gbm, format);
 	if (modifiers.size() > 0) {
-		bo = gbm_bo_create_with_modifiers2(gbm, width, height, format, modifiers.data(), modifiers.size(), usage);
+		int usage2 = usage;
+		if (usage2 & GBM_BO_USE_LINEAR) {
+			usage2 &= ~GBM_BO_USE_LINEAR;
+			modifiers = {DRM_FORMAT_MOD_LINEAR};
+		}
+		bo = gbm_bo_create_with_modifiers2(gbm, width, height, format, modifiers.data(), modifiers.size(), usage2);
 	}
 	if (!bo) {
 		ALOGV("fallback to gbm_bo_create without modifiers");
