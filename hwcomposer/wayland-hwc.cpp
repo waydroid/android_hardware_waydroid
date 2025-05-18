@@ -358,6 +358,15 @@ void window::set_maximize(bool enabled) {
     }
 }
 
+void window::set_title(const char* title) {
+    if (xdg_toplevel) {
+        xdg_toplevel_set_title(xdg_toplevel, title);
+    } else {
+        assert(shell_surface);
+        wl_shell_surface_set_title(shell_surface, title);
+    }
+}
+
 void window::minimize() {
     if (xdg_toplevel) {
         xdg_toplevel_set_minimized(xdg_toplevel);
