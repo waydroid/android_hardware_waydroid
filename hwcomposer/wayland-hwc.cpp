@@ -341,6 +341,23 @@ void window::reset_per_set_state() {
     }
 }
 
+void window::set_maximize(bool enabled) {
+    if (xdg_toplevel) {
+        if (enabled) {
+            xdg_toplevel_set_maximized(xdg_toplevel);
+        } else {
+            xdg_toplevel_unset_maximized(xdg_toplevel);
+        }
+    } else {
+        assert(shell_surface);
+        if (enabled) {
+            wl_shell_surface_set_maximized(shell_surface, display->output);
+        } else {
+            ALOGW("wl_shell_surface: does not support un-maximizing");
+        }
+    }
+}
+
 void window::minimize() {
     if (xdg_toplevel) {
         xdg_toplevel_set_minimized(xdg_toplevel);
