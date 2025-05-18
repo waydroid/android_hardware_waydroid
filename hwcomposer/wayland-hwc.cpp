@@ -367,6 +367,20 @@ void window::set_title(const char* title) {
     }
 }
 
+void window::set_app_id(std::string appID) {
+    this->appID = std::move(appID);
+    if (xdg_toplevel) {
+        const std::string &wayland_app_id = [&](){
+            if (this->appID != "Waydroid") {
+                return "waydroid." + this->appID;
+            } else {
+                return this->appID;
+            }
+        }();
+        xdg_toplevel_set_app_id(xdg_toplevel, wayland_app_id.c_str());
+    }
+}
+
 void window::minimize() {
     if (xdg_toplevel) {
         xdg_toplevel_set_minimized(xdg_toplevel);
