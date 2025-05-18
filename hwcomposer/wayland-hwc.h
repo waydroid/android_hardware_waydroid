@@ -311,6 +311,7 @@ struct window {
 
     void minimize();
     void set_maximize(bool enabled);
+    void set_title(const char *title);
 
   private:
     window() = default;
