@@ -50,6 +50,7 @@
 #include <hardware/hwcomposer.h>
 #include <vendor/waydroid/task/1.0/IWaydroidTask.h>
 #include <wayland-util.h>
+#include <wayland-client.h>
 
 #define EGL_EGLEXT_PROTOTYPES
 #include <EGL/egl.h>
@@ -236,6 +237,19 @@ struct buffer {
     ~buffer();
 };
 
+enum class BufferTransform : int32_t {
+    Normal = WL_OUTPUT_TRANSFORM_NORMAL,
+    Rot_90 = WL_OUTPUT_TRANSFORM_90,
+    Rot_180 = WL_OUTPUT_TRANSFORM_180,
+    Rot_270 = WL_OUTPUT_TRANSFORM_270,
+    Flip = WL_OUTPUT_TRANSFORM_FLIPPED,
+    Flip_Rot_90 = WL_OUTPUT_TRANSFORM_FLIPPED_90,
+    Flip_Rot_180 = WL_OUTPUT_TRANSFORM_FLIPPED_180,
+    Flip_Rot_270 = WL_OUTPUT_TRANSFORM_FLIPPED_270,
+};
+
+BufferTransform hwc_transform_to_buffer_transform(uint32_t hwc_transform);
+
 struct surface_context {
     struct wl_surface *surface;
     struct wp_viewport *viewport;
@@ -246,6 +260,15 @@ struct surface_context {
 
     surface_context(surface_context &&other);
     surface_context &operator=(surface_context &&rhs);
+
+    void attach_buffer(buffer& buf);
+    void damage_surface(int32_t x, int32_t y, int32_t width, int32_t height);
+    void set_buffer_transform(BufferTransform transform);
+    void set_buffer_scale(double scale);
+    // Requires the transformed rectangle
+    void set_crop(hwc_frect_t crop);
+    // TODO: This should not require scale. Scaling handling is broken
+    void set_display_frame(hwc_rect_t rect, double scale);
 };
 
 struct window {

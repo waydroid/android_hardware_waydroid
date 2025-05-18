@@ -143,27 +143,6 @@ namespace {
         int size = property_get(key, property, default_value);
         return std::string(property, size);
     }
-
-    int32_t hwc_transform_to_wayland_transform(uint32_t hwc_transform) {
-        switch (hwc_transform) {
-            case HWC_TRANSFORM_FLIP_H:
-                return WL_OUTPUT_TRANSFORM_FLIPPED_180;
-            case HWC_TRANSFORM_FLIP_V:
-                return WL_OUTPUT_TRANSFORM_FLIPPED;
-            case HWC_TRANSFORM_ROT_90:
-                return WL_OUTPUT_TRANSFORM_90;
-            case HWC_TRANSFORM_ROT_180:
-                return WL_OUTPUT_TRANSFORM_180;
-            case HWC_TRANSFORM_ROT_270:
-                return WL_OUTPUT_TRANSFORM_270;
-            case HWC_TRANSFORM_FLIP_H_ROT_90:
-                return WL_OUTPUT_TRANSFORM_FLIPPED_270;
-            case HWC_TRANSFORM_FLIP_V_ROT_90:
-                return WL_OUTPUT_TRANSFORM_FLIPPED_90;
-            default:
-                return WL_OUTPUT_TRANSFORM_NORMAL;
-        }
-    }
 }
 
 enum class ShowWindowState {
@@ -219,25 +198,6 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
     }
 
     return 0;
-}
-
-static void setup_viewport_source(wp_viewport *viewport, hwc_frect_t crop, uint32_t transform)
-{
-    hwc_frect_t sourceCrop = rect_apply_transform(crop, transform);
-    wp_viewport_set_source(viewport,
-                           wl_fixed_from_double(fmax(0, sourceCrop.left)),
-                           wl_fixed_from_double(fmax(0, sourceCrop.top)),
-                           wl_fixed_from_double(fmax(1, sourceCrop.right - sourceCrop.left)),
-                           wl_fixed_from_double(fmax(1, sourceCrop.bottom - sourceCrop.top)));
-}
-
-static void setup_viewport_destination(wp_viewport *viewport, hwc_rect_t frame, struct display *display)
-{
-    int width = static_cast<int>(ceil((frame.right - frame.left) / display->scale));
-    int height = static_cast<int>(ceil((frame.bottom - frame.top) / display->scale));
-    wp_viewport_set_destination(viewport,
-                                std::max(1, width),
-                                std::max(1, height));
 }
 
 static window::layer &get_next_window_layer(struct waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, struct window *window)
@@ -364,30 +324,16 @@ bool is_blacklisted(struct waydroid_hwc_composer_device_1* pdev, const std::stri
     return components.empty() || std::find(components.begin(), components.end(), component) != components.end();
 }
 
-static void apply_surface_scale(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, surface_context &surface_context) {
-    if (surface_context.viewport) {
-        setup_viewport_source(surface_context.viewport, hwc_layer->sourceCropf, hwc_layer->transform);
-        setup_viewport_destination(surface_context.viewport, hwc_layer->displayFrame, pdev->display);
-    } else {
-        // Usually with no viewporter the scale is guaranteed to be integer
-        // When supports_cursor_viewport == false, this might not be the case
-        // thus use ceil anyway
-        int scale = static_cast<int>(ceil(pdev->display->scale));
-        wl_surface_set_buffer_scale(surface_context.surface, scale);
-    }
-}
-
 static void apply_surface_damage(hwc_layer_1 *hwc_layer, surface_context &surface_context) {
     auto &surface_damage = hwc_layer->surfaceDamage;
 
     if (surface_damage.numRects == 0
         || wl_surface_get_version(surface_context.surface) < WL_SURFACE_DAMAGE_BUFFER_SINCE_VERSION) {
-        wl_surface_damage(surface_context.surface, 0, 0, INT32_MAX, INT32_MAX);
+        surface_context.damage_surface(0, 0, INT32_MAX, INT32_MAX);
     }
 
     std::for_each(surface_damage.rects, surface_damage.rects + surface_damage.numRects, [&](const auto &rect){
-        wl_surface_damage_buffer(
-            surface_context.surface,
+        surface_context.damage_surface(
             rect.left,
             rect.top,
             rect.right - rect.left,
@@ -411,10 +357,16 @@ static int apply_hwc_layer_to_surface_context(waydroid_hwc_composer_device_1 *pd
     // TODO: Implement per-hwc_layer explicit synchronization
     hwc_layer->releaseFenceFd = -1;
 
-    wl_surface_attach(surface_context.surface, buf->wl_buffer, 0, 0);
+    surface_context.attach_buffer(*buf);
     apply_surface_damage(hwc_layer, surface_context);
-    apply_surface_scale(pdev, hwc_layer, surface_context);
-    wl_surface_set_buffer_transform(surface_context.surface, hwc_transform_to_wayland_transform(hwc_layer->transform));
+    surface_context.set_buffer_transform(hwc_transform_to_buffer_transform(hwc_layer->transform));
+    // Scaling can only be supported correctly with wp_viewport
+    if (surface_context.viewport) {
+        surface_context.set_crop(rect_apply_transform(hwc_layer->sourceCropf, hwc_layer->transform));
+        surface_context.set_display_frame(hwc_layer->displayFrame, pdev->display->scale);
+    } else {
+        surface_context.set_buffer_scale(pdev->display->scale);
+    }
 
     // TODO: Implement explicit synchronization
     if (hwc_layer->acquireFenceFd != -1) {
