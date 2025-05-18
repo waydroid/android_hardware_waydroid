@@ -438,7 +438,9 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
 
     window->display = display;
     window->surface = wl_compositor_create_surface(display->compositor);
-    window->appID = std::move(appID);
+    wl_surface_set_user_data(window->surface, window.get());
+    if (display->viewporter)
+        window->viewport = wp_viewporter_get_viewport(display->viewporter, window->surface);
     window->taskID = std::move(taskID);
     window->destroy_background_objects = true;
     window->bg_buffer = nullptr;
@@ -452,7 +454,9 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
         exit(1);
     }
     struct wl_shm_pool *pool = wl_shm_create_pool(display->shm, fd, 4);
+    close(fd);
 
+    // Is this the first window created?
     bool calibrating = !display->height || !display->width;
     if (calibrating) {
         // Initialize width and height with user-provided overrides if any
@@ -463,68 +467,59 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
         window->xdg_surface =
                 xdg_wm_base_get_xdg_surface(display->wm_base, window->surface);
         assert(window->xdg_surface);
-        
         xdg_surface_add_listener(window->xdg_surface,
                                      &xdg_surface_listener, window.get());
 
         window->xdg_toplevel = xdg_surface_get_toplevel(window->xdg_surface);
         assert(window->xdg_toplevel);
         xdg_toplevel_add_listener(window->xdg_toplevel, &xdg_toplevel_listener, window.get());
-        if (display->isMaximized || !display->height || !display->width)
-            xdg_toplevel_set_maximized(window->xdg_toplevel);
-        const hidl_string appID_hidl(window->appID);
-        if (window->appID != "Waydroid" && display->task)
-            display->task->getAppName(appID_hidl, [&](const hidl_string &value)
-                                      { xdg_toplevel_set_title(window->xdg_toplevel, value.c_str()); });
-        else
-            xdg_toplevel_set_title(window->xdg_toplevel, appID.c_str());
-
-        if (window->appID != "Waydroid")
-            window->appID = "waydroid." + window->appID;
-        xdg_toplevel_set_app_id(window->xdg_toplevel, window->appID.c_str());
     } else if (display->shell) {
         window->shell_surface =
             wl_shell_get_shell_surface(display->shell, window->surface);
         assert(window->shell_surface);
-
         wl_shell_surface_add_listener(window->shell_surface, &shell_surface_listener, window.get());
         wl_shell_surface_set_toplevel(window->shell_surface);
-        if (display->isMaximized || !display->height || !display->width)
-            wl_shell_surface_set_maximized(window->shell_surface, display->output);
-        const hidl_string appID_hidl(window->appID);
-        if (window->appID != "Waydroid" && display->task)
-            display->task->getAppName(appID_hidl, [&](const hidl_string &value)
-                                      { wl_shell_surface_set_title(window->shell_surface, value.c_str()); });
-        else
-            wl_shell_surface_set_title(window->shell_surface, window->appID.c_str());
     } else {
         abort();
     }
+
+    if (display->isMaximized || calibrating) {
+        window->set_maximize(true);
+    }
+    // Set title
+    if (appID != "Waydroid" && display->task) {
+        const hidl_string appID_hidl(appID);
+        display->task->getAppName(appID_hidl, [&](const hidl_string &value){
+            window->set_title(value.c_str());
+        });
+    } else {
+        window->set_title(appID.c_str());
+    }
+    // Set appID
+    window->set_app_id(std::move(appID));
 
     wl_surface_commit(window->surface);
     // Handle first configure event
     wl_display_roundtrip(display->display);
 
     if (calibrating) {
-        wp_fractional_scale_v1* fs;
+        wp_fractional_scale_v1* fs = nullptr;
         if (display->fractional_scale_manager) {
             // We only support one global scale
             fs = wp_fractional_scale_manager_v1_get_fractional_scale(
                     display->fractional_scale_manager, window->surface);
             wp_fractional_scale_v1_add_listener(fs, &fractional_scale_listener, display);
         }
-        if (!display->height || !display->width) {
-            // Some compositors fail to give us a window size without a buffer attached
+        if (fs || (!display->height || !display->width)) {
+            // Some compositors fail to give us a window size or scale without a buffer attached
             // See: https://github.com/swaywm/sway/issues/2176
+            // Try second configure event, with buffer attached
             struct wl_buffer *buf = wl_shm_pool_create_buffer(pool, 0, 1, 1, 4, WL_SHM_FORMAT_ARGB8888);
             wl_surface_attach(window->surface, buf, 0, 0);
             wl_surface_commit(window->surface);
-            // Try second configure event, with buffer attached
             wl_display_roundtrip(display->display);
         }
-        if (display->fractional_scale_manager) {
-            wl_surface_commit(window->surface);
-            wl_display_roundtrip(display->display);
+        if (fs) {
             wp_fractional_scale_v1_destroy(fs);
         }
 
@@ -539,11 +534,22 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
         finished_computing_scale(display);
     }
 
-    if (display->viewporter) {
-        window->viewport = wp_viewporter_get_viewport(display->viewporter, window->surface);
-    }
+    if (display->wm_base)
+        xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width, display->height);
 
-    wl_surface_set_user_data(window->surface, window.get());
+    struct wl_region *region = wl_compositor_create_region(display->compositor);
+    if (color.a == 0) {
+        wl_surface_set_input_region(window->surface, region);
+        if (display->system_version >= 33)
+            window->input_region = region;
+        else
+            wl_region_destroy(region);
+    }
+    if (color.a == 255) {
+        wl_region_add(region, 0, 0, display->width, display->height);
+        wl_surface_set_opaque_region(window->surface, region);
+        wl_region_destroy(region);
+    }
 
     // TODO: Fix background when viewport is not supported
     // No subsurface background for us!
@@ -553,6 +559,7 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
         window->destroy_background_objects = false;
         window->layers.emplace_back(window->surface, window->viewport);
         wl_shm_pool_destroy(pool);
+        wl_surface_commit(window->surface);
         return window;
     } else if (!use_subsurfaces) {
         /* If we do not use subsurfaces for compositing create at least one for the window content
@@ -566,32 +573,12 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
     *buf = color.a << 24 | color.r << 16 | color.g << 8 | color.b;
     window->bg_buffer = wl_shm_pool_create_buffer(pool, 0, 1, 1, 4, WL_SHM_FORMAT_ARGB8888);
     wl_shm_pool_destroy(pool);
-    close(fd);
 
-    struct wl_surface *surface = window->surface;
-    wl_surface_attach(surface, window->bg_buffer, 0, 0);
-    wl_surface_damage(surface, 0, 0, INT32_MAX, INT32_MAX);
+    wl_surface_attach(window->surface, window->bg_buffer, 0, 0);
+    wl_surface_damage(window->surface, 0, 0, INT32_MAX, INT32_MAX);
     wp_viewport_set_source(window->viewport, wl_fixed_from_int(0), wl_fixed_from_int(0), wl_fixed_from_int(1), wl_fixed_from_int(1));
     wp_viewport_set_destination(window->viewport, display->width, display->height);
-
-    if (display->wm_base)
-        xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width, display->height);
-
-    struct wl_region *region = wl_compositor_create_region(display->compositor);
-    if (color.a == 0) {
-        wl_surface_set_input_region(surface, region);
-        if (display->system_version >= 33)
-            window->input_region = region;
-        else
-            wl_region_destroy(region);
-    }
-    if (color.a == 255) {
-        wl_region_add(region, 0, 0, display->width, display->height);
-        wl_surface_set_opaque_region(surface, region);
-        wl_region_destroy(region);
-    }
-
-    wl_surface_commit(surface);
+    wl_surface_commit(window->surface);
 
     return window;
 }
