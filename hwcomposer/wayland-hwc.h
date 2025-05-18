@@ -309,6 +309,8 @@ struct window {
     window::layer &create_new_layer();
     void reset_per_set_state();
 
+    void minimize();
+
   private:
     window() = default;
 };
