@@ -310,6 +310,7 @@ struct window {
     void reset_per_set_state();
 
     void minimize();
+    void set_maximize(bool enabled);
 
   private:
     window() = default;
