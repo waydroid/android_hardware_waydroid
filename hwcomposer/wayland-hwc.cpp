@@ -1771,11 +1771,11 @@ registry_handle_global(void *data, struct wl_registry *registry,
     } else if (strcmp(interface, "wp_viewporter") == 0) {
         d->viewporter = (struct wp_viewporter*)wl_registry_bind(registry, id,
                 &wp_viewporter_interface, 1);
-    } else if ((d->gtype == GRALLOC_ANDROID) &&
+    } else if ((d->gtype == GrallocType::GRALLOC_ANDROID) &&
                (strcmp(interface, "android_wlegl") == 0)) {
         d->android_wlegl = (struct android_wlegl*)wl_registry_bind(registry, id,
                 &android_wlegl_interface, 1);
-    } else if ((d->gtype == GRALLOC_GBM || d->gtype == GRALLOC_CROS) &&
+    } else if ((d->gtype == GrallocType::GRALLOC_GBM || d->gtype == GrallocType::GRALLOC_CROS) &&
                (strcmp(interface, "zwp_linux_dmabuf_v1") == 0)) {
         if (version < 3)
             return;
@@ -1826,17 +1826,17 @@ str_starts_with(const char *a, const char *b)
     return strncmp(a, b, strlen(b));
 }
 
-int
+GrallocType
 get_gralloc_type(const char *gralloc)
 {
     if (strcmp(gralloc, "default") == 0) {
-        return GRALLOC_DEFAULT;
+        return GrallocType::GRALLOC_DEFAULT;
     } else if (strcmp(gralloc, "gbm") == 0) {
-        return GRALLOC_GBM;
+        return GrallocType::GRALLOC_GBM;
     } else if (str_starts_with(gralloc, "minigbm_") == 0) {
-        return GRALLOC_CROS;
+        return GrallocType::GRALLOC_CROS;
     } else {
-        return GRALLOC_ANDROID;
+        return GrallocType::GRALLOC_ANDROID;
     }
 }
 
