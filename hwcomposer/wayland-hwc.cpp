@@ -333,6 +333,13 @@ void surface_context::set_display_frame(hwc_rect_t rect, double scale) {
                                 std::max(1, height));
 }
 
+void window::reset_per_set_state() {
+    lastLayer = 0;
+    last_layer_buffer = nullptr;
+    if (input_region) {
+        wl_region_subtract(input_region, 0, 0, INT_MAX, INT_MAX);
+    }
+}
 
 window::~window() {
     if (xdg_toplevel)
