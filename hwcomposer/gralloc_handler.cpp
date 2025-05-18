@@ -74,12 +74,14 @@ std::unique_ptr<buffer> create_shm_wl_buffer(display *display, const buffer_meta
     int shm_stride = metadata.width * 4;
     int size = shm_stride * metadata.height;
 
-    buf->size = size;
     buf->metadata = metadata;
-    buf->format = ConvertHalFormatToShm(metadata.format);
-    assert(buf->format >= 0);
     buf->handle = handle;
+
     buf->isShm = true;
+    buf->size = size;
+
+    auto shm_format = ConvertHalFormatToShm(metadata.format);
+    assert(shm_format >= 0);
 
     int fd = syscall(SYS_memfd_create, "buffer", MFD_ALLOW_SEALING);
     ftruncate(fd, size);
@@ -90,7 +92,7 @@ std::unique_ptr<buffer> create_shm_wl_buffer(display *display, const buffer_meta
         return nullptr;
     }
     struct wl_shm_pool *pool = wl_shm_create_pool(display->shm, fd, size);
-    buf->wl_buffer = wl_shm_pool_create_buffer(pool, 0, metadata.width, metadata.height, shm_stride, buf->format);
+    buf->wl_buffer = wl_shm_pool_create_buffer(pool, 0, metadata.width, metadata.height, shm_stride, shm_format);
     wl_buffer_add_listener(buf->wl_buffer, &buffer_listener, nullptr);
     wl_shm_pool_destroy(pool);
     close(fd);
@@ -173,15 +175,18 @@ std::unique_ptr<buffer> create_dmabuf_wl_buffer(display *display, const buffer_m
     std::unique_ptr<buffer> buf { new buffer() };
 
     buf->metadata = metadata;
-    buf->format = (drm_format >= 0) ? drm_format : ConvertHalFormatToDrm(display, metadata.format);
-    assert(buf->format >= 0);
     buf->handle = handle;
+
+    if (drm_format < 0) {
+        drm_format = ConvertHalFormatToDrm(display, metadata.format);
+    }
+    assert(drm_format >= 0);
 
     zwp_linux_buffer_params_v1 *params = zwp_linux_dmabuf_v1_create_params(display->dmabuf);
     zwp_linux_buffer_params_v1_add(params, prime_fd, 0, offset, byte_stride, modifier >> 32, modifier & 0xffffffff);
     zwp_linux_buffer_params_v1_add_listener(params, &params_listener, nullptr);
 
-    buf->wl_buffer = zwp_linux_buffer_params_v1_create_immed(params, buf->metadata.width, buf->metadata.height, buf->format, 0);
+    buf->wl_buffer = zwp_linux_buffer_params_v1_create_immed(params, buf->metadata.width, buf->metadata.height, drm_format, 0);
     wl_buffer_add_listener(buf->wl_buffer, &buffer_listener, nullptr);
 
     return buf;
@@ -192,7 +197,6 @@ std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_
     std::unique_ptr<buffer> buf { new buffer() };
 
     buf->metadata = metadata;
-    buf->format = metadata.format;
     buf->handle = handle;
 
     struct wl_array ints;
@@ -206,7 +210,7 @@ std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_
         android_wlegl_handle_add_fd(wlegl_handle, handle->data[i]);
     }
 
-    buf->wl_buffer = android_wlegl_create_buffer(display->android_wlegl, buf->metadata.width, buf->metadata.height, buf->metadata.pixel_stride, buf->format, GRALLOC_USAGE_HW_RENDER, wlegl_handle);
+    buf->wl_buffer = android_wlegl_create_buffer(display->android_wlegl, buf->metadata.width, buf->metadata.height, buf->metadata.pixel_stride, metadata.format, GRALLOC_USAGE_HW_RENDER, wlegl_handle);
     android_wlegl_handle_destroy(wlegl_handle);
 
     wl_buffer_add_listener(buf->wl_buffer, &buffer_listener, nullptr);
