@@ -312,6 +312,7 @@ struct window {
     void minimize();
     void set_maximize(bool enabled);
     void set_title(const char *title);
+    void set_app_id(std::string appID);
 
   private:
     window() = default;
