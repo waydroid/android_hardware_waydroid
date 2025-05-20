@@ -112,13 +112,13 @@ enum class ShowWindowState {
 
 static int hwc_prepare(hwc_composer_device_1_t* dev,
                        size_t numDisplays, hwc_display_contents_1_t** displays) {
-    struct waydroid_hwc_composer_device_1 *pdev = (struct waydroid_hwc_composer_device_1 *)dev;
+    if (HWC_DISPLAY_PRIMARY >= numDisplays || !displays)
+        return 0;
 
-    if (!numDisplays || !displays) return 0;
+    auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(dev);
 
-    hwc_display_contents_1_t* contents = displays[HWC_DISPLAY_PRIMARY];
-
-    if (!contents) return 0;
+    hwc_display_contents_1_t *contents = displays[HWC_DISPLAY_PRIMARY];
+    assert(contents);
 
     if (contents->flags & HWC_GEOMETRY_CHANGED) {
         if (pdev->use_subsurface)
@@ -357,7 +357,7 @@ static long time_to_sleep_to_next_vsync(struct timespec *rt, uint64_t last_vsync
 }
 
 static void* hwc_vsync_thread(void* data) {
-    struct waydroid_hwc_composer_device_1* pdev = (struct waydroid_hwc_composer_device_1*)data;
+    auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(data);
     setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
 
     struct timespec rt;
@@ -429,7 +429,7 @@ feedback_presented(void *data,
            uint32_t,
            uint32_t)
 {
-    struct waydroid_hwc_composer_device_1* pdev = (struct waydroid_hwc_composer_device_1*)data;
+    auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(data);
     wp_presentation_feedback_destroy(feedback);
 
     pthread_mutex_lock(&pdev->vsync_lock);
@@ -460,13 +460,15 @@ static bool is_blacklisted(struct waydroid_hwc_composer_device_1* pdev, std::str
 static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                    hwc_display_contents_1_t** displays) {
     char property[PROPERTY_VALUE_MAX];
-    struct waydroid_hwc_composer_device_1* pdev = (struct waydroid_hwc_composer_device_1*)dev;
 
-    if (!numDisplays || !displays) {
+    if (HWC_DISPLAY_PRIMARY >= numDisplays || !displays)
         return 0;
-    }
+
+    auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(dev);
 
     hwc_display_contents_1_t* contents = displays[HWC_DISPLAY_PRIMARY];
+    assert(contents);
+
     size_t fb_target = -1;
     int err = 0;
     bool found_cursor = false;
@@ -982,9 +984,7 @@ sync:
 }
 
 static int hwc_query(struct hwc_composer_device_1* dev, int what, int* value) {
-    struct waydroid_hwc_composer_device_1* pdev =
-            (struct waydroid_hwc_composer_device_1*)dev;
-
+    auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(dev);
     switch (what) {
         case HWC_VSYNC_PERIOD:
             value[0] = pdev->vsync_period_ns;
@@ -999,8 +999,7 @@ static int hwc_query(struct hwc_composer_device_1* dev, int what, int* value) {
 
 static int hwc_event_control(struct hwc_composer_device_1* dev, int dpy __unused,
                              int event, int enabled) {
-    struct waydroid_hwc_composer_device_1* pdev =
-            (struct waydroid_hwc_composer_device_1*)dev;
+    auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(dev);
     int ret = -EINVAL;
 
     // enabled can only be 0 or 1
@@ -1099,7 +1098,7 @@ static int32_t hwc_attribute(struct waydroid_hwc_composer_device_1* pdev,
 static int hwc_get_display_attributes(struct hwc_composer_device_1* dev __unused,
                                       int disp, uint32_t config __unused,
                                       const uint32_t* attributes, int32_t* values) {
-    struct waydroid_hwc_composer_device_1* pdev = (struct waydroid_hwc_composer_device_1*)dev;
+    auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(dev);
     for (int i = 0; attributes[i] != HWC_DISPLAY_NO_ATTRIBUTE; i++) {
         if (disp == HWC_DISPLAY_PRIMARY) {
             values[i] = hwc_attribute(pdev, attributes[i]);
@@ -1116,7 +1115,7 @@ static int hwc_get_display_attributes(struct hwc_composer_device_1* dev __unused
 }
 
 static int hwc_close(hw_device_t* dev) {
-    struct waydroid_hwc_composer_device_1* pdev = (struct waydroid_hwc_composer_device_1*)dev;
+    auto *pdev = reinterpret_cast<waydroid_hwc_composer_device_1 *>(dev);
 
     for (std::map<buffer_handle_t, struct buffer *>::iterator it = pdev->display->buffer_map.begin(); it != pdev->display->buffer_map.end(); it++)
     {
@@ -1134,7 +1133,7 @@ static int hwc_close(hw_device_t* dev) {
 }
 
 static void* hwc_wayland_thread(void* data) {
-    struct waydroid_hwc_composer_device_1* pdev = (struct waydroid_hwc_composer_device_1*)data;
+    auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(data);
     int ret = 0;
 
     setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
@@ -1148,7 +1147,7 @@ static void* hwc_wayland_thread(void* data) {
 }
 
 static void* hwc_binder_thread(void* data) {
-    struct waydroid_hwc_composer_device_1* pdev = (struct waydroid_hwc_composer_device_1*)data;
+    auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(data);
     status_t status;
 
     sp<IWaydroidDisplay> waydroidDisplay;
@@ -1203,7 +1202,7 @@ shutdown:
 
 static void hwc_register_procs(struct hwc_composer_device_1* dev,
                                hwc_procs_t const* procs) {
-    struct waydroid_hwc_composer_device_1* pdev = (struct waydroid_hwc_composer_device_1*)dev;
+    auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(dev);
     pdev->procs = procs;
 }
 
