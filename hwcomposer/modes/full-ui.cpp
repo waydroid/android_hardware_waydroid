@@ -39,33 +39,15 @@ window *full_ui_mode_base::get_window(waydroid_hwc_composer_device_1 *pdev) {
         assert(it != windows.end() && it->first == "Waydroid");
         return it->second.get();
     } else {
-        auto res = windows.emplace(
-            "Waydroid",
-            window::create(pdev->display, pdev->should_compose, "Waydroid", "0", {0, 0, 0, 255})
-        );
-        assert(res.second);
-        assert(windows.size() == 1);
-        property_set("waydroid.open_windows", "1");
-        return res.first->second.get();
+        return windows.add(pdev, "Waydroid", "Waydroid", "0");
     }
 }
 
 int full_ui_mode_base::cleanup_stale_windows(waydroid_hwc_composer_device_1* pdev,
                                              hwc_display_contents_1_t*) {
     // Clear all open windows if there's any and just keep "Waydroid"
-    auto &windows = pdev->display->windows;
-    auto it = windows.begin();
-    while (it != windows.end()) {
-        if (it->first == "Waydroid") {
-            ++it;
-            continue;
-        }
-
-        windows.erase(it++);
-    }
-
-    std::string windows_size_str = std::to_string(windows.size());
-    property_set("waydroid.open_windows", windows_size_str.c_str());
-
+    pdev->display->windows.erase_if([&](const auto& it){
+        return it.first != "Waydroid";
+    });
     return 0;
 }

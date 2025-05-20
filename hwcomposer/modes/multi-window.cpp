@@ -41,15 +41,7 @@ window *multi_window_mode::get_window(waydroid_hwc_composer_device_1 *pdev, laye
         if (it != windows.end()) {
             return it->second.get();
         } else {
-            // TODO: Reduce code duplication
-            auto res = windows.emplace(
-                layer_info.tid,
-                window::create(pdev->display, pdev->should_compose, layer_info.aid, layer_info.tid, color_transparent)
-            );
-            assert(res.second);
-            std::string windows_size_str = std::to_string(pdev->display->windows.size());
-            property_set("waydroid.open_windows", windows_size_str.c_str());
-            return res.first->second.get();
+            return windows.add(pdev, layer_info.tid, layer_info.aid, layer_info.tid, color_transparent);
         }
     } else if (layer_info.type == LayerSplitType::RawName) {
         if (layer_info.aid == "InputMethod") {
@@ -57,15 +49,7 @@ window *multi_window_mode::get_window(waydroid_hwc_composer_device_1 *pdev, laye
             if (it != windows.end()) {
                 return it->second.get();
             } else {
-                // TODO: Reduce code duplication
-                auto res = windows.emplace(
-                    "InputMethod",
-                    window::create(pdev->display, pdev->should_compose, "InputMethod", "none", color_transparent)
-                );
-                assert(res.second);
-                std::string windows_size_str = std::to_string(pdev->display->windows.size());
-                property_set("waydroid.open_windows", windows_size_str.c_str());
-                return res.first->second.get();
+                return windows.add(pdev, "InputMethod", "InputMethod", "none", color_transparent);
             }
         }
     }
@@ -83,29 +67,20 @@ int multi_window_mode::setup(waydroid_hwc_composer_device_1* pdev, hwc_display_c
 
 int multi_window_mode::cleanup_stale_windows(waydroid_hwc_composer_device_1* pdev,
                                              hwc_display_contents_1_t* contents) {
-    auto &windows = pdev->display->windows;
-    for (auto it = windows.begin(); it != windows.end();) {
-        bool found_app = false;
+    pdev->display->windows.erase_if([&](const auto& it){
+        const auto& key = it.first;
         for (size_t i = 0; i < contents->numHwLayers; ++i) {
             const auto &layer_info = layer_infos[i];
             const auto &layer = contents->hwLayers[i];
             if (!can_handle_layer(layer))
                 continue;
-            if ((layer_info.type == LayerSplitType::TID && layer_info.tid == it->first)
-                || (layer_info.type == LayerSplitType::RawName && layer_info.aid == it->first)) {
-                found_app = true;
-                break;
+            if ((layer_info.type == LayerSplitType::TID && layer_info.tid == key)
+                || (layer_info.type == LayerSplitType::RawName && layer_info.aid == key)) {
+                return false;
             }
         }
-        if (found_app) {
-            ++it;
-        } else {
-            it = windows.erase(it);
-        }
-    }
-
-    std::string windows_size_str = std::to_string(windows.size());
-    property_set("waydroid.open_windows", windows_size_str.c_str());
+        return true;
+    });
 
     pdev->display->ignored_apps.clear();
 
