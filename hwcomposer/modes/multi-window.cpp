@@ -72,10 +72,8 @@ int multi_window_mode::cleanup_stale_windows(waydroid_hwc_composer_device_1* pde
         for (size_t i = 0; i < contents->numHwLayers; ++i) {
             const auto &layer_info = layer_infos[i];
             const auto &layer = contents->hwLayers[i];
-            if (!can_handle_layer(layer))
-                continue;
-            if ((layer_info.type == LayerSplitType::TID && layer_info.tid == key)
-                || (layer_info.type == LayerSplitType::RawName && layer_info.aid == key)) {
+            if (can_handle_layer(layer)
+                && layer_info.type != LayerSplitType::Empty && layer_info.key() == key) {
                 return false;
             }
         }

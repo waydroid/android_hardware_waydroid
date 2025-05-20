@@ -125,6 +125,16 @@ void split_layer_names_helper::setup(waydroid_hwc_composer_device_1 *pdev, const
     }
 }
 
+const std::string& layer_info::key() const {
+    if (type == LayerSplitType::TID) {
+        return tid;
+    } else if (type == LayerSplitType::RawName) {
+        return aid;
+    } else {
+        abort();
+    }
+}
+
 layer_info &split_layer_names_helper::operator[](size_t i) {
     return layer_infos.at(i);
 }
