@@ -79,6 +79,8 @@ struct layer_info {
     std::string aid;
     std::string tid;
     std::string component {};
+
+    const std::string &key() const;
 };
 class split_layer_names_helper {
     std::vector<layer_info> layer_infos;
