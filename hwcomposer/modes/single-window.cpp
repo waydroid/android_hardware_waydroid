@@ -40,14 +40,7 @@ window *single_window_mode_base::get_window(waydroid_hwc_composer_device_1 *pdev
     if (it != windows.end()) {
         return it->second.get();
     } else {
-        auto res = windows.emplace(
-            target_layer_tid,
-            window::create(pdev->display, pdev->should_compose, target_layer_aid, target_layer_tid, {0, 0, 0, 255})
-        );
-        assert(res.second);
-        std::string windows_size_str = std::to_string(pdev->display->windows.size());
-        property_set("waydroid.open_windows", windows_size_str.c_str());
-        return res.first->second.get();
+        return windows.add(pdev, target_layer_tid, target_layer_aid, target_layer_tid);
     }
 }
 
@@ -72,10 +65,7 @@ int single_window_mode_base::cleanup_stale_windows(waydroid_hwc_composer_device_
     }
 
     // Close leftover window from full-ui mode
-    if (pdev->display->windows.erase("Waydroid") > 0) {
-        std::string windows_size_str = std::to_string(pdev->display->windows.size());
-        property_set("waydroid.open_windows", windows_size_str.c_str());
-    }
+    pdev->display->windows.erase("Waydroid");
 
     // Snapshot non-active windows
     if (should_show()) {
