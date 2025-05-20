@@ -48,6 +48,7 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <hardware/hwcomposer.h>
+#include <cutils/properties.h>
 #include <vendor/waydroid/task/1.0/IWaydroidTask.h>
 #include <wayland-util.h>
 #include <wayland-client.h>
@@ -110,6 +111,68 @@ struct cursor_handler {
     virtual int cursor_enter(display *display __unused) { return 0; };
 };
 
+class open_windows {
+    using Collection = std::map<std::string, std::unique_ptr<window>>;
+    Collection windows;
+
+  public:
+    using key_type = Collection::key_type;
+    using mapped_type = Collection::mapped_type;
+    using size_type = Collection::size_type;
+    using iterator = Collection::iterator;
+    using const_iterator = Collection::const_iterator;
+    using reverse_iterator = Collection::reverse_iterator;
+    using const_reverse_iterator = Collection::const_reverse_iterator;
+
+    iterator begin() {
+        return windows.begin();
+    }
+    iterator end() {
+        return windows.end();
+    }
+
+    iterator find(const key_type& key) {
+        return windows.find(key);
+    }
+
+    mapped_type& operator[](const key_type& key) {
+        return windows[key];
+    }
+    mapped_type& operator[](key_type&& key) {
+        return windows[std::move(key)];
+    }
+
+    size_type size() const {
+        return windows.size();
+    }
+
+    template<class Func>
+    void update(Func func) {
+        func();
+
+        std::string windows_size_str = std::to_string(windows.size());
+        property_set("waydroid.open_windows", windows_size_str.c_str());
+    }
+
+    window *add(waydroid_hwc_composer_device_1 *pdev, const std::string& key, const std::string& aid, const std::string& tid, hwc_color_t color = {0, 0, 0, 255});
+    void add(const std::string& key, std::unique_ptr<window> window);
+    void clear();
+    void erase(const_iterator pos);
+    void erase(const key_type& key);
+    template<class Pred>
+    void erase_if(Pred pred) {
+        update([&](){
+            for (auto it = windows.begin(), end = windows.end(); it != end;) {
+                if (pred(*it)) {
+                    it = windows.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        });
+    }
+};
+
 struct display {
     struct wl_display *display;
     struct wl_registry *registry;
@@ -151,7 +214,7 @@ struct display {
     int touch_id[MAX_TOUCHPOINTS];
     std::map<struct wl_surface *, struct layerFrame> layers;
 
-    std::map<std::string, std::unique_ptr<window>> windows;
+    open_windows windows;
     std::set<std::string> ignored_apps;
     std::mutex windowsMutex;
 

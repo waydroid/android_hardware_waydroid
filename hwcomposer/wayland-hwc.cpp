@@ -27,6 +27,8 @@
  */
 
 #include "wayland-hwc.h"
+
+#include "hwcomposer.h"
 #include "egl-tools.h"
 
 #include <stdint.h>
@@ -207,19 +209,14 @@ xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
     }
 
     std::scoped_lock lock(window->display->windowsMutex);
+    std::string key;
     if (window->taskID != "0" && window->taskID != "none") {
-        display->ignored_apps.insert(window->taskID);
-        auto it = display->windows.find(window->taskID);
-        assert(it != display->windows.end());
-        display->windows.erase(it);
+        key = window->taskID;
     } else {
-        display->ignored_apps.insert(window->appID);
-        auto it = display->windows.find(window->appID);
-        assert(it != display->windows.end());
-        display->windows.erase(it);
+        key = window->appID;
     }
-    std::string windows_size_str = std::to_string(display->windows.size());
-    property_set("waydroid.open_windows", windows_size_str.c_str());
+    display->ignored_apps.insert(key);
+    display->windows.erase(key);
 }
 
 static const struct xdg_toplevel_listener xdg_toplevel_listener = {
@@ -1886,6 +1883,47 @@ static void
 wayland_log_handler (const char *format, va_list args)
 {
     LOG_PRI_VA (ANDROID_LOG_ERROR, "wayland-hwc", format, args);
+}
+
+window *open_windows::add(waydroid_hwc_composer_device_1 *pdev, const std::string& key, const std::string& aid, const std::string& tid, hwc_color_t color) {
+    window *window = nullptr;
+    update([&](){
+        auto res = windows.emplace(
+            key,
+            window::create(pdev->display, pdev->should_compose, aid, tid, color)
+        );
+        assert(res.second);
+        window = res.first->second.get();
+    });
+    return window;
+}
+
+void open_windows::add(const std::string& key, std::unique_ptr<window> window) {
+    update([&](){
+        auto res = windows.emplace(
+            key,
+            std::move(window)
+        );
+        assert(res.second); (void)res;
+    });
+}
+
+void open_windows::clear() {
+    windows.clear();
+    property_set("waydroid.open_windows", "0");
+}
+
+void open_windows::erase(const_iterator pos) {
+    update([&](){
+        windows.erase(pos);
+    });
+}
+
+void open_windows::erase(const key_type& key) {
+    if (windows.erase(key) > 0) {
+        std::string windows_size_str = std::to_string(windows.size());
+        property_set("waydroid.open_windows", windows_size_str.c_str());
+    }
 }
 
 struct display *

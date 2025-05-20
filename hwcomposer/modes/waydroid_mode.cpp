@@ -29,8 +29,6 @@
 
 void clear_open_windows(waydroid_hwc_composer_device_1 *pdev) {
     pdev->display->windows.clear();
-    property_set("waydroid.open_windows", "0");
-
     pdev->display->ignored_apps.clear();
 }
 
