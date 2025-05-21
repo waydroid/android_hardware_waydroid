@@ -94,22 +94,55 @@ class compositing_window_mode : public virtual waydroid_mode {
 };
 template<class T>
 class non_compositing_window_mode : public virtual waydroid_mode {
+    constexpr static size_t UNSET_VALUE = std::numeric_limits<size_t>::max();
+
+    // When we should draw the framebuffer
+    // It's at the first layer with type HWC_FRAMEBUFFER or HWC_FRAMEBUFFER_TARGET
+    size_t m_draw_framebuffer_at {UNSET_VALUE};
+
+    hwc_layer_1 *m_framebuffer_target {};
+    size_t m_framebuffer_target_index {UNSET_VALUE};
+
     T *derived() {
         return static_cast<T *>(this);
     }
 
   public:
+    int setup(waydroid_hwc_composer_device_1 *, hwc_display_contents_1_t *contents) override {
+        for (size_t i = 0; i < contents->numHwLayers; ++i) {
+            auto& layer = contents->hwLayers[i];
+            if (m_draw_framebuffer_at == UNSET_VALUE
+                && (layer.compositionType == HWC_FRAMEBUFFER || layer.compositionType == HWC_FRAMEBUFFER_TARGET)) {
+                m_draw_framebuffer_at = i;
+            }
+            if (layer.compositionType == HWC_FRAMEBUFFER_TARGET) {
+                m_framebuffer_target = std::addressof(layer);
+                m_framebuffer_target_index = i;
+                break;
+            }
+        }
+        return 0;
+    }
     int handle_layer(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t i) override {
-        if (hwc_layer->compositionType == HWC_FRAMEBUFFER_TARGET) {
-            assert(hwc_layer->handle);
+        /*
+         * SurfaceFlinger did composite all layers except the cursor layer
+         * To get the right Z-order we have to draw SurfaceFlinger's target framebuffer
+         * at the first occurrence of a HWC_FRAMEBUFFER or HWC_FRAMEBUFFER_TARGET layer
+         */
+        int res = 0;
+        if (i == m_draw_framebuffer_at) {
+            assert(m_framebuffer_target->handle);
             window *window = derived()->get_window(pdev);
 
-            return apply_hwc_layer_to_window(pdev, hwc_layer, i, window);
-        } else {
+            res = apply_hwc_layer_to_window(pdev, m_framebuffer_target, m_framebuffer_target_index, window);
+        }
+
+        // The acquireFenceFd of HWC_FRAMEBUFFER_TARGET is closed in apply_hwc_layer_to_window
+        if (i != m_framebuffer_target_index) {
             if (hwc_layer->acquireFenceFd != -1) {
                 close(hwc_layer->acquireFenceFd);
             }
-            return 0;
         }
+        return res;
     }
 };

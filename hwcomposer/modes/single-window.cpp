@@ -100,6 +100,13 @@ int single_window_mode_base::cleanup_stale_windows(waydroid_hwc_composer_device_
 }
 
 
+int non_compositing_single_window_mode::setup(waydroid_hwc_composer_device_1* pdev, hwc_display_contents_1_t* contents) {
+    int res = Base::setup(pdev, contents);
+    if (res != 0)
+        return res;
+    return single_window_mode_base::setup(pdev, contents);
+}
+
 int non_compositing_single_window_mode::handle_layer(waydroid_hwc_composer_device_1* pdev, hwc_layer_1* hwc_layer, size_t i) {
     if (!should_show()) {
         if (hwc_layer->acquireFenceFd != -1) {
