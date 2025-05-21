@@ -33,13 +33,20 @@
 #include "wayland-hwc.h"
 #include "gralloc_handler.h"
 
-struct subsurface_cursor_handler : cursor_handler {
+class subsurface_cursor_handler : public cursor_handler {
+    std::string window_key;
+
+    void clear_previous_subsurface_if_needed(waydroid_hwc_composer_device_1 *pdev);
+
+  public:
     int apply_cursor(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index) override;
+    int reset_cursor(waydroid_hwc_composer_device_1 *pdev) override;
 };
 
-struct wl_cursor_cursor_handler : cursor_handler {
+class wl_cursor_cursor_handler : public cursor_handler {
     surface_context cursor_surface_context {};
 
+  public:
     wl_cursor_cursor_handler(waydroid_hwc_composer_device_1 *pdev);
 
     void set_cursor(display *display) const;
