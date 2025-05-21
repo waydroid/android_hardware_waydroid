@@ -763,8 +763,6 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
 
     pdev->vsync_period_ns = 1000*1000*1000/60; // vsync is 60 hz
 
-    pdev->multi_windows = property_get_bool("persist.waydroid.multi_windows", false);
-    pdev->should_compose = property_get_bool("persist.waydroid.use_subsurface", false) || pdev->multi_windows;
     pdev->timeline_fd = sw_sync_timeline_create();
     pdev->next_sync_point = 1;
 
@@ -788,12 +786,23 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     if (property_get("ro.hardware.gralloc", property, "default") > 0) {
         pdev->display = create_display(property);
     }
-    pdev->gralloc_handler = gralloc_handler(pdev->display);
     if (!pdev->display) {
         ALOGE("failed to open wayland connection");
         return -ENODEV;
     }
     ALOGE("wayland display %p", pdev->display);
+
+    pdev->gralloc_handler = gralloc_handler(pdev->display);
+    pdev->multi_windows = property_get_bool("persist.waydroid.multi_windows", false);
+    if (pdev->multi_windows && !pdev->display->subcompositor) {
+        ALOGW("multi window mode requested but wl_subcompositor is not supported. Disabling it.");
+        pdev->multi_windows = false;
+    }
+    pdev->should_compose = property_get_bool("persist.waydroid.use_subsurface", false) || pdev->multi_windows;
+    if (pdev->should_compose && !pdev->display->subcompositor) {
+        ALOGW("usage of subsurfaces requested but wl_subcompositor is not supported. Disabling it.");
+        pdev->should_compose = false;
+    }
 
     pdev->vsync_callback_enabled = true;
 
