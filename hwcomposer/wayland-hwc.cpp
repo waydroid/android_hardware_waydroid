@@ -632,6 +632,14 @@ void window::layer::set_position(int32_t x, int32_t y) {
     }
 }
 
+window::layer& window::get_next_layer() {
+    if (lastLayer >= layers.size()) {
+        assert(lastLayer == layers.size());
+        create_new_layer();
+    }
+    return layers[lastLayer++];
+}
+
 window::layer& window::create_new_layer() {
     wl_surface *surface = wl_compositor_create_surface(display->compositor);
     wl_subsurface *subsurface = wl_subcompositor_get_subsurface(display->subcompositor, surface, this->surface);
