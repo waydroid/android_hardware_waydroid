@@ -859,11 +859,30 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     return ret;
 }
 
+void subsurface_cursor_handler::clear_previous_subsurface_if_needed(waydroid_hwc_composer_device_1 *pdev) {
+    /* If should_compose is set, remaining subsurface are cleared in post_processing.
+     * In this case we can skip it here */
+    if (!pdev->should_compose && !window_key.empty()) {
+        auto window_it = pdev->display->windows.find(window_key);
+        if (window_it == pdev->display->windows.end()) {
+            // Window was closed this hwc_set
+            return;
+        }
+
+        assert(window_it->second->layers.size() == 2);
+        auto &last_layer = window_it->second->layers[window_it->second->layers.size() - 1];
+        wl_surface_attach(last_layer.surface, nullptr, 0, 0);
+        wl_surface_commit(last_layer.surface);
+    }
+    window_key = {};
+}
+
 int subsurface_cursor_handler::apply_cursor(waydroid_hwc_composer_device_1* pdev, hwc_layer_1* hwc_layer, size_t hwc_layer_index) {
     if (!pdev->display->pointer_surface) {
         if (hwc_layer->acquireFenceFd != -1) {
             close(hwc_layer->acquireFenceFd);
         }
+        clear_previous_subsurface_if_needed(pdev);
         return 0;
     }
 
@@ -878,10 +897,24 @@ int subsurface_cursor_handler::apply_cursor(waydroid_hwc_composer_device_1* pdev
         if (hwc_layer->acquireFenceFd != -1) {
             close(hwc_layer->acquireFenceFd);
         }
+        clear_previous_subsurface_if_needed(pdev);
         return 0;
     }
 
-    return apply_hwc_layer_to_window(pdev, hwc_layer, hwc_layer_index, window_it->second.get());
+
+    int res = apply_hwc_layer_to_window(pdev, hwc_layer, hwc_layer_index, window_it->second.get());
+    if (res == 0) {
+        window_key = window_it->first;
+        return 0;
+    } else {
+        window_key = {};
+        return res;
+    }
+}
+
+int subsurface_cursor_handler::reset_cursor(waydroid_hwc_composer_device_1* pdev) {
+    clear_previous_subsurface_if_needed(pdev);
+    return 0;
 }
 
 wl_cursor_cursor_handler::wl_cursor_cursor_handler(waydroid_hwc_composer_device_1* pdev) {

@@ -107,7 +107,7 @@ struct waydroid_hwc_composer_device_1;
 struct cursor_handler {
     virtual ~cursor_handler() = default;
     virtual int apply_cursor(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index) = 0;
-    virtual int reset_cursor(waydroid_hwc_composer_device_1 *pdev __unused) { return 0; }
+    virtual int reset_cursor(waydroid_hwc_composer_device_1 *pdev) = 0;
     virtual int cursor_enter(display *display __unused) { return 0; };
 };
 
