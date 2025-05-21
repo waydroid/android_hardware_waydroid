@@ -917,6 +917,16 @@ int subsurface_cursor_handler::reset_cursor(waydroid_hwc_composer_device_1* pdev
     return 0;
 }
 
+int subsurface_cursor_handler::cursor_enter(display* display) {
+    if (display->pointer) {
+        wl_pointer_set_cursor(display->pointer, display->pointer_enter_serial,
+                              nullptr,
+                              0,
+                              0);
+    }
+    return 0;
+}
+
 wl_cursor_cursor_handler::wl_cursor_cursor_handler(waydroid_hwc_composer_device_1* pdev) {
     cursor_surface_context.surface = wl_compositor_create_surface(pdev->display->compositor);
     if (pdev->display->viewporter && pdev->display->supports_cursor_viewport) {
