@@ -194,29 +194,6 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
     return 0;
 }
 
-static window::layer &get_next_window_layer(struct waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, struct window *window)
-{
-    if (window->lastLayer >= window->layers.size()) {
-        assert(window->lastLayer == window->layers.size());
-        window->create_new_layer();
-    }
-    window::layer &requested_layer = window->layers[window->lastLayer];
-
-    if (window->input_region) {
-        wl_region_add(window->input_region,
-                -WINDOW_DECORATION_OUTSET + floor(layer->displayFrame.left / pdev->display->scale),
-                -WINDOW_DECORATION_OUTSET + floor(layer->displayFrame.top / pdev->display->scale),
-                2*WINDOW_DECORATION_OUTSET + ceil((layer->displayFrame.right - layer->displayFrame.left) / pdev->display->scale),
-                2*WINDOW_DECORATION_OUTSET + ceil((layer->displayFrame.bottom - layer->displayFrame.top) / pdev->display->scale));
-    }
-
-    pdev->display->layers[requested_layer.surface] = {
-        .x = layer->displayFrame.left,
-        .y = layer->displayFrame.top };
-
-    return requested_layer;
-}
-
 static long time_to_sleep_to_next_vsync(struct timespec *rt, uint64_t last_vsync_ns, unsigned vsync_period_ns)
 {
     uint64_t now = (uint64_t)rt->tv_sec * 1e9 + rt->tv_nsec;
@@ -383,8 +360,6 @@ out:
 }
 
 int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index, window *window) {
-    auto &window_layer = get_next_window_layer(pdev, hwc_layer, window);
-
     buffer *buf = get_wl_buffer(pdev, hwc_layer, hwc_layer_index);
     if (!buf) {
         ALOGE("Failed to get wayland buffer");
@@ -394,8 +369,7 @@ int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 
         return -1;
     }
 
-    window->lastLayer++;
-    window->last_layer_buffer = buf;
+    auto &window_layer = window->get_next_layer();
 
     if (apply_hwc_layer_to_surface_context(pdev, hwc_layer, hwc_layer_index, window_layer, buf) != 0) {
         return -1;
@@ -406,10 +380,24 @@ int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 
         floor(hwc_layer->displayFrame.top / pdev->display->scale)
     );
 
+    if (window->input_region) {
+        wl_region_add(window->input_region,
+                      -WINDOW_DECORATION_OUTSET + floor(hwc_layer->displayFrame.left / pdev->display->scale),
+                      -WINDOW_DECORATION_OUTSET + floor(hwc_layer->displayFrame.top / pdev->display->scale),
+                      2*WINDOW_DECORATION_OUTSET + ceil((hwc_layer->displayFrame.right - hwc_layer->displayFrame.left) / pdev->display->scale),
+                      2*WINDOW_DECORATION_OUTSET + ceil((hwc_layer->displayFrame.bottom - hwc_layer->displayFrame.top) / pdev->display->scale));
+    }
+
+    pdev->display->layers[window_layer.surface] = {
+            .x = hwc_layer->displayFrame.left,
+            .y = hwc_layer->displayFrame.top };
+
     if (window->display->presentation) {
         auto feedback = wp_presentation_feedback(window->display->presentation, window_layer.surface);
         wp_presentation_feedback_add_listener(feedback,&feedback_listener, pdev);
     }
+
+    window->last_layer_buffer = buf;
 
     // Snapshot buffer should be detached by now, clean up
     window->snapshot_buffer = nullptr;
