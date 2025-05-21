@@ -47,6 +47,7 @@ class non_compositing_single_window_mode : public single_window_mode_base, publi
     friend Base;
     using single_window_mode_base::get_window;
 
+    int setup(waydroid_hwc_composer_device_1 *pdev, hwc_display_contents_1_t *contents) final;
     int handle_layer(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index) final;
 };
 
