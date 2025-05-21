@@ -41,6 +41,7 @@ class subsurface_cursor_handler : public cursor_handler {
   public:
     int apply_cursor(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index) override;
     int reset_cursor(waydroid_hwc_composer_device_1 *pdev) override;
+    int cursor_enter(display *display) override;
 };
 
 class wl_cursor_cursor_handler : public cursor_handler {
