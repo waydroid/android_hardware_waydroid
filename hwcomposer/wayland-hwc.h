@@ -174,6 +174,8 @@ class open_windows {
 };
 
 struct display {
+    pthread_t wayland_thread; // constant after init
+
     struct wl_display *display;
     struct wl_registry *registry;
     struct wl_compositor *compositor;
