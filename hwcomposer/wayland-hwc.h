@@ -362,6 +362,8 @@ struct window {
     std::string appID;
     std::string taskID;
 
+    std::atomic<bool> configured;
+
     // Reset every hwc_set cycle
     struct wl_region* input_region;
     int lastLayer;
