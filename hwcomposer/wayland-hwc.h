@@ -59,6 +59,7 @@
 
 #include <functional>
 #include <unordered_map>
+#include <unordered_set>
 
 using ::android::sp;
 using ::vendor::waydroid::task::V1_0::IWaydroidTask;
@@ -242,9 +243,7 @@ struct display {
     int full_height;
     int refresh;
 
-    //TODO: Replace array with set
-    uint32_t *formats;
-    int formats_count;
+    std::unordered_set<uint32_t> formats;
 
     std::map<uint32_t, std::vector<uint64_t>> modifiers;
     std::map<uint32_t, std::string> layer_names;
