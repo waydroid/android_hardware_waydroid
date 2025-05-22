@@ -121,10 +121,14 @@ void snapshot_inactive_app_window(struct display *display, struct window *window
 }
 
 static void
-xdg_surface_handle_configure(void *, struct xdg_surface *surface,
+xdg_surface_handle_configure(void *data, struct xdg_surface *surface,
                  uint32_t serial)
 {
+    auto window = static_cast<struct window *>(data);
+
     xdg_surface_ack_configure(surface, serial);
+
+    window->configured = true;
 }
 
 static const struct xdg_surface_listener xdg_surface_listener = {
@@ -237,14 +241,13 @@ shell_surface_configure(void *data, struct wl_shell_surface *, uint32_t, int32_t
     struct window *window = (struct window *)data;
     struct display *display = window->display;
 
-    if (width == 0 || height == 0) {
-		/* Compositor is deferring to us */
-		return;
+    if (width != 0 && height != 0) {
+        if (!display->width || !display->height) {
+            choose_width_height(display, width, height);
+        }
 	}
 
-    if (!display->width || !display->height) {
-        choose_width_height(display, width, height);
-    }
+    window->configured = true;
 }
 
 void
@@ -499,6 +502,9 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
     wl_surface_commit(window->surface);
     // Handle first configure event
     wl_display_roundtrip(display->display);
+    while (!window->configured) {
+        sched_yield();
+    }
 
     if (calibrating) {
         wp_fractional_scale_v1* fs = nullptr;
