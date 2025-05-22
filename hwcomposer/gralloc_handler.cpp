@@ -114,11 +114,7 @@ namespace {
     };
 
     bool isFormatSupported(struct display *display, uint32_t format) {
-        for (int i = 0; i < display->formats_count; i++) {
-            if (format == display->formats[i])
-                return true;
-        }
-        return false;
+        return display->formats.count(format) == 1;
     }
 
     uint32_t ConvertHalFormatToDrm(struct display *display, uint32_t hal_format) {
