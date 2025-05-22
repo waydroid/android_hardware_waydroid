@@ -1327,11 +1327,7 @@ static void
 dmabuf_format(void *data, struct zwp_linux_dmabuf_v1 *, uint32_t format)
 {
     struct display *d = (struct display*)data;
-
-    ++d->formats_count;
-    d->formats = (uint32_t*)realloc(d->formats,
-                    d->formats_count * sizeof(*d->formats));
-    d->formats[d->formats_count - 1] = format;
+    d->formats.insert(format);
 }
 
 static const struct zwp_linux_dmabuf_v1_listener dmabuf_listener = {
