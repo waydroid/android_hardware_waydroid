@@ -58,7 +58,6 @@ class wl_cursor_cursor_handler : public cursor_handler {
 
 struct waydroid_hwc_composer_device_1 : hwc_composer_device_1_t {
     const hwc_procs_t *procs;        // constant after init
-    pthread_t wayland_thread;        // constant after init
     pthread_t vsync_thread;          // constant after init
     pthread_t binder_thread;         // constant after init
     pthread_t egl_worker_thread;     // constant after init
