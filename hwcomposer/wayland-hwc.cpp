@@ -798,7 +798,7 @@ pointer_handle_enter(void *data, struct wl_pointer *,
     struct display *display = (struct display *)data;
     display->pointer_surface = surface;
     display->pointer_enter_serial = serial;
-    display->cursor_handler->cursor_enter(display);
+    display->cursor_handler->on_cursor_enter(display);
 }
 
 static void
