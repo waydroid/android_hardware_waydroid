@@ -652,25 +652,8 @@ static int hwc_close(hw_device_t* dev) {
 
     destroy_display(pdev->display);
 
-    pthread_kill(pdev->wayland_thread, SIGTERM);
-    pthread_join(pdev->wayland_thread, NULL);
-
-    delete dev;
+    delete pdev;
     return 0;
-}
-
-static void* hwc_wayland_thread(void* data) {
-    auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(data);
-    int ret = 0;
-
-    setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
-
-    while (ret != -1)
-        ret = wl_display_dispatch(pdev->display->display);
-
-    ALOGE("*** %s: Wayland client was disconnected: %s", __PRETTY_FUNCTION__, strerror(ret));
-
-    return NULL;
 }
 
 static void* hwc_binder_thread(void* data) {
@@ -837,11 +820,6 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
         if (ret) {
             ALOGE("waydroid_hw_composer could not start vsync_thread\n");
         }
-    }
-
-    ret = pthread_create (&pdev->wayland_thread, NULL, hwc_wayland_thread, pdev);
-    if (ret) {
-        ALOGE("waydroid_hw_composer could not start wayland_thread\n");
     }
 
     ret = pthread_create (&pdev->binder_thread, NULL, hwc_binder_thread, pdev);
