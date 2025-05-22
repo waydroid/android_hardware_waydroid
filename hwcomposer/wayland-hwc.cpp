@@ -57,6 +57,7 @@
 #include <sync/sync.h>
 #include <hardware/gralloc.h>
 #include <log/log.h>
+#include <sys/resource.h>
 
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
 #include <cutils/trace.h>
@@ -1934,6 +1935,20 @@ void open_windows::erase(const key_type& key) {
     }
 }
 
+static void* hwc_wayland_thread(void* data) {
+    auto* display = static_cast<struct wl_display*>(data);
+    int ret = 0;
+
+    setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
+
+    while (ret != -1)
+        ret = wl_display_dispatch(display);
+
+    ALOGE("*** %s: Wayland client was disconnected: %s", __PRETTY_FUNCTION__, strerror(ret));
+
+    abort();
+}
+
 struct display *
 create_display(const char *gralloc)
 {
@@ -1961,10 +1976,19 @@ create_display(const char *gralloc)
     umask(0);
     mkdir("/dev/input", S_IRWXO | S_IRWXG | S_IRWXU);
     chown("/dev/input", 1000, 1000);
+
     display->registry = wl_display_get_registry(display->display);
     wl_registry_add_listener(display->registry,
                  &registry_listener, display);
     wl_display_roundtrip(display->display);
+
+    if (pthread_create(&display->wayland_thread, nullptr, hwc_wayland_thread, display->display) != 0) {
+        ALOGE("Couldn't create wayland thread");
+        wl_display_disconnect(display->display);
+        sem_destroy(&display->egl_go);
+        sem_destroy(&display->egl_done);
+        return nullptr;
+    }
 
     display->task = IWaydroidTask::getService();
     return display;
@@ -1973,6 +1997,9 @@ create_display(const char *gralloc)
 void
 destroy_display(struct display *display)
 {
+    pthread_kill(display->wayland_thread, SIGTERM);
+    pthread_join(display->wayland_thread, nullptr);
+
     if (display->wm_base)
         xdg_wm_base_destroy(display->wm_base);
 
@@ -1999,5 +2026,6 @@ destroy_display(struct display *display)
     wl_registry_destroy(display->registry);
     wl_display_flush(display->display);
     wl_display_disconnect(display->display);
+
     delete display;
 }
