@@ -100,164 +100,7 @@ struct handleExt {
     uint32_t height;
 };
 
-struct window;
-struct buffer;
-struct display;
 struct waydroid_hwc_composer_device_1;
-
-struct cursor_handler {
-    virtual ~cursor_handler() = default;
-    virtual int apply_cursor(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index) = 0;
-    virtual int reset_cursor(waydroid_hwc_composer_device_1 *pdev) = 0;
-    virtual int on_cursor_enter(display *display) = 0;
-};
-
-class open_windows {
-    using Collection = std::map<std::string, std::unique_ptr<window>>;
-    Collection windows;
-
-  public:
-    using key_type = Collection::key_type;
-    using mapped_type = Collection::mapped_type;
-    using size_type = Collection::size_type;
-    using iterator = Collection::iterator;
-    using const_iterator = Collection::const_iterator;
-    using reverse_iterator = Collection::reverse_iterator;
-    using const_reverse_iterator = Collection::const_reverse_iterator;
-
-    iterator begin() {
-        return windows.begin();
-    }
-    iterator end() {
-        return windows.end();
-    }
-
-    iterator find(const key_type& key) {
-        return windows.find(key);
-    }
-
-    mapped_type& operator[](const key_type& key) {
-        return windows[key];
-    }
-    mapped_type& operator[](key_type&& key) {
-        return windows[std::move(key)];
-    }
-
-    size_type size() const {
-        return windows.size();
-    }
-
-    template<class Func>
-    void update(Func func) {
-        func();
-
-        std::string windows_size_str = std::to_string(windows.size());
-        property_set("waydroid.open_windows", windows_size_str.c_str());
-    }
-
-    window *add(waydroid_hwc_composer_device_1 *pdev, const std::string& key, const std::string& aid, const std::string& tid, hwc_color_t color = {0, 0, 0, 255});
-    void add(const std::string& key, std::unique_ptr<window> window);
-    void clear();
-    void erase(const_iterator pos);
-    void erase(const key_type& key);
-    template<class Pred>
-    void erase_if(Pred pred) {
-        update([&](){
-            for (auto it = windows.begin(), end = windows.end(); it != end;) {
-                if (pred(*it)) {
-                    it = windows.erase(it);
-                } else {
-                    ++it;
-                }
-            }
-        });
-    }
-};
-
-struct display {
-    pthread_t wayland_thread; // constant after init
-
-    struct wl_display *display;
-    struct wl_registry *registry;
-    struct wl_compositor *compositor;
-    struct wl_subcompositor *subcompositor;
-    struct wl_seat *seat;
-    struct wl_shell *shell;
-    struct wl_shm *shm;
-    struct wl_pointer *pointer;
-    struct wl_keyboard *keyboard;
-    struct wl_touch *touch;
-    struct wl_output *output;
-    struct wp_presentation *presentation;
-    struct wp_viewporter *viewporter;
-    struct android_wlegl *android_wlegl;
-    struct zwp_linux_dmabuf_v1 *dmabuf;
-    struct xdg_wm_base *wm_base;
-    struct zwp_tablet_manager_v2* tablet_manager;
-    struct zwp_tablet_seat_v2 *tablet_seat;
-    struct zwp_pointer_constraints_v1 *pointer_constraints;
-    struct zwp_relative_pointer_manager_v1 *relative_pointer_manager;
-    struct zwp_relative_pointer_v1 *relative_pointer;
-    struct zwp_idle_inhibit_manager_v1 *idle_manager;
-    struct wp_fractional_scale_manager_v1 *fractional_scale_manager;
-    struct wl_data_device_manager *data_device_manager;
-    struct wl_data_device *data_device;
-
-    int system_version;
-    GrallocType gtype;
-    double scale;
-
-    int input_fd[INPUT_TOTAL];
-    int ptrPrvX;
-    int ptrPrvY;
-    double wheelAccumulatorX;
-    double wheelAccumulatorY;
-    bool wheelEvtIsDiscrete;
-    bool reverseScroll;
-    int touch_id[MAX_TOUCHPOINTS];
-    std::map<struct wl_surface *, struct layerFrame> layers;
-
-    open_windows windows;
-    std::set<std::string> ignored_apps;
-    std::mutex windowsMutex;
-
-    std::map<int, struct wl_surface *> touch_surfaces;
-    struct wl_surface *pointer_surface;
-    struct wl_surface *tablet_surface;
-    std::list<struct zwp_tablet_tool_v2 *> tablet_tools;
-    std::map<struct zwp_tablet_tool_v2 *, uint16_t> tablet_tools_evt;
-    uint32_t keyboard_enter_serial;
-    std::string clipboard;
-    std::list<std::string> clipboard_offer_mime_types;
-    uint32_t pointer_enter_serial;
-    struct {float x; float y;} cursor_hotspot;
-
-    EGLDisplay egl_dpy;
-    std::list<std::function<void()>> egl_work_queue;
-    sem_t egl_go;
-    sem_t egl_done;
-
-    int width;
-    int height;
-    int full_width;
-    int full_height;
-    int refresh;
-
-    std::unordered_set<uint32_t> formats;
-
-    std::map<uint32_t, std::vector<uint64_t>> modifiers;
-    std::map<uint32_t, std::string> layer_names;
-    std::map<uint32_t, struct handleExt> layer_handles_ext;
-    struct handleExt target_layer_handle_ext;
-    std::unordered_map<buffer_handle_t, std::unique_ptr<buffer>> buffer_map;
-    std::array<uint8_t, 239> keysDown;
-
-    std::unique_ptr<cursor_handler> cursor_handler;
-    bool supports_cursor_viewport;
-
-    bool isMaximized;
-    sp<IWaydroidTask> task;
-};
 
 struct buffer_metadata {
     uint32_t height;
@@ -383,6 +226,160 @@ struct window {
 
   private:
     window() = default;
+};
+
+class open_windows {
+    using Collection = std::map<std::string, std::unique_ptr<window>>;
+    Collection windows;
+
+  public:
+    using key_type = Collection::key_type;
+    using mapped_type = Collection::mapped_type;
+    using size_type = Collection::size_type;
+    using iterator = Collection::iterator;
+    using const_iterator = Collection::const_iterator;
+    using reverse_iterator = Collection::reverse_iterator;
+    using const_reverse_iterator = Collection::const_reverse_iterator;
+
+    iterator begin() {
+        return windows.begin();
+    }
+    iterator end() {
+        return windows.end();
+    }
+
+    iterator find(const key_type& key) {
+        return windows.find(key);
+    }
+
+    mapped_type& operator[](const key_type& key) {
+        return windows[key];
+    }
+    mapped_type& operator[](key_type&& key) {
+        return windows[std::move(key)];
+    }
+
+    size_type size() const {
+        return windows.size();
+    }
+
+    template<class Func>
+    void update(Func func) {
+        func();
+
+        std::string windows_size_str = std::to_string(windows.size());
+        property_set("waydroid.open_windows", windows_size_str.c_str());
+    }
+
+    window *add(waydroid_hwc_composer_device_1 *pdev, const std::string& key, const std::string& aid, const std::string& tid, hwc_color_t color = {0, 0, 0, 255});
+    void add(const std::string& key, std::unique_ptr<window> window);
+    void clear();
+    void erase(const_iterator pos);
+    void erase(const key_type& key);
+    template<class Pred>
+    void erase_if(Pred pred) {
+        update([&](){
+            for (auto it = windows.begin(), end = windows.end(); it != end;) {
+                if (pred(*it)) {
+                    it = windows.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        });
+    }
+};
+
+struct cursor_handler {
+    virtual ~cursor_handler() = default;
+    virtual int apply_cursor(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index) = 0;
+    virtual int reset_cursor(waydroid_hwc_composer_device_1 *pdev) = 0;
+    virtual int on_cursor_enter(display *display) = 0;
+};
+
+struct display {
+    pthread_t wayland_thread; // constant after init
+
+    struct wl_display *display;
+    struct wl_registry *registry;
+    struct wl_compositor *compositor;
+    struct wl_subcompositor *subcompositor;
+    struct wl_seat *seat;
+    struct wl_shell *shell;
+    struct wl_shm *shm;
+    struct wl_pointer *pointer;
+    struct wl_keyboard *keyboard;
+    struct wl_touch *touch;
+    struct wl_output *output;
+    struct wp_presentation *presentation;
+    struct wp_viewporter *viewporter;
+    struct android_wlegl *android_wlegl;
+    struct zwp_linux_dmabuf_v1 *dmabuf;
+    struct xdg_wm_base *wm_base;
+    struct zwp_tablet_manager_v2* tablet_manager;
+    struct zwp_tablet_seat_v2 *tablet_seat;
+    struct zwp_pointer_constraints_v1 *pointer_constraints;
+    struct zwp_relative_pointer_manager_v1 *relative_pointer_manager;
+    struct zwp_relative_pointer_v1 *relative_pointer;
+    struct zwp_idle_inhibit_manager_v1 *idle_manager;
+    struct wp_fractional_scale_manager_v1 *fractional_scale_manager;
+    struct wl_data_device_manager *data_device_manager;
+    struct wl_data_device *data_device;
+
+    int system_version;
+    GrallocType gtype;
+    double scale;
+
+    int input_fd[INPUT_TOTAL];
+    int ptrPrvX;
+    int ptrPrvY;
+    double wheelAccumulatorX;
+    double wheelAccumulatorY;
+    bool wheelEvtIsDiscrete;
+    bool reverseScroll;
+    int touch_id[MAX_TOUCHPOINTS];
+    std::map<struct wl_surface *, struct layerFrame> layers;
+
+    open_windows windows;
+    std::set<std::string> ignored_apps;
+    std::mutex windowsMutex;
+
+    std::map<int, struct wl_surface *> touch_surfaces;
+    struct wl_surface *pointer_surface;
+    struct wl_surface *tablet_surface;
+    std::list<struct zwp_tablet_tool_v2 *> tablet_tools;
+    std::map<struct zwp_tablet_tool_v2 *, uint16_t> tablet_tools_evt;
+    uint32_t keyboard_enter_serial;
+    std::string clipboard;
+    std::list<std::string> clipboard_offer_mime_types;
+    uint32_t pointer_enter_serial;
+    struct {float x; float y;} cursor_hotspot;
+
+    EGLDisplay egl_dpy;
+    std::list<std::function<void()>> egl_work_queue;
+    sem_t egl_go;
+    sem_t egl_done;
+
+    int width;
+    int height;
+    int full_width;
+    int full_height;
+    int refresh;
+
+    std::unordered_set<uint32_t> formats;
+
+    std::map<uint32_t, std::vector<uint64_t>> modifiers;
+    std::map<uint32_t, std::string> layer_names;
+    std::map<uint32_t, struct handleExt> layer_handles_ext;
+    struct handleExt target_layer_handle_ext;
+    std::unordered_map<buffer_handle_t, std::unique_ptr<buffer>> buffer_map;
+    std::array<uint8_t, 239> keysDown;
+
+    std::unique_ptr<cursor_handler> cursor_handler;
+    bool supports_cursor_viewport;
+
+    bool isMaximized;
+    sp<IWaydroidTask> task;
 };
 
 void
