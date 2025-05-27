@@ -457,6 +457,10 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     hwc_display_contents_1_t* contents = displays[HWC_DISPLAY_PRIMARY];
     assert(contents);
 
+    if (pdev->should_compose && contents->flags & HWC_GEOMETRY_CHANGED) {
+        pdev->display->buffer_map.clear();
+    }
+
     std::string active_apps = property_get_string("waydroid.active_apps", "none");
     if (active_apps != "Waydroid" && !property_get_bool("waydroid.background_start", true)) {
         for (size_t l = 0; l < contents->numHwLayers; l++) {
