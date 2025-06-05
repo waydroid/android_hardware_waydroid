@@ -135,6 +135,9 @@ static const struct wl_data_offer_listener data_offer_listener = {
 };
 
 static void data_device_handle_data_offer(void *data, struct wl_data_device *, struct wl_data_offer *offer) {
+    if (!offer) {
+        return;
+    }
     // An application has created a new data source
     struct display *display = (struct display *)data;
     wl_data_offer_add_listener(offer, &data_offer_listener, display);

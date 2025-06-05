@@ -738,6 +738,11 @@ keyboard_handle_enter(void *data, struct wl_keyboard *,
                       uint32_t serial, struct wl_surface *surface,
                       struct wl_array *)
 {
+    if (!surface) {
+        // The surface this enter event corresponds to was already destroyed
+        return;
+    }
+
     struct display *display = (struct display *)data;
     display->keyboard_enter_serial = serial;
 
@@ -802,6 +807,11 @@ pointer_handle_enter(void *data, struct wl_pointer *,
                      uint32_t serial, struct wl_surface *surface,
                      wl_fixed_t, wl_fixed_t)
 {
+    if (!surface) {
+        // The surface this enter event corresponds to was already destroyed
+        return;
+    }
+
     struct display *display = (struct display *)data;
     display->pointer_surface = surface;
     display->pointer_enter_serial = serial;
@@ -1009,22 +1019,33 @@ static const struct wl_pointer_listener pointer_listener = {
     pointer_handle_axis_discrete,
 };
 
+
 static int
 get_touch_id(struct display *display, int id)
 {
-    int i = 0;
-    for (i = 0; i < MAX_TOUCHPOINTS; i++) {
+    for (int i = 0; i < MAX_TOUCHPOINTS; i++) {
         if (display->touch_id[i] == id)
             return i;
     }
+    return -1;
+}
+
+static int
+create_touch_id(struct display *display, int id) {
+    int i = get_touch_id(display, id);
+    if (i != -1)
+        return i;
+
     for (i = 0; i < MAX_TOUCHPOINTS; i++) {
         if (display->touch_id[i] == -1) {
             display->touch_id[i] = id;
             return i;
         }
     }
+
     return -1;
 }
+
 
 static int
 flush_touch_id(struct display *display, int id)
@@ -1043,6 +1064,11 @@ touch_handle_down(void *data, struct wl_touch *,
           uint32_t, uint32_t, struct wl_surface *surface,
           int32_t id, wl_fixed_t x_w, wl_fixed_t y_w)
 {
+    if (!surface) {
+        // The surface this down event corresponds to was already destroyed
+        return;
+    }
+
     struct display* display = (struct display*)data;
     struct input_event event[6];
     struct timespec rt;
@@ -1052,6 +1078,7 @@ touch_handle_down(void *data, struct wl_touch *,
     if (ensure_pipe(display, INPUT_TOUCH))
         return;
 
+    int touch_id = create_touch_id(display, id);
     display->touch_surfaces[id] = surface;
 
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
@@ -1067,8 +1094,8 @@ touch_handle_down(void *data, struct wl_touch *,
     x += display->layers[surface].x;
     y += display->layers[surface].y;
 
-    ADD_EVENT(EV_ABS, ABS_MT_SLOT, get_touch_id(display, id));
-    ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, get_touch_id(display, id));
+    ADD_EVENT(EV_ABS, ABS_MT_SLOT, touch_id);
+    ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, touch_id);
     ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, x);
     ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, y);
     ADD_EVENT(EV_ABS, ABS_MT_PRESSURE, 50);
@@ -1088,22 +1115,26 @@ touch_handle_up(void *data, struct wl_touch *,
     struct timespec rt;
     unsigned int res, n = 0;
 
-    if (ensure_pipe(display, INPUT_TOUCH))
-        return;
+    int touch_id = flush_touch_id(display, id);
+    // Might not exist if we discarded the down event due to a NULL surface
+    if (touch_id != -1) {
+        if (ensure_pipe(display, INPUT_TOUCH))
+            return;
 
-    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
-       ALOGE("%s:%d error in touch clock_gettime: %s",
-            __FILE__, __LINE__, strerror(errno));
+        if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+            ALOGE("%s:%d error in touch clock_gettime: %s",
+                  __FILE__, __LINE__, strerror(errno));
+        }
+        display->touch_surfaces[id] = NULL;
+
+        ADD_EVENT(EV_ABS, ABS_MT_SLOT, touch_id);
+        ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, -1);
+        ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+
+        res = write(display->input_fd[INPUT_TOUCH], &event, sizeof(event));
+        if (res < sizeof(event))
+            ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
     }
-    display->touch_surfaces[id] = NULL;
-
-    ADD_EVENT(EV_ABS, ABS_MT_SLOT, flush_touch_id(display, id));
-    ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, -1);
-    ADD_EVENT(EV_SYN, SYN_REPORT, 0);
-
-    res = write(display->input_fd[INPUT_TOUCH], &event, sizeof(event));
-    if (res < sizeof(event))
-        ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
 }
 
 static void
@@ -1116,32 +1147,36 @@ touch_handle_motion(void *data, struct wl_touch *,
     int x, y;
     unsigned int res, n = 0;
 
-    if (ensure_pipe(display, INPUT_TOUCH))
-        return;
+    int touch_id = get_touch_id(display, id);
+    // Might not exist if we discarded the down event due to a NULL surface
+    if (touch_id != -1) {
+        if (ensure_pipe(display, INPUT_TOUCH))
+            return;
 
-    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
-       ALOGE("%s:%d error in touch clock_gettime: %s",
-            __FILE__, __LINE__, strerror(errno));
+        if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+            ALOGE("%s:%d error in touch clock_gettime: %s",
+                  __FILE__, __LINE__, strerror(errno));
+        }
+        x = wl_fixed_to_int(x_w);
+        y = wl_fixed_to_int(y_w);
+        if (display->scale != 1) {
+            x = int(x * display->scale);
+            y = int(y * display->scale);
+        }
+        x += display->layers[display->touch_surfaces[id]].x;
+        y += display->layers[display->touch_surfaces[id]].y;
+
+        ADD_EVENT(EV_ABS, ABS_MT_SLOT, touch_id);
+        ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, touch_id);
+        ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, x);
+        ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, y);
+        ADD_EVENT(EV_ABS, ABS_MT_PRESSURE, 50);
+        ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+
+        res = write(display->input_fd[INPUT_TOUCH], &event, sizeof(event));
+        if (res < sizeof(event))
+            ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
     }
-    x = wl_fixed_to_int(x_w);
-    y = wl_fixed_to_int(y_w);
-    if (display->scale != 1) {
-        x = int(x * display->scale);
-        y = int(y * display->scale);
-    }
-    x += display->layers[display->touch_surfaces[id]].x;
-    y += display->layers[display->touch_surfaces[id]].y;
-
-    ADD_EVENT(EV_ABS, ABS_MT_SLOT, get_touch_id(display, id));
-    ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, get_touch_id(display, id));
-    ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, x);
-    ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, y);
-    ADD_EVENT(EV_ABS, ABS_MT_PRESSURE, 50);
-    ADD_EVENT(EV_SYN, SYN_REPORT, 0);
-
-    res = write(display->input_fd[INPUT_TOUCH], &event, sizeof(event));
-    if (res < sizeof(event))
-        ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
 }
 
 static void
@@ -1198,22 +1233,26 @@ touch_handle_shape(void *data, struct wl_touch *, int32_t id, wl_fixed_t major, 
     struct timespec rt;
     unsigned int res, n = 0;
 
-    if (ensure_pipe(display, INPUT_TOUCH))
-        return;
+    int touch_id = get_touch_id(display, id);
+    // Might not exist if we discarded the down event due to a NULL surface
+    if (touch_id != -1) {
+        if (ensure_pipe(display, INPUT_TOUCH))
+            return;
 
-    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
-       ALOGE("%s:%d error in touch clock_gettime: %s",
-            __FILE__, __LINE__, strerror(errno));
+        if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+           ALOGE("%s:%d error in touch clock_gettime: %s",
+                __FILE__, __LINE__, strerror(errno));
+        }
+        ADD_EVENT(EV_ABS, ABS_MT_SLOT, touch_id);
+        ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, touch_id);
+        ADD_EVENT(EV_ABS, ABS_MT_TOUCH_MAJOR, wl_fixed_to_int(major));
+        ADD_EVENT(EV_ABS, ABS_MT_TOUCH_MINOR, wl_fixed_to_int(minor));
+        ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+
+        res = write(display->input_fd[INPUT_TOUCH], &event, sizeof(event));
+        if (res < sizeof(event))
+            ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
     }
-    ADD_EVENT(EV_ABS, ABS_MT_SLOT, get_touch_id(display, id));
-    ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, get_touch_id(display, id));
-    ADD_EVENT(EV_ABS, ABS_MT_TOUCH_MAJOR, wl_fixed_to_int(major));
-    ADD_EVENT(EV_ABS, ABS_MT_TOUCH_MINOR, wl_fixed_to_int(minor));
-    ADD_EVENT(EV_SYN, SYN_REPORT, 0);
-
-    res = write(display->input_fd[INPUT_TOUCH], &event, sizeof(event));
-    if (res < sizeof(event))
-        ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
 }
 
 static void
@@ -1578,29 +1617,31 @@ tablet_tool_motion(void *data, struct zwp_tablet_tool_v2 *,
     int x, y;
     unsigned int res, n = 0;
 
-    if (ensure_pipe(display, INPUT_TABLET))
-        return;
+    if (display->tablet_surface) {
+        if (ensure_pipe(display, INPUT_TABLET))
+            return;
 
-    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
-       ALOGE("%s:%d error in touch clock_gettime: %s",
-            __FILE__, __LINE__, strerror(errno));
+        if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+            ALOGE("%s:%d error in touch clock_gettime: %s",
+                  __FILE__, __LINE__, strerror(errno));
+        }
+        x = wl_fixed_to_int(x_w);
+        y = wl_fixed_to_int(y_w);
+        if (display->scale != 1) {
+            x = int(x * display->scale);
+            y = int(y * display->scale);
+        }
+        x += display->layers[display->tablet_surface].x;
+        y += display->layers[display->tablet_surface].y;
+
+        ADD_EVENT(EV_ABS, ABS_X, x);
+        ADD_EVENT(EV_ABS, ABS_Y, y);
+        ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+
+        res = write(display->input_fd[INPUT_TABLET], &event, sizeof(event));
+        if (res < sizeof(event))
+            ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
     }
-    x = wl_fixed_to_int(x_w);
-    y = wl_fixed_to_int(y_w);
-    if (display->scale != 1) {
-        x = int(x * display->scale);
-        y = int(y * display->scale);
-    }
-    x += display->layers[display->tablet_surface].x;
-    y += display->layers[display->tablet_surface].y;
-
-    ADD_EVENT(EV_ABS, ABS_X, x);
-    ADD_EVENT(EV_ABS, ABS_Y, y);
-    ADD_EVENT(EV_SYN, SYN_REPORT, 0);
-
-    res = write(display->input_fd[INPUT_TABLET], &event, sizeof(event));
-    if (res < sizeof(event))
-        ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
 }
 
 static void
@@ -1752,6 +1793,10 @@ static const struct zwp_tablet_tool_v2_listener tablet_tool_listener = {
 static void tablet_seat_handle_add_tool(void *data, struct zwp_tablet_seat_v2 *,
                             struct zwp_tablet_tool_v2 *tool)
 {
+    if (!tool) {
+        return;
+    }
+
     struct display *d = (struct display*)data;
     d->tablet_tools.push_back(tool);
     zwp_tablet_tool_v2_add_listener(tool, &tablet_tool_listener, d);
