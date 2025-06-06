@@ -342,7 +342,7 @@ struct display {
 
     open_windows windows;
     std::set<std::string> ignored_apps;
-    std::mutex windowsMutex;
+    std::recursive_mutex windowsMutex;
 
     std::map<int, struct wl_surface *> touch_surfaces;
     struct wl_surface *pointer_surface;
