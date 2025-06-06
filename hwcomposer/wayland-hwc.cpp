@@ -500,11 +500,10 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
     window->set_app_id(std::move(appID));
 
     wl_surface_commit(window->surface);
-    // Handle first configure event
-    wl_display_roundtrip(display->display);
-    while (!window->configured) {
-        sched_yield();
-    }
+    // Wait for first configure event
+    do {
+        wl_display_roundtrip(display->display);
+    } while (!window->configured);
 
     if (calibrating) {
         wp_fractional_scale_v1* fs = nullptr;
