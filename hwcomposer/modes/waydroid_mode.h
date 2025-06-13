@@ -37,7 +37,12 @@
 struct waydroid_mode {
     virtual ~waydroid_mode() = default;
 
-    virtual int setup(waydroid_hwc_composer_device_1 *, hwc_display_contents_1_t *) { return 0; }
+    // Called during hwc_prepare
+    virtual int setup_prepare(waydroid_hwc_composer_device_1 *, hwc_display_contents_1_t *) { return 0; }
+    virtual int prepare(hwc_layer_1 *, size_t) { return 0; }
+
+    // Called during hwc_set
+    virtual int setup_set(waydroid_hwc_composer_device_1 *, hwc_display_contents_1_t *) { return 0; }
     virtual int cleanup_stale_windows(waydroid_hwc_composer_device_1* pdev,
                                       hwc_display_contents_1_t* contents) = 0;
     virtual int handle_layer(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index) = 0;
@@ -51,22 +56,28 @@ void neutralize_remaining_subsurfaces(waydroid_hwc_composer_device_1 *pdev);
 class skipped_layers_helper {
     constexpr static size_t UNSET_VALUE = std::numeric_limits<size_t>::max();
 
+    // Initialized during prepare
     size_t m_first_skipped {UNSET_VALUE};
     size_t m_last_skipped {UNSET_VALUE};
-
-    hwc_layer_1 *m_framebuffer_target {};
     size_t m_framebuffer_target_index {UNSET_VALUE};
 
-  public:
-    void setup_for_each_layer(size_t i, hwc_layer_1 &layer);
+    // Initialized during set
+    hwc_layer_1 *m_framebuffer_target {};
 
+  public:
+    void setup_for_each_layer(size_t i, const hwc_layer_1 &layer);
+    void setup_set(hwc_layer_1 *layers, size_t size);
+
+    // Safe to call after setup_for_each_layer
     size_t first_skipped() const;
     size_t last_skipped() const;
 
-    hwc_layer_1 *framebuffer_target_layer() const;
     size_t framebuffer_target_index() const;
 
     bool has_skipped_layers() const;
+
+    // Safe to call after setup_set
+    hwc_layer_1 *framebuffer_target_layer() const;
 };
 
 enum class LayerSplitType {

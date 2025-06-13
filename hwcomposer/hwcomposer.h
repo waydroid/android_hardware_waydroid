@@ -33,6 +33,8 @@
 #include "wayland-hwc.h"
 #include "gralloc_handler.h"
 
+struct waydroid_mode;
+
 class subsurface_cursor_handler : public cursor_handler {
     std::string window_key;
 
@@ -74,6 +76,8 @@ struct waydroid_hwc_composer_device_1 : hwc_composer_device_1_t {
     int next_sync_point;
     bool should_compose;
     bool multi_windows;
+
+    std::unique_ptr<waydroid_mode> selected_mode;
 };
 
 int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index, window *window);
