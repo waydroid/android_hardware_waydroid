@@ -44,7 +44,7 @@ window *single_window_mode_base::get_window(waydroid_hwc_composer_device_1 *pdev
     }
 }
 
-int single_window_mode_base::setup(waydroid_hwc_composer_device_1* pdev, hwc_display_contents_1_t* contents) {
+int single_window_mode_base::setup_set(waydroid_hwc_composer_device_1* pdev, hwc_display_contents_1_t* contents) {
     layer_infos.setup(pdev, contents->hwLayers, contents->numHwLayers);
     return 0;
 }
@@ -100,11 +100,11 @@ int single_window_mode_base::cleanup_stale_windows(waydroid_hwc_composer_device_
 }
 
 
-int non_compositing_single_window_mode::setup(waydroid_hwc_composer_device_1* pdev, hwc_display_contents_1_t* contents) {
-    int res = Base::setup(pdev, contents);
+int non_compositing_single_window_mode::setup_set(waydroid_hwc_composer_device_1* pdev, hwc_display_contents_1_t* contents) {
+    int res = Base::setup_set(pdev, contents);
     if (res != 0)
         return res;
-    return single_window_mode_base::setup(pdev, contents);
+    return single_window_mode_base::setup_set(pdev, contents);
 }
 
 int non_compositing_single_window_mode::handle_layer(waydroid_hwc_composer_device_1* pdev, hwc_layer_1* hwc_layer, size_t i) {
@@ -119,11 +119,11 @@ int non_compositing_single_window_mode::handle_layer(waydroid_hwc_composer_devic
 }
 
 
-int compositing_single_window_mode::setup(waydroid_hwc_composer_device_1* pdev, hwc_display_contents_1_t* contents) {
-    int res = Base::setup(pdev, contents);
+int compositing_single_window_mode::setup_set(waydroid_hwc_composer_device_1* pdev, hwc_display_contents_1_t* contents) {
+    int res = Base::setup_set(pdev, contents);
     if (res != 0)
         return res;
-    return single_window_mode_base::setup(pdev, contents);
+    return single_window_mode_base::setup_set(pdev, contents);
 }
 
 int compositing_single_window_mode::handle_layer(waydroid_hwc_composer_device_1* pdev, hwc_layer_1* hwc_layer, size_t i) {

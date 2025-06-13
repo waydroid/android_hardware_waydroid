@@ -34,7 +34,9 @@ class multi_window_mode : public waydroid_mode {
     static bool can_handle_layer(const hwc_layer_1& layer);
 
   public:
-    int setup(waydroid_hwc_composer_device_1 *pdev, hwc_display_contents_1_t *contents) final;
+    int prepare(hwc_layer_1 *, size_t) override;
+
+    int setup_set(waydroid_hwc_composer_device_1 *pdev, hwc_display_contents_1_t *contents) final;
     int cleanup_stale_windows(waydroid_hwc_composer_device_1* pdev,
                               hwc_display_contents_1_t* contents) final;
     int handle_layer(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index) final;

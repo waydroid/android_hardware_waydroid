@@ -36,10 +36,32 @@ class compositing_window_mode : public virtual waydroid_mode {
     }
 
   public:
-    int setup(waydroid_hwc_composer_device_1 *, hwc_display_contents_1_t *contents) override {
+    int setup_prepare(waydroid_hwc_composer_device_1 *, hwc_display_contents_1_t *contents) override {
         for (size_t i = 0; i < contents->numHwLayers; ++i) {
             skipped_layers.setup_for_each_layer(i, contents->hwLayers[i]);
         }
+        return 0;
+    }
+    int prepare(hwc_layer_1 *hwc_layer, size_t hwc_layer_index) override {
+        /* skipped layers have to be composited by SurfaceFlinger; so in order
+         * to have correct z-ordering, we must ask SurfaceFlinger to composite
+         * everything between the first and the last skipped layer. */
+        if (skipped_layers.has_skipped_layers()) {
+            if (skipped_layers.first_skipped() <= hwc_layer_index && hwc_layer_index <= skipped_layers.last_skipped()) {
+                hwc_layer->compositionType = HWC_FRAMEBUFFER;
+                return 0;
+            }
+        }
+
+        if (hwc_layer->compositionType == HWC_FRAMEBUFFER) {
+            hwc_layer->compositionType = HWC_OVERLAY;
+        }
+        // TODO: Handle HWC_SIDEBAND
+        return 0;
+    }
+
+    int setup_set(waydroid_hwc_composer_device_1 *, hwc_display_contents_1_t *contents) override {
+        skipped_layers.setup_set(contents->hwLayers, contents->numHwLayers);
         return 0;
     }
     int handle_layer(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t i) override {
@@ -108,7 +130,12 @@ class non_compositing_window_mode : public virtual waydroid_mode {
     }
 
   public:
-    int setup(waydroid_hwc_composer_device_1 *, hwc_display_contents_1_t *contents) override {
+    int prepare(hwc_layer_1 *hwc_layer, size_t) override {
+        hwc_layer->compositionType = HWC_FRAMEBUFFER;
+        return 0;
+    }
+
+    int setup_set(waydroid_hwc_composer_device_1 *, hwc_display_contents_1_t *contents) override {
         for (size_t i = 0; i < contents->numHwLayers; ++i) {
             auto& layer = contents->hwLayers[i];
             if (m_draw_framebuffer_at == UNSET_VALUE
