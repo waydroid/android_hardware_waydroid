@@ -47,7 +47,7 @@ void neutralize_remaining_subsurfaces(waydroid_hwc_composer_device_1 *pdev) {
 }
 
 
-void skipped_layers_helper::setup_for_each_layer(size_t i, hwc_layer_1 &layer) {
+void skipped_layers_helper::setup_for_each_layer(size_t i, const hwc_layer_1 &layer) {
     if (layer.flags & HWC_SKIP_LAYER) {
         if (m_first_skipped == UNSET_VALUE) {
             m_first_skipped = i;
@@ -56,8 +56,15 @@ void skipped_layers_helper::setup_for_each_layer(size_t i, hwc_layer_1 &layer) {
     }
     if (layer.compositionType == HWC_FRAMEBUFFER_TARGET) {
         m_framebuffer_target_index = i;
-        m_framebuffer_target = &layer;
     }
+}
+
+void skipped_layers_helper::setup_set(hwc_layer_1* layers, size_t size) {
+    if (m_framebuffer_target_index >= size) {
+        ALOGE("layers changed between prepare and set");
+        abort();
+    }
+    m_framebuffer_target = &layers[m_framebuffer_target_index];
 }
 
 size_t skipped_layers_helper::first_skipped() const {
