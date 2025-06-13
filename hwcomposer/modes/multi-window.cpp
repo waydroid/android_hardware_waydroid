@@ -60,7 +60,15 @@ bool multi_window_mode::can_handle_layer(const hwc_layer_1& layer) {
     return layer.compositionType == HWC_OVERLAY && !(layer.flags & HWC_SKIP_LAYER);
 }
 
-int multi_window_mode::setup(waydroid_hwc_composer_device_1* pdev, hwc_display_contents_1_t* contents) {
+int multi_window_mode::prepare(hwc_layer_1* hwc_layer, size_t) {
+    if (hwc_layer->compositionType == HWC_FRAMEBUFFER) {
+        hwc_layer->compositionType = HWC_OVERLAY;
+    }
+    // TODO: Handle HWC_SIDEBAND
+    return 0;
+}
+
+int multi_window_mode::setup_set(waydroid_hwc_composer_device_1* pdev, hwc_display_contents_1_t* contents) {
     layer_infos.setup(pdev, contents->hwLayers, contents->numHwLayers);
     return 0;
 }

@@ -73,22 +73,6 @@ using ::android::status_t;
 #define WINDOW_DECORATION_OUTSET 15
 
 namespace {
-    std::pair<int, int> search_first_and_last_skipped_layer(hwc_display_contents_1_t *contents) {
-        assert(contents->numHwLayers <= std::numeric_limits<int>::max());
-
-        int first = -1;
-        int last = -1;
-        for (int i = 0; i < contents->numHwLayers; i++) {
-            if (!(contents->hwLayers[i].flags & HWC_SKIP_LAYER))
-                continue;
-
-            if (first == -1)
-                first = i;
-            last = i;
-        }
-        return {first, last};
-    }
-
     hwc_frect_t rect_apply_transform(hwc_frect_t src, uint32_t transform) {
         /* Transform bits are defined so that for both 90° and 270° this bit is set */
         if (transform & HWC_TRANSFORM_ROT_90) {
@@ -143,6 +127,54 @@ namespace {
         int size = property_get(key, property, default_value);
         return std::string(property, size);
     }
+
+    std::unique_ptr<waydroid_mode> select_mode(waydroid_hwc_composer_device_1 *pdev, hwc_display_contents_1_t *contents) {
+        std::string active_apps = property_get_string("waydroid.active_apps", "none");
+        if (active_apps != "Waydroid" && !property_get_bool("waydroid.background_start", true)) {
+            for (size_t l = 0; l < contents->numHwLayers; l++) {
+                const auto &layer_name = pdev->display->layer_names[l];
+                if (layer_name.rfind("BootAnimation#", 0) == 0) {
+                    // force single window mode during boot animation
+                    active_apps = "Waydroid";
+                    break;
+                }
+            }
+        }
+
+        /*
+         * In prop "persist.waydroid.multi_windows" we detect HWC let SF render layers
+         * And just show the target client layer (single windows mode) or
+         * render each layers in wayland surface and subsurfaces.
+         * In prop "waydroid.active_apps" we choose what to be shown in window
+         * and here if HWC is in single mode we show the screen only if any task are in screen
+         * and in multi windows mode we group layers with same task ID in a wayland window.
+         *
+         * "waydroid.active_apps" prop can be:
+         * "none": No windows
+         * "Waydroid": Shows android screen in a single window
+         * "AppID": Shows apps in related windows as explained above
+         */
+        waydroid_mode *mode;
+        if (active_apps == "none") {
+            mode = new closed_mode();
+        } else if (active_apps == "Waydroid") {
+            if (pdev->should_compose) {
+                mode = new compositing_full_ui_mode();
+            } else {
+                mode = new non_compositing_full_ui_mode();
+            }
+        } else if (!pdev->multi_windows) {
+            if (pdev->should_compose) {
+                mode = new compositing_single_window_mode();
+            } else {
+                mode = new non_compositing_single_window_mode();
+            }
+        } else {
+            assert(pdev->should_compose);
+            mode = new multi_window_mode();
+        }
+        return std::unique_ptr<waydroid_mode>(mode);
+    }
 }
 
 static int hwc_prepare(hwc_composer_device_1_t* dev,
@@ -155,7 +187,10 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
     hwc_display_contents_1_t *contents = displays[HWC_DISPLAY_PRIMARY];
     assert(contents);
 
-    std::pair<int, int> skipped = search_first_and_last_skipped_layer(contents);
+    pdev->selected_mode = select_mode(pdev, contents);
+    if (pdev->selected_mode->setup_prepare(pdev, contents) != 0) {
+        return -1;
+    }
 
     for (size_t i = 0; i < contents->numHwLayers; i++) {
         if (contents->hwLayers[i].flags & HWC_IS_CURSOR_LAYER) {
@@ -167,27 +202,8 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
         if (contents->hwLayers[i].flags & HWC_SKIP_LAYER)
             continue;
 
-        /* skipped layers have to be composited by SurfaceFlinger; so in order
-           have correct z-ordering, we must ask SurfaceFlinger to composite
-           everything between the first and the last skipped layer. Unfortunately,
-           this can't be done in multi windows mode, which relies on layers not
-           being composited, so we won't render skipped layers correctly in that mode */
-        if (!pdev->multi_windows && skipped.first != -1) {
-            if (skipped.first <= i && i <= skipped.second) {
-                contents->hwLayers[i].compositionType = HWC_FRAMEBUFFER;
-                continue;
-            }
-        }
-
-        /* If we do composition then request a buffer for every possible layer
-         * otherwise instruct SurfaceFlinger to compose everything itself */
-        if (pdev->should_compose) {
-            if (contents->hwLayers[i].compositionType == HWC_FRAMEBUFFER) {
-                contents->hwLayers[i].compositionType = HWC_OVERLAY;
-            }
-            // TODO: Handle HWC_SIDEBAND
-        } else {
-            contents->hwLayers[i].compositionType = HWC_FRAMEBUFFER;
+        if (pdev->selected_mode->prepare(&contents->hwLayers[i], i) != 0) {
+            return -1;
         }
     }
 
@@ -405,42 +421,6 @@ int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 
     return 0;
 }
 
-static std::unique_ptr<waydroid_mode> select_mode(waydroid_hwc_composer_device_1 *pdev, const std::string &active_apps) {
-    /*
-     * In prop "persist.waydroid.multi_windows" we detect HWC let SF render layers
-     * And just show the target client layer (single windows mode) or
-     * render each layers in wayland surface and subsurfaces.
-     * In prop "waydroid.active_apps" we choose what to be shown in window
-     * and here if HWC is in single mode we show the screen only if any task are in screen
-     * and in multi windows mode we group layers with same task ID in a wayland window.
-     *
-     * "waydroid.active_apps" prop can be:
-     * "none": No windows
-     * "Waydroid": Shows android screen in a single window
-     * "AppID": Shows apps in related windows as explained above
-     */
-    waydroid_mode *mode;
-    if (active_apps == "none") {
-        mode = new closed_mode();
-    } else if (active_apps == "Waydroid") {
-        if (pdev->should_compose) {
-            mode = new compositing_full_ui_mode();
-        } else {
-            mode = new non_compositing_full_ui_mode();
-        }
-    } else if (!pdev->multi_windows) {
-        if (pdev->should_compose) {
-            mode = new compositing_single_window_mode();
-        } else {
-            mode = new non_compositing_single_window_mode();
-        }
-    } else {
-        assert(pdev->should_compose);
-        mode = new multi_window_mode();
-    }
-    return std::unique_ptr<waydroid_mode>(mode);
-}
-
 static void reset_per_commit_state_window(waydroid_hwc_composer_device_1 *pdev) {
     for (auto& [id, window] : pdev->display->windows) {
         window->reset_per_set_state();
@@ -461,20 +441,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         pdev->display->buffer_map.clear();
     }
 
-    std::string active_apps = property_get_string("waydroid.active_apps", "none");
-    if (active_apps != "Waydroid" && !property_get_bool("waydroid.background_start", true)) {
-        for (size_t l = 0; l < contents->numHwLayers; l++) {
-            const auto &layer_name = pdev->display->layer_names[l];
-            if (layer_name.rfind("BootAnimation#", 0) == 0) {
-                // force single window mode during boot animation
-                active_apps = "Waydroid";
-                break;
-            }
-        }
-    }
-    std::unique_ptr<waydroid_mode> mode = select_mode(pdev, active_apps);
-
-    mode->setup(pdev, contents);
+    auto& mode = pdev->selected_mode;
+    mode->setup_set(pdev, contents);
 
     std::scoped_lock lock(pdev->display->windowsMutex);
     mode->cleanup_stale_windows(pdev, contents);
