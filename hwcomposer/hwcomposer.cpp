@@ -516,7 +516,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
     }
 
-    std::lock_guard<std::mutex> lock(pdev->display->windowsMutex);
+    std::scoped_lock lock(pdev->display->windowsMutex);
     if (active_apps == "none") {
         // Clear all open windows
         for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
@@ -954,10 +954,10 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             wl_surface_set_input_region(it->second->surface, it->second->input_region);
 
     if (!pdev->multi_windows && single_layer_tid.length() && active_apps != "Waydroid") {
-        for (auto it = pdev->windows.begin(); it != pdev->windows.end(); it++) {
+        for (auto const& [layer_tid, window] : pdev->windows) {
             // Replace inactive app window buffer with snapshot in staged mode
-            if (it->first != single_layer_tid && !it->second->snapshot_buffer) {
-                pdev->display->egl_work_queue.push_back(std::bind(snapshot_inactive_app_window, pdev->display, it->second));
+            if (layer_tid != single_layer_tid && !window->snapshot_buffer) {
+                pdev->display->egl_work_queue.push_back(std::bind(snapshot_inactive_app_window, pdev->display, window));
             }
         }
         if (!pdev->display->egl_work_queue.empty()) {

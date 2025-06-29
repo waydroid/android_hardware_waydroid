@@ -418,7 +418,7 @@ xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
         }
     }
 
-    std::lock_guard<std::mutex> lock(window->display->windowsMutex);
+    std::scoped_lock lock(window->display->windowsMutex);
     destroy_window(window, true);
 }
 
@@ -771,7 +771,7 @@ keyboard_handle_enter(void *data, struct wl_keyboard *,
     struct display *display = (struct display *)data;
     display->keyboard_enter_serial = serial;
 
-    std::lock_guard<std::mutex> lock(display->windowsMutex);
+    std::scoped_lock lock(display->windowsMutex);
     if (display->windows.find(surface) == display->windows.end())
         return;
 
