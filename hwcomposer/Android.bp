@@ -67,6 +67,7 @@ cc_library_shared {
         "-DLOG_TAG=\"hwcomposer\"",
         "-Wall",
         "-Werror",
+        "-Wno-error=sign-compare",
     ],
     generated_sources: ["wayland_android_client_protocol_sources"],
     generated_headers: ["wayland_android_client_protocol_headers"],

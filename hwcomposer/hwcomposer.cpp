@@ -123,7 +123,7 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
       skipped.second = i;
     }
 
-    for (int i = 0; i < (int) contents->numHwLayers; i++) {
+    for (size_t i = 0; i < contents->numHwLayers; i++) {
         if (contents->hwLayers[i].flags & HWC_IS_CURSOR_LAYER) {
             contents->hwLayers[i].compositionType = HWC_OVERLAY;
             continue;
@@ -210,7 +210,7 @@ static struct buffer *get_wl_buffer(struct waydroid_hwc_composer_device_1 *pdev,
     auto it = pdev->display->buffer_map.find(layer->handle);
     if (it != pdev->display->buffer_map.end()) {
         if (it->second->isShm) {
-            if (width != (uint32_t)it->second->width || height != (uint32_t)it->second->height) {
+            if (width != it->second->width || height != it->second->height) {
                 destroy_buffer(it->second);
                 pdev->display->buffer_map.erase(it);
             } else {
@@ -727,7 +727,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
     for (size_t l = 0; l < contents->numHwLayers; l++) {
         size_t layer = l;
-        if (l == (size_t) skipped.first && fb_target >= 0) {
+        if (l == skipped.first && fb_target >= 0) {
             // draw framebuffer target instead of skipped layers
             if (contents->hwLayers[layer].acquireFenceFd != -1) {
                 close(contents->hwLayers[layer].acquireFenceFd);
