@@ -37,22 +37,28 @@ int SoftGateKeeperDevice::enroll(uint32_t uid,
         current_password_length = 0;
     }
 
-    SizedBuffer desired_password_buffer(desired_password_length);
-    memcpy(desired_password_buffer.buffer.get(), desired_password, desired_password_length);
+    auto desired_password_storage = new uint8_t[desired_password_length];
+    memcpy(desired_password_storage, desired_password, desired_password_length);
+    SizedBuffer desired_password_buffer(desired_password_storage, desired_password_length);
 
-    SizedBuffer current_password_handle_buffer(current_password_handle_length);
+    SizedBuffer current_password_handle_buffer;
     if (current_password_handle) {
-        memcpy(current_password_handle_buffer.buffer.get(), current_password_handle,
-                current_password_handle_length);
+        auto current_password_handle_storage = new uint8_t[current_password_handle_length];
+        memcpy(current_password_handle_storage, current_password_handle, current_password_handle_length);
+        current_password_handle_buffer = SizedBuffer(current_password_handle_storage, current_password_handle_length);
     }
 
-    SizedBuffer current_password_buffer(current_password_length);
+    SizedBuffer current_password_buffer;
     if (current_password) {
-        memcpy(current_password_buffer.buffer.get(), current_password, current_password_length);
+        auto current_password_storage = new uint8_t[current_password_length];
+        memcpy(current_password_storage, current_password, current_password_length);
+        current_password_buffer = SizedBuffer(current_password_storage, current_password_length);
     }
 
-    EnrollRequest request(uid, &current_password_handle_buffer, &desired_password_buffer,
-            &current_password_buffer);
+    EnrollRequest request(uid,
+                          std::move(current_password_handle_buffer),
+                          std::move(desired_password_buffer),
+                          std::move(current_password_buffer));
     EnrollResponse response;
 
     impl_->Enroll(request, &response);
@@ -84,13 +90,18 @@ int SoftGateKeeperDevice::verify(uint32_t uid,
         return -EINVAL;
     }
 
-    SizedBuffer password_handle_buffer(enrolled_password_handle_length);
-    memcpy(password_handle_buffer.buffer.get(), enrolled_password_handle,
-            enrolled_password_handle_length);
-    SizedBuffer provided_password_buffer(provided_password_length);
-    memcpy(provided_password_buffer.buffer.get(), provided_password, provided_password_length);
+    auto enrolled_password_handle_storage = new uint8_t[enrolled_password_handle_length];
+    memcpy(enrolled_password_handle_storage, enrolled_password_handle, enrolled_password_handle_length);
+    SizedBuffer enrolled_password_handle_buffer(enrolled_password_handle_storage, enrolled_password_handle_length);
 
-    VerifyRequest request(uid, challenge, &password_handle_buffer, &provided_password_buffer);
+    auto provided_password_storage = new uint8_t[provided_password_length];
+    memcpy(provided_password_storage, provided_password, provided_password_length);
+    SizedBuffer provided_password_buffer(provided_password_storage, provided_password_length);
+
+    VerifyRequest request(uid,
+                          challenge,
+                          std::move(enrolled_password_handle_buffer),
+                          std::move(provided_password_buffer));
     VerifyResponse response;
 
     impl_->Verify(request, &response);
