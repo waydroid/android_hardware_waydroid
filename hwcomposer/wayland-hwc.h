@@ -364,6 +364,8 @@ struct display {
     int height;
     int full_width;
     int full_height;
+    int req_width;
+    int req_height;
     int refresh;
 
     std::unordered_set<uint32_t> formats;
