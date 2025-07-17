@@ -178,8 +178,9 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
     struct window *window = (struct window *)data;
     struct display *display = window->display;
 
-    if (width == 0 || height == 0) {
+    if (width <= 1 || height <= 1) {
 		/* Compositor is deferring to us */
+        /* or invalid during calibration */
 		return;
 	}
 
@@ -239,7 +240,7 @@ shell_surface_configure(void *data, struct wl_shell_surface *, uint32_t, int32_t
     struct window *window = (struct window *)data;
     struct display *display = window->display;
 
-    if (width != 0 && height != 0) {
+    if (width > 1 && height > 1) {
         display->req_width = width;
         display->req_height = height;
 	}
@@ -513,6 +514,8 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
         // Try second configure event, with buffer attached
         struct wl_buffer *buf = wl_shm_pool_create_buffer(pool, 0, 1, 1, 4, WL_SHM_FORMAT_ARGB8888);
         wl_surface_attach(window->surface, buf, 0, 0);
+        if (window->viewport && display->req_width && display->req_height)
+            wp_viewport_set_destination(window->viewport, display->req_width, display->req_height);
         wl_surface_commit(window->surface);
         wl_display_roundtrip(display->display);
 
