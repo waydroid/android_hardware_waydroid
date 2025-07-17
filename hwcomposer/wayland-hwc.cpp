@@ -135,20 +135,6 @@ static const struct xdg_surface_listener xdg_surface_listener = {
     xdg_surface_handle_configure,
 };
 
-
-void
-finished_computing_scale(struct display *d)
-{
-    char property[PROPERTY_VALUE_MAX];
-    int default_density = 180;
-    std::string display_scale = std::to_string(d->scale);
-    property_set("waydroid.display_scale", display_scale.c_str());
-    if (property_get("ro.sf.lcd_density", property, nullptr) <= 0) {
-        std::string lcd_density = std::to_string(int(default_density * d->scale));
-        property_set("ro.sf.lcd_density", lcd_density.c_str());
-    }
-}
-
 void choose_width_height(struct display* display, int32_t hint_width, int32_t hint_height) {
     char property[PROPERTY_VALUE_MAX];
     int width = hint_width;
@@ -169,6 +155,21 @@ void choose_width_height(struct display* display, int32_t hint_width, int32_t hi
     display->height = height;
 }
 
+void
+finished_calibrating(struct display *d)
+{
+    char property[PROPERTY_VALUE_MAX];
+    int default_density = 180;
+    std::string display_scale = std::to_string(d->scale);
+    property_set("waydroid.display_scale", display_scale.c_str());
+    if (property_get("ro.sf.lcd_density", property, nullptr) <= 0) {
+        std::string lcd_density = std::to_string(int(default_density * d->scale));
+        property_set("ro.sf.lcd_density", lcd_density.c_str());
+    }
+
+    choose_width_height(d, d->req_width, d->req_height);
+}
+
 static void
 xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
                               int32_t width, int32_t height,
@@ -182,11 +183,8 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
 		return;
 	}
 
-    if (!display->width || !display->height) {
-        choose_width_height(display, width, height);
-        if (!display->isMaximized)
-            xdg_toplevel_unset_maximized(window->xdg_toplevel);
-    }
+    display->req_width = width;
+    display->req_height = height;
 }
 
 static void
@@ -242,9 +240,8 @@ shell_surface_configure(void *data, struct wl_shell_surface *, uint32_t, int32_t
     struct display *display = window->display;
 
     if (width != 0 && height != 0) {
-        if (!display->width || !display->height) {
-            choose_width_height(display, width, height);
-        }
+        display->req_width = width;
+        display->req_height = height;
 	}
 
     window->configured = true;
@@ -459,10 +456,6 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
 
     // Is this the first window created?
     bool calibrating = !display->height || !display->width;
-    if (calibrating) {
-        // Initialize width and height with user-provided overrides if any
-        choose_width_height(display, 0, 0);
-    }
 
     if (display->wm_base) {
         window->xdg_surface =
@@ -513,15 +506,16 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
                     display->fractional_scale_manager, window->surface);
             wp_fractional_scale_v1_add_listener(fs, &fractional_scale_listener, display);
         }
-        if (fs || (!display->height || !display->width)) {
-            // Some compositors fail to give us a window size or scale without a buffer attached
-            // See: https://github.com/swaywm/sway/issues/2176
-            // Try second configure event, with buffer attached
-            struct wl_buffer *buf = wl_shm_pool_create_buffer(pool, 0, 1, 1, 4, WL_SHM_FORMAT_ARGB8888);
-            wl_surface_attach(window->surface, buf, 0, 0);
-            wl_surface_commit(window->surface);
-            wl_display_roundtrip(display->display);
-        }
+
+        // Some compositors fail to give us a window size or scale without a buffer attached
+        // See: https://github.com/swaywm/sway/issues/2176
+        // Some other compositors may refine the window size after a buffer is attached (Hyprland)
+        // Try second configure event, with buffer attached
+        struct wl_buffer *buf = wl_shm_pool_create_buffer(pool, 0, 1, 1, 4, WL_SHM_FORMAT_ARGB8888);
+        wl_surface_attach(window->surface, buf, 0, 0);
+        wl_surface_commit(window->surface);
+        wl_display_roundtrip(display->display);
+
         if (fs) {
             wp_fractional_scale_v1_destroy(fs);
         }
@@ -529,12 +523,14 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
         // If after all of this we still did not receive a proper configure event,
         // fallback to using the full output size.
         // NOTICE: full_width and full_heigth should be in compositor logical size!
-        if (!display->height)
-            display->height = display->full_height / display->scale;
-        if (!display->width)
-            display->width = display->full_width / display->scale;
+        if (!display->req_height)
+            display->req_height = display->full_height / display->scale;
+        if (!display->req_width)
+            display->req_width = display->full_width / display->scale;
 
-        finished_computing_scale(display);
+        finished_calibrating(display);
+        if (!display->isMaximized)
+            window->set_maximize(false);
     }
 
     if (display->wm_base)
