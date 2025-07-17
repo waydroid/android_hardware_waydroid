@@ -759,7 +759,11 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
         pdev->should_compose = false;
     }
 
-    pdev->vsync_callback_enabled = true;
+    if (!property_get_bool("persist.waydroid.cursor_on_subsurface", false)) {
+        pdev->display->cursor_handler.reset(new wl_cursor_cursor_handler(pdev));
+    } else {
+        pdev->display->cursor_handler.reset(new subsurface_cursor_handler());
+    }
 
     auto first_window = window::create(pdev->display, pdev->should_compose, "Waydroid", "0", {0, 0, 0, 255});
     if (!property_get_bool("waydroid.background_start", true)) {
@@ -769,15 +773,9 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
         first_window.reset();
     }
 
+    pdev->vsync_callback_enabled = true;
     if (pdev->display->refresh > 1000 && pdev->display->refresh < 1000000)
         pdev->vsync_period_ns = 1000 * 1000 * 1000 / (pdev->display->refresh / 1000);
-
-    if (!property_get_bool("persist.waydroid.cursor_on_subsurface", false)) {
-        pdev->display->cursor_handler.reset(new wl_cursor_cursor_handler(pdev));
-    } else {
-        pdev->display->cursor_handler.reset(new subsurface_cursor_handler());
-    }
-
 
     struct timespec rt;
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
