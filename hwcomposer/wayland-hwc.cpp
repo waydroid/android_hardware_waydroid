@@ -1900,6 +1900,8 @@ registry_handle_global(void *data, struct wl_registry *registry,
     } else if (strcmp(interface, "gtk_shell1") == 0) {
         if (version < 6)
             d->supports_cursor_viewport = false;
+    } else if (strcmp(interface, "mir_shell_v1") == 0) {
+        d->supports_cursor_hw_buffer = false;
     }
 }
 
