@@ -107,7 +107,11 @@ namespace {
         buffer *buf = find_cached_buffer(pdev, metadata, layer->handle);
 
         if (!buf) {
-            auto result = gralloc_handler.create_buffer(pdev->display, metadata, layer->handle);
+            std::unique_ptr<buffer> result;
+            if (layer->flags & HWC_IS_CURSOR_LAYER)
+                result = pdev->display->cursor_handler->create_buffer(pdev, metadata, layer);
+            else
+                result = gralloc_handler.create_buffer(pdev->display, metadata, layer->handle);
             if (!result) {
                 ALOGE("failed to create a wayland buffer");
                 return nullptr;
@@ -807,6 +811,10 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     return ret;
 }
 
+std::unique_ptr<buffer> cursor_handler::create_buffer(waydroid_hwc_composer_device_1 *pdev, const buffer_metadata& metadata, hwc_layer_1 *hwc_layer) {
+    return pdev->gralloc_handler.create_buffer(pdev->display, metadata, hwc_layer->handle);
+};
+
 void subsurface_cursor_handler::clear_previous_subsurface_if_needed(waydroid_hwc_composer_device_1 *pdev) {
     /* If should_compose is set, remaining subsurface are cleared in post_processing.
      * In this case we can skip it here */
@@ -881,6 +889,13 @@ wl_cursor_cursor_handler::wl_cursor_cursor_handler(waydroid_hwc_composer_device_
         cursor_surface_context.viewport =
                 wp_viewporter_get_viewport(pdev->display->viewporter, cursor_surface_context.surface);
     }
+}
+
+std::unique_ptr<buffer> wl_cursor_cursor_handler::create_buffer(waydroid_hwc_composer_device_1* pdev, const buffer_metadata& metadata, hwc_layer_1 *hwc_layer) {
+    if (pdev->display->supports_cursor_hw_buffer)
+        return cursor_handler::create_buffer(pdev, metadata, hwc_layer);
+    else
+        return create_shm_wl_buffer (pdev->display, metadata, hwc_layer->handle);
 }
 
 void wl_cursor_cursor_handler::set_cursor(display* display) const {
