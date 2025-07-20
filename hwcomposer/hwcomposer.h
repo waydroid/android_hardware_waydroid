@@ -52,6 +52,7 @@ class wl_cursor_cursor_handler : public cursor_handler {
   public:
     wl_cursor_cursor_handler(waydroid_hwc_composer_device_1 *pdev);
 
+    std::unique_ptr<buffer> create_buffer(waydroid_hwc_composer_device_1 *pdev, const buffer_metadata& metadata, hwc_layer_1 *hwc_layer) override;
     void set_cursor(display *display) const;
     int apply_cursor(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index) override;
     int reset_cursor(waydroid_hwc_composer_device_1 *pdev) override;
