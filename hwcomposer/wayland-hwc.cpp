@@ -2008,6 +2008,7 @@ create_display(const char *gralloc)
     display->refresh = 0;
     display->isMaximized = true;
     display->supports_cursor_viewport = true;
+    display->supports_cursor_hw_buffer = property_get_bool("persist.waydroid.cursor_force_shm", false);
     display->display = wl_display_connect(NULL);
     ALOGI("WAYLAND_DISPLAY: %s", getenv("WAYLAND_DISPLAY"));
     ALOGI("XDG_RUNTIME_DIR: %s", getenv("XDG_RUNTIME_DIR"));
