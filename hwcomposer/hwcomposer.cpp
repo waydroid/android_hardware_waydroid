@@ -460,7 +460,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             found_cursor = true;
             pdev->display->cursor_handler->apply_cursor(pdev, layer, l);
         } else {
-            mode->handle_layer(pdev, layer, l);
+            if (layer->handle)
+                mode->handle_layer(pdev, layer, l);
         }
     }
     if (!found_cursor) {
@@ -479,6 +480,12 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
     sw_sync_timeline_inc(pdev->timeline_fd, 1);
     contents->retireFenceFd = sw_sync_fence_create(pdev->timeline_fd, "hwc_contents_release", ++pdev->next_sync_point);
+
+    if (pdev->display->needHotplug && pdev->procs && pdev->procs->hotplug) {
+        pdev->procs->hotplug(pdev->procs, 0, 1);
+        pdev->display->buffer_map.clear();
+        pdev->display->needHotplug = false;
+    }
     return 0;
 }
 
@@ -531,6 +538,8 @@ static void hwc_register_procs(struct hwc_composer_device_1* dev,
                                hwc_procs_t const* procs) {
     auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(dev);
     pdev->procs = procs;
+
+    pdev->display->procs = procs;
 }
 
 static int hwc_get_display_configs(struct hwc_composer_device_1* dev __unused,

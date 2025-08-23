@@ -385,6 +385,9 @@ struct display {
 
     bool isMaximized;
     sp<IWaydroidTask> task;
+
+    const hwc_procs_t *procs;
+    bool needHotplug;
 };
 
 void
