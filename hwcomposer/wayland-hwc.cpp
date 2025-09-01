@@ -170,6 +170,34 @@ finished_calibrating(struct display *d)
     choose_width_height(d, d->req_width, d->req_height);
 }
 
+void
+do_hotplug(struct display *display) {
+    if (display->touch) {
+        char property[PROPERTY_VALUE_MAX];
+        int width = floor(display->width * display->scale);
+        int height = floor(display->height * display->scale);
+
+        if (property_get("persist.waydroid.width_padding", property, nullptr) > 0)
+            width -= atoi(property);
+        std::string width_str = std::to_string(width);
+        property_set("waydroid.display_width", width_str.c_str());
+
+        if (property_get("persist.waydroid.height_padding", property, nullptr) > 0)
+            height -= atoi(property);
+        std::string height_str = std::to_string(height);
+        property_set("waydroid.display_height", height_str.c_str());
+
+        display->input_fd[INPUT_TOUCH] = -1;
+        remove(INPUT_PIPE_NAME[INPUT_TOUCH]);
+        mkfifo(INPUT_PIPE_NAME[INPUT_TOUCH], S_IRWXO | S_IRWXG | S_IRWXU);
+        chown(INPUT_PIPE_NAME[INPUT_TOUCH], 1000, 1000);
+    }
+    if (display->procs && display->procs->invalidate) {
+        display->needHotplug = true;
+        display->procs->invalidate(display->procs);
+    }
+}
+
 static void
 xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
                               int32_t width, int32_t height,
@@ -191,10 +219,7 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
         choose_width_height(display, width, height);
         if (display->wm_base)
             xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width, display->height);
-        if (display->procs && display->procs->invalidate) {
-            display->needHotplug = true;
-            display->procs->invalidate(display->procs);
-        }
+        do_hotplug(display);
     }
 }
 
@@ -259,10 +284,7 @@ shell_surface_configure(void *data, struct wl_shell_surface *, uint32_t, int32_t
 
     if (display->height && display->width) {
         choose_width_height(display, width, height);
-        if (display->procs && display->procs->invalidate) {
-            display->needHotplug = true;
-            display->procs->invalidate(display->procs);
-        }
+        do_hotplug(display);
     }
 }
 
