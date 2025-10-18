@@ -615,15 +615,27 @@ window::layer::layer(wl_surface *surface, wp_viewport *viewport, wl_subsurface *
 window::layer::~layer() {
     if (subsurface)
         wl_subsurface_destroy(subsurface);
+    if (locked_pointer)
+        zwp_locked_pointer_v1_destroy(locked_pointer);
 }
-window::layer::layer(window::layer&& other) : surface_context(std::move(static_cast<surface_context&>(other))), subsurface(other.subsurface) {
+window::layer::layer(window::layer&& other) :
+        surface_context(std::move(static_cast<surface_context&>(other))),
+        subsurface(other.subsurface),
+        locked_pointer(other.locked_pointer) {
     other.subsurface = nullptr;
+    other.locked_pointer = nullptr;
 }
 window::layer& window::layer::operator=(window::layer&& rhs) {
     if (subsurface)
         wl_subsurface_destroy(subsurface);
+    if (locked_pointer)
+        zwp_locked_pointer_v1_destroy(locked_pointer);
+
     subsurface = rhs.subsurface;
+    locked_pointer = rhs.locked_pointer;
+
     rhs.subsurface = nullptr;
+    rhs.locked_pointer = nullptr;
 
     surface_context::operator=(std::move(rhs));
 

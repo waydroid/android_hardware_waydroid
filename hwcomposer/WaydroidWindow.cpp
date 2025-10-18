@@ -78,21 +78,29 @@ Return<void> WaydroidWindow::setPointerCapture(const hidl_string& packageName, b
     for (auto& [id, window] : mDisplay->windows) {
         if (window->appID == windowName) {
             ALOGI("%slocking pointer for %s#%s", enabled ? "" : "un", window->appID.c_str(), window->taskID.c_str());
-            if (enabled && window->locked_pointer == nullptr) {
-                window->locked_pointer = zwp_pointer_constraints_v1_lock_pointer(
-                        mDisplay->pointer_constraints,
-                        window->surface, mDisplay->pointer, nullptr,
-                        ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_PERSISTENT);
-                if (mDisplay->relative_pointer == nullptr) {
-                    mDisplay->relative_pointer = zwp_relative_pointer_manager_v1_get_relative_pointer(
-                            mDisplay->relative_pointer_manager, mDisplay->pointer);
-                    zwp_relative_pointer_v1_add_listener(mDisplay->relative_pointer, &relative_pointer_listener, mDisplay);
+            for (auto& layer : window->layers) {
+                if (enabled && !layer.locked_pointer) {
+                    layer.locked_pointer = zwp_pointer_constraints_v1_lock_pointer(
+                            mDisplay->pointer_constraints,
+                            layer.surface, mDisplay->pointer, nullptr,
+                            ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_PERSISTENT);
+                } else if (!enabled && layer.locked_pointer) {
+                    zwp_locked_pointer_v1_destroy(layer.locked_pointer);
+                    layer.locked_pointer = nullptr;
                 }
-            } else if (!enabled && window->locked_pointer != nullptr) {
-                zwp_locked_pointer_v1_destroy(window->locked_pointer);
-                window->locked_pointer = nullptr;
-
-                if (!std::any_of(mDisplay->windows.begin(), mDisplay->windows.end(), [](auto& pair){ return pair.second->locked_pointer; })) {
+            }
+            if (enabled && !mDisplay->relative_pointer) {
+                mDisplay->relative_pointer = zwp_relative_pointer_manager_v1_get_relative_pointer(
+                        mDisplay->relative_pointer_manager, mDisplay->pointer);
+                zwp_relative_pointer_v1_add_listener(mDisplay->relative_pointer, &relative_pointer_listener, mDisplay);
+            } else if (!enabled && mDisplay->relative_pointer) {
+                bool any_locks =
+                    std::any_of(mDisplay->windows.begin(), mDisplay->windows.end(), [](auto& pair) {
+                        return std::any_of(pair.second->layers.begin(), pair.second->layers.end(), [](auto& layer) {
+                            return layer.locked_pointer;
+                        });
+                    });
+                if (!any_locks) {
                     zwp_relative_pointer_v1_destroy(mDisplay->relative_pointer);
                     mDisplay->relative_pointer = nullptr;
                 }
