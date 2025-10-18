@@ -171,6 +171,7 @@ struct surface_context {
 struct window {
     struct layer : public surface_context {
         struct wl_subsurface *subsurface;
+        struct zwp_locked_pointer_v1 *locked_pointer {};
 
         layer() = default;
         layer(wl_surface *surface, wp_viewport *viewport, wl_subsurface *subsurface = nullptr);
@@ -194,7 +195,6 @@ struct window {
     struct wp_viewport *viewport;
     struct wl_buffer *bg_buffer;
 
-    struct zwp_locked_pointer_v1 *locked_pointer;
     struct zwp_idle_inhibitor_v1 *idle_inhibitor;
 
     std::vector<layer> layers;
