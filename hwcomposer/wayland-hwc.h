@@ -190,7 +190,7 @@ struct window {
     struct xdg_toplevel *xdg_toplevel;
 
     /* Used for the background color */
-    bool destroy_background_objects;
+    bool dedicated_background_surface;
     struct wl_surface *surface;
     struct wp_viewport *viewport;
     struct wl_buffer *bg_buffer;
