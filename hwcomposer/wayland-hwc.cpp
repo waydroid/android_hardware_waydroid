@@ -401,7 +401,7 @@ window::~window() {
         wl_region_destroy(input_region);
 
     layers.clear();
-    if (destroy_background_objects) {
+    if (dedicated_background_surface) {
         if (viewport)
             wp_viewport_destroy(viewport);
         if (surface) {
@@ -441,7 +441,7 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
     if (display->viewporter)
         window->viewport = wp_viewporter_get_viewport(display->viewporter, window->surface);
     window->taskID = std::move(taskID);
-    window->destroy_background_objects = true;
+    window->dedicated_background_surface = true;
     window->bg_buffer = nullptr;
 
     int fd = syscall(SYS_memfd_create, "buffer", 0);
@@ -558,7 +558,7 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
     if (!display->subcompositor ||
         !display->viewporter ||
         property_get_bool("persist.waydroid.no_background_subsurface", false)) {
-        window->destroy_background_objects = false;
+        window->dedicated_background_surface = false;
         window->layers.emplace_back(window->surface, window->viewport);
         wl_shm_pool_destroy(pool);
         wl_surface_commit(window->surface);
