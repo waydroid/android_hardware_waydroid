@@ -194,6 +194,7 @@ struct window {
     struct wl_surface *surface;
     struct wp_viewport *viewport;
     struct wl_buffer *bg_buffer;
+    struct zwp_locked_pointer_v1 *locked_pointer;
 
     struct zwp_idle_inhibitor_v1 *idle_inhibitor;
 
