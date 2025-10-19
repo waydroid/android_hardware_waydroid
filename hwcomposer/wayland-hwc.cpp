@@ -408,6 +408,8 @@ window::~window() {
             wl_surface_set_user_data(surface, nullptr);
             wl_surface_destroy(surface);
         }
+        if (locked_pointer)
+            zwp_locked_pointer_v1_destroy(locked_pointer);
     }
 
     wl_display_flush(display->display);

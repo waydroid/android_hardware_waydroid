@@ -75,6 +75,9 @@ Return<void> WaydroidWindow::setPointerCapture(const hidl_string& packageName, b
     for (auto& [id, window] : mDisplay->windows) {
         if (window->appID == windowName) {
             ALOGI("%slocking pointer for %s#%s", enabled ? "" : "un", window->appID.c_str(), window->taskID.c_str());
+            /* Lock both the toplevel and all subsurfaces:
+             * https://gitlab.freedesktop.org/wayland/wayland-protocols/-/issues/287
+             */
             for (auto& layer : window->layers) {
                 if (enabled && !layer.locked_pointer) {
                     layer.locked_pointer = zwp_pointer_constraints_v1_lock_pointer(
@@ -86,12 +89,23 @@ Return<void> WaydroidWindow::setPointerCapture(const hidl_string& packageName, b
                     layer.locked_pointer = nullptr;
                 }
             }
+            if (enabled && window->dedicated_background_surface && !window->locked_pointer) {
+                window->locked_pointer = zwp_pointer_constraints_v1_lock_pointer(
+                        mDisplay->pointer_constraints,
+                        window->surface, mDisplay->pointer, nullptr,
+                        ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_PERSISTENT);
+            } else if (!enabled && window->dedicated_background_surface && window->locked_pointer) {
+                zwp_locked_pointer_v1_destroy(window->locked_pointer);
+                window->locked_pointer = nullptr;
+            }
+
             if (enabled && !mDisplay->relative_pointer) {
                 mDisplay->relative_pointer = zwp_relative_pointer_manager_v1_get_relative_pointer(
                         mDisplay->relative_pointer_manager, mDisplay->pointer);
                 zwp_relative_pointer_v1_add_listener(mDisplay->relative_pointer, &relative_pointer_listener, mDisplay);
             } else if (!enabled && mDisplay->relative_pointer) {
                 bool any_locks =
+                    window->locked_pointer ||
                     std::any_of(mDisplay->windows.begin(), mDisplay->windows.end(), [](auto& pair) {
                         return std::any_of(pair.second->layers.begin(), pair.second->layers.end(), [](auto& layer) {
                             return layer.locked_pointer;
