@@ -727,6 +727,8 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
 
     pdev->blacklisted_apps["com.android.launcher3"] = {};
     pdev->blacklisted_apps["com.android.settings"] = {"com.android.settings.FallbackHome"};
+    pdev->blacklisted_apps["com.android.tv.settings"] = {"com.android.tv.settings.system.FallbackHome"};
+    pdev->blacklisted_apps["com.google.android.tvlauncher"] = {};
     if (property_get("waydroid.blacklist_apps", property, nullptr) > 0) {
         std::string blacklist_apps = std::string(property);
         std::istringstream iss(blacklist_apps);
