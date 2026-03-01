@@ -53,6 +53,7 @@ namespace {
             case HAL_PIXEL_FORMAT_RGBX_8888:
                 fmt = WL_SHM_FORMAT_XRGB8888;
                 break;
+            case HAL_PIXEL_FORMAT_BGRA_8888:
             case HAL_PIXEL_FORMAT_RGBA_8888:
                 fmt = WL_SHM_FORMAT_ARGB8888;
                 break;
