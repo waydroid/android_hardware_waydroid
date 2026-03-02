@@ -143,8 +143,17 @@ static void data_device_handle_data_offer(void *data, struct wl_data_device *, s
     wl_data_offer_add_listener(offer, &data_offer_listener, display);
 }
 
+static void data_device_handle_enter(void *, struct wl_data_device *, uint32_t, struct wl_surface *, wl_fixed_t, wl_fixed_t, struct wl_data_offer *) {}
+static void data_device_handle_leave(void *, struct wl_data_device *) {}
+static void data_device_handle_motion(void *, struct wl_data_device *, uint32_t, wl_fixed_t, wl_fixed_t) {}
+static void data_device_handle_drop(void *, struct wl_data_device *) {}
+
 static const struct wl_data_device_listener data_device_listener = {
     .data_offer = data_device_handle_data_offer,
+    .enter = data_device_handle_enter,
+    .leave = data_device_handle_leave,
+    .motion = data_device_handle_motion,
+    .drop = data_device_handle_drop,
     .selection = data_device_handle_selection,
 };
 
