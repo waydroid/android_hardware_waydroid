@@ -399,6 +399,8 @@ window::~window() {
         wl_buffer_destroy(bg_buffer);
     if (input_region)
         wl_region_destroy(input_region);
+    if (idle_inhibitor)
+        zwp_idle_inhibitor_v1_destroy(idle_inhibitor);
 
     layers.clear();
     if (dedicated_background_surface) {
