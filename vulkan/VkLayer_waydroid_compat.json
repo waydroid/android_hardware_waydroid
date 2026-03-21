@@ -1,0 +1,11 @@
+{
+    "file_format_version": "1.0.0",
+    "layer": {
+        "name": "VK_LAYER_WAYDROID_compat",
+        "type": "GLOBAL",
+        "library_path": "/vendor/lib64/vulkan/VkLayer_waydroid_compat.so",
+        "api_version": "1.3.0",
+        "implementation_version": "1",
+        "description": "Waydroid ETC2/EAC format compatibility layer"
+    }
+}

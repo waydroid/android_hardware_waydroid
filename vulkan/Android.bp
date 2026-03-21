@@ -1,0 +1,38 @@
+// Copyright (C) 2026 The Waydroid Project
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+cc_library_shared {
+    name: "VkLayer_waydroid_compat",
+    vendor: true,
+    relative_install_path: "vulkan",
+    srcs: ["VkLayer_waydroid_compat.c"],
+    header_libs: [
+        "vulkan_headers",
+    ],
+    cflags: [
+        "-DLOG_TAG=\"VkLayer_waydroid_compat\"",
+        "-Wall",
+        "-Werror",
+        "-fvisibility=hidden",
+    ],
+    ldflags: ["-Wl,--no-undefined"],
+}
+
+// Install the layer manifest JSON to vendor/etc/vulkan/implicit_layer.d/
+prebuilt_etc {
+    name: "VkLayer_waydroid_compat.json",
+    vendor: true,
+    sub_dir: "vulkan/implicit_layer.d",
+    src: "VkLayer_waydroid_compat.json",
+}
