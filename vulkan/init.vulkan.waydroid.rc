@@ -1,0 +1,5 @@
+# Enable ETC2/EAC Vulkan compat layer on Intel GPUs.
+# Mesa ANV does not handle AHardwareBuffer with ETC2 formats,
+# causing ARM64 apps to crash with SIGABRT.
+on property:ro.hardware.vulkan=intel
+    setprop debug.vulkan.layers VK_LAYER_WAYDROID_compat

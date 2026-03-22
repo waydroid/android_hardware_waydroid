@@ -26,6 +26,9 @@
  * This layer intercepts vkGetPhysicalDeviceFormatProperties{,2} and
  * reports zero feature flags for all ETC2/EAC formats, causing apps
  * to fall back to uncompressed textures.
+ *
+ * Note: uses a single global dispatch table. This is safe for Waydroid
+ * since it only ever creates a single Vulkan instance per container.
  */
 
 #include <string.h>
@@ -33,7 +36,6 @@
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_layer.h>
 
-/* Dispatch table, single-instance (Waydroid only creates one) */
 typedef struct {
     PFN_vkGetInstanceProcAddr GetInstanceProcAddr;
     PFN_vkDestroyInstance DestroyInstance;
@@ -64,7 +66,29 @@ static int is_etc2_eac_format(VkFormat format)
     }
 }
 
-/* Intercepted: zero out features for ETC2/EAC formats */
+static void zero_format_features(VkFormatProperties *props)
+{
+    props->linearTilingFeatures = 0;
+    props->optimalTilingFeatures = 0;
+    props->bufferFeatures = 0;
+}
+
+/* Walk the pNext chain and zero out VkFormatProperties3 if present */
+static void zero_format_features3(VkFormatProperties2 *pFormatProperties)
+{
+    VkBaseOutStructure *ext = (VkBaseOutStructure *)pFormatProperties->pNext;
+    while (ext) {
+        if (ext->sType == VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3) {
+            VkFormatProperties3 *props3 = (VkFormatProperties3 *)ext;
+            props3->linearTilingFeatures = 0;
+            props3->optimalTilingFeatures = 0;
+            props3->bufferFeatures = 0;
+            break;
+        }
+        ext = ext->pNext;
+    }
+}
+
 static VKAPI_ATTR void VKAPI_CALL
 compat_GetPhysicalDeviceFormatProperties(VkPhysicalDevice physicalDevice,
                                          VkFormat format,
@@ -72,11 +96,8 @@ compat_GetPhysicalDeviceFormatProperties(VkPhysicalDevice physicalDevice,
 {
     g_dispatch.GetPhysicalDeviceFormatProperties(physicalDevice, format,
                                                  pFormatProperties);
-    if (is_etc2_eac_format(format)) {
-        pFormatProperties->linearTilingFeatures = 0;
-        pFormatProperties->optimalTilingFeatures = 0;
-        pFormatProperties->bufferFeatures = 0;
-    }
+    if (is_etc2_eac_format(format))
+        zero_format_features(pFormatProperties);
 }
 
 static VKAPI_ATTR void VKAPI_CALL
@@ -87,9 +108,8 @@ compat_GetPhysicalDeviceFormatProperties2(VkPhysicalDevice physicalDevice,
     g_dispatch.GetPhysicalDeviceFormatProperties2(physicalDevice, format,
                                                   pFormatProperties);
     if (is_etc2_eac_format(format)) {
-        pFormatProperties->formatProperties.linearTilingFeatures = 0;
-        pFormatProperties->formatProperties.optimalTilingFeatures = 0;
-        pFormatProperties->formatProperties.bufferFeatures = 0;
+        zero_format_features(&pFormatProperties->formatProperties);
+        zero_format_features3(pFormatProperties);
     }
 }
 

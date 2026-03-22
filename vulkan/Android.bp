@@ -27,6 +27,7 @@ cc_library_shared {
         "-fvisibility=hidden",
     ],
     ldflags: ["-Wl,--no-undefined"],
+    init_rc: ["init.vulkan.waydroid.rc"],
 }
 
 // Install the layer manifest JSON to vendor/etc/vulkan/implicit_layer.d/
