@@ -194,14 +194,6 @@ compat_GetInstanceProcAddr(VkInstance instance, const char *pName)
     return NULL;
 }
 
-static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
-compat_GetDeviceProcAddr(VkDevice device, const char *pName)
-{
-    (void)device;
-    (void)pName;
-    return NULL;
-}
-
 /* Layer negotiation (loader interface version 2) */
 __attribute__((visibility("default"))) VKAPI_ATTR VkResult VKAPI_CALL
 vkNegotiateLoaderLayerInterfaceVersion(
@@ -218,7 +210,7 @@ vkNegotiateLoaderLayerInterfaceVersion(
     }
 
     pVersionStruct->pfnGetInstanceProcAddr = compat_GetInstanceProcAddr;
-    pVersionStruct->pfnGetDeviceProcAddr = compat_GetDeviceProcAddr;
+    pVersionStruct->pfnGetDeviceProcAddr = NULL;
     pVersionStruct->pfnGetPhysicalDeviceProcAddr = NULL;
 
     return VK_SUCCESS;
