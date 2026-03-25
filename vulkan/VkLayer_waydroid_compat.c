@@ -33,8 +33,17 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <pthread.h>
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_layer.h>
+
+#ifdef __ANDROID__
+#include <android/log.h>
+#define LOG_TAG "VkLayer_waydroid_compat"
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#else
+#define LOGE(...) ((void)0)
+#endif
 
 /* ---- Per-instance dispatch ---- */
 
@@ -52,8 +61,10 @@ typedef struct InstanceDispatchEntry {
 } InstanceDispatchEntry;
 
 static InstanceDispatchEntry *g_instances = NULL;
+static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 
-static InstanceDispatch *find_instance_dispatch(VkInstance instance)
+/* Caller must hold g_lock */
+static InstanceDispatch *find_instance_dispatch_locked(VkInstance instance)
 {
     InstanceDispatchEntry *entry = g_instances;
     while (entry) {
@@ -71,7 +82,8 @@ static InstanceDispatch *find_instance_dispatch(VkInstance instance)
  * parent instance (the loader guarantees this). We use it to map a
  * VkPhysicalDevice back to the instance dispatch we stored at creation.
  */
-static InstanceDispatch *find_phys_dev_dispatch(VkPhysicalDevice physicalDevice)
+/* Caller must hold g_lock */
+static InstanceDispatch *find_phys_dev_dispatch_locked(VkPhysicalDevice physicalDevice)
 {
     void *key = *(void **)physicalDevice;
     InstanceDispatchEntry *entry = g_instances;
@@ -134,11 +146,19 @@ compat_GetPhysicalDeviceFormatProperties(VkPhysicalDevice physicalDevice,
                                          VkFormat format,
                                          VkFormatProperties *pFormatProperties)
 {
-    InstanceDispatch *dispatch = find_phys_dev_dispatch(physicalDevice);
-    if (!dispatch)
+    PFN_vkGetPhysicalDeviceFormatProperties fn = NULL;
+
+    pthread_mutex_lock(&g_lock);
+    InstanceDispatch *dispatch = find_phys_dev_dispatch_locked(physicalDevice);
+    if (dispatch)
+        fn = dispatch->GetPhysicalDeviceFormatProperties;
+    pthread_mutex_unlock(&g_lock);
+
+    if (!fn) {
+        LOGE("dispatch lookup failed for vkGetPhysicalDeviceFormatProperties");
         return;
-    dispatch->GetPhysicalDeviceFormatProperties(physicalDevice, format,
-                                                pFormatProperties);
+    }
+    fn(physicalDevice, format, pFormatProperties);
     if (is_etc2_eac_format(format))
         zero_format_features(pFormatProperties);
 }
@@ -148,11 +168,19 @@ compat_GetPhysicalDeviceFormatProperties2(VkPhysicalDevice physicalDevice,
                                           VkFormat format,
                                           VkFormatProperties2 *pFormatProperties)
 {
-    InstanceDispatch *dispatch = find_phys_dev_dispatch(physicalDevice);
-    if (!dispatch)
+    PFN_vkGetPhysicalDeviceFormatProperties2 fn = NULL;
+
+    pthread_mutex_lock(&g_lock);
+    InstanceDispatch *dispatch = find_phys_dev_dispatch_locked(physicalDevice);
+    if (dispatch)
+        fn = dispatch->GetPhysicalDeviceFormatProperties2;
+    pthread_mutex_unlock(&g_lock);
+
+    if (!fn) {
+        LOGE("dispatch lookup failed for vkGetPhysicalDeviceFormatProperties2");
         return;
-    dispatch->GetPhysicalDeviceFormatProperties2(physicalDevice, format,
-                                                 pFormatProperties);
+    }
+    fn(physicalDevice, format, pFormatProperties);
     if (is_etc2_eac_format(format)) {
         zero_format_features(&pFormatProperties->formatProperties);
         zero_format_features3(pFormatProperties);
@@ -217,8 +245,10 @@ compat_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
                     *pInstance, "vkGetPhysicalDeviceFormatProperties2");
 
     /* Prepend to linked list */
+    pthread_mutex_lock(&g_lock);
     entry->next = g_instances;
     g_instances = entry;
+    pthread_mutex_unlock(&g_lock);
 
     return VK_SUCCESS;
 }
@@ -227,20 +257,26 @@ static VKAPI_ATTR void VKAPI_CALL
 compat_DestroyInstance(VkInstance instance,
                       const VkAllocationCallbacks *pAllocator)
 {
+    PFN_vkDestroyInstance destroy_fn = NULL;
+
+    pthread_mutex_lock(&g_lock);
     InstanceDispatchEntry **prev = &g_instances;
     InstanceDispatchEntry *entry = g_instances;
 
     while (entry) {
         if (entry->instance == instance) {
             *prev = entry->next;
-            if (entry->dispatch.DestroyInstance)
-                entry->dispatch.DestroyInstance(instance, pAllocator);
+            destroy_fn = entry->dispatch.DestroyInstance;
             free(entry);
-            return;
+            break;
         }
         prev = &entry->next;
         entry = entry->next;
     }
+    pthread_mutex_unlock(&g_lock);
+
+    if (destroy_fn)
+        destroy_fn(instance, pAllocator);
 }
 
 /* ---- GetInstanceProcAddr ---- */
@@ -259,9 +295,16 @@ compat_GetInstanceProcAddr(VkInstance instance, const char *pName)
     if (strcmp(pName, "vkGetPhysicalDeviceFormatProperties2KHR") == 0)
         return (PFN_vkVoidFunction)compat_GetPhysicalDeviceFormatProperties2;
 
-    InstanceDispatch *dispatch = find_instance_dispatch(instance);
+    PFN_vkGetInstanceProcAddr gipa = NULL;
+
+    pthread_mutex_lock(&g_lock);
+    InstanceDispatch *dispatch = find_instance_dispatch_locked(instance);
     if (dispatch)
-        return dispatch->GetInstanceProcAddr(instance, pName);
+        gipa = dispatch->GetInstanceProcAddr;
+    pthread_mutex_unlock(&g_lock);
+
+    if (gipa)
+        return gipa(instance, pName);
     return NULL;
 }
 

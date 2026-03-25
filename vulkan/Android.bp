@@ -20,6 +20,9 @@ cc_library_shared {
     header_libs: [
         "vulkan_headers",
     ],
+    shared_libs: [
+        "liblog",
+    ],
     cflags: [
         "-DLOG_TAG=\"VkLayer_waydroid_compat\"",
         "-Wall",
