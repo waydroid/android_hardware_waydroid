@@ -222,21 +222,22 @@ compat_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
     if (result != VK_SUCCESS)
         return result;
 
+    PFN_vkDestroyInstance destroy_fn =
+            (PFN_vkDestroyInstance)next_gipa(*pInstance, "vkDestroyInstance");
+
     /* Allocate and populate a per-instance dispatch entry */
     InstanceDispatchEntry *entry =
             (InstanceDispatchEntry *)malloc(sizeof(InstanceDispatchEntry));
     if (!entry) {
-        PFN_vkDestroyInstance destroy =
-                (PFN_vkDestroyInstance)next_gipa(*pInstance, "vkDestroyInstance");
-        if (destroy)
-            destroy(*pInstance, pAllocator);
+        LOGE("malloc failed for InstanceDispatchEntry");
+        if (destroy_fn)
+            destroy_fn(*pInstance, pAllocator);
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
 
     entry->instance = *pInstance;
     entry->dispatch.GetInstanceProcAddr = next_gipa;
-    entry->dispatch.DestroyInstance =
-            (PFN_vkDestroyInstance)next_gipa(*pInstance, "vkDestroyInstance");
+    entry->dispatch.DestroyInstance = destroy_fn;
     entry->dispatch.GetPhysicalDeviceFormatProperties =
             (PFN_vkGetPhysicalDeviceFormatProperties)next_gipa(
                     *pInstance, "vkGetPhysicalDeviceFormatProperties");
