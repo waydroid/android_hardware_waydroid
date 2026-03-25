@@ -27,8 +27,8 @@
  * reports zero feature flags for all ETC2/EAC formats, causing apps
  * to fall back to uncompressed textures.
  *
- * Note: uses a single global dispatch table. This is safe for Waydroid
- * since it only ever creates a single Vulkan instance per container.
+ * Dispatch tables are stored per-instance to correctly handle multiple
+ * VkInstance objects (e.g. from apps and native services).
  */
 
 #include <string.h>
@@ -36,16 +36,54 @@
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_layer.h>
 
+/* ---- Per-instance dispatch ---- */
+
 typedef struct {
     PFN_vkGetInstanceProcAddr GetInstanceProcAddr;
     PFN_vkDestroyInstance DestroyInstance;
-    PFN_vkEnumeratePhysicalDevices EnumeratePhysicalDevices;
     PFN_vkGetPhysicalDeviceFormatProperties GetPhysicalDeviceFormatProperties;
     PFN_vkGetPhysicalDeviceFormatProperties2 GetPhysicalDeviceFormatProperties2;
-    PFN_vkEnumerateDeviceExtensionProperties EnumerateDeviceExtensionProperties;
 } InstanceDispatch;
 
-static InstanceDispatch g_dispatch;
+typedef struct InstanceDispatchEntry {
+    VkInstance instance;
+    InstanceDispatch dispatch;
+    struct InstanceDispatchEntry *next;
+} InstanceDispatchEntry;
+
+static InstanceDispatchEntry *g_instances = NULL;
+
+static InstanceDispatch *find_instance_dispatch(VkInstance instance)
+{
+    InstanceDispatchEntry *entry = g_instances;
+    while (entry) {
+        if (entry->instance == instance)
+            return &entry->dispatch;
+        entry = entry->next;
+    }
+    return NULL;
+}
+
+/*
+ * The Vulkan loader sets the first pointer-sized field of any dispatchable
+ * handle (VkInstance, VkPhysicalDevice, VkDevice, etc.) to point to the
+ * loader's dispatch table. Physical devices share this key with their
+ * parent instance (the loader guarantees this). We use it to map a
+ * VkPhysicalDevice back to the instance dispatch we stored at creation.
+ */
+static InstanceDispatch *find_phys_dev_dispatch(VkPhysicalDevice physicalDevice)
+{
+    void *key = *(void **)physicalDevice;
+    InstanceDispatchEntry *entry = g_instances;
+    while (entry) {
+        if (*(void **)entry->instance == key)
+            return &entry->dispatch;
+        entry = entry->next;
+    }
+    return NULL;
+}
+
+/* ---- ETC2/EAC format masking ---- */
 
 static int is_etc2_eac_format(VkFormat format)
 {
@@ -89,13 +127,18 @@ static void zero_format_features3(VkFormatProperties2 *pFormatProperties)
     }
 }
 
+/* ---- Intercepted entry points ---- */
+
 static VKAPI_ATTR void VKAPI_CALL
 compat_GetPhysicalDeviceFormatProperties(VkPhysicalDevice physicalDevice,
                                          VkFormat format,
                                          VkFormatProperties *pFormatProperties)
 {
-    g_dispatch.GetPhysicalDeviceFormatProperties(physicalDevice, format,
-                                                 pFormatProperties);
+    InstanceDispatch *dispatch = find_phys_dev_dispatch(physicalDevice);
+    if (!dispatch)
+        return;
+    dispatch->GetPhysicalDeviceFormatProperties(physicalDevice, format,
+                                                pFormatProperties);
     if (is_etc2_eac_format(format))
         zero_format_features(pFormatProperties);
 }
@@ -105,15 +148,19 @@ compat_GetPhysicalDeviceFormatProperties2(VkPhysicalDevice physicalDevice,
                                           VkFormat format,
                                           VkFormatProperties2 *pFormatProperties)
 {
-    g_dispatch.GetPhysicalDeviceFormatProperties2(physicalDevice, format,
-                                                  pFormatProperties);
+    InstanceDispatch *dispatch = find_phys_dev_dispatch(physicalDevice);
+    if (!dispatch)
+        return;
+    dispatch->GetPhysicalDeviceFormatProperties2(physicalDevice, format,
+                                                 pFormatProperties);
     if (is_etc2_eac_format(format)) {
         zero_format_features(&pFormatProperties->formatProperties);
         zero_format_features3(pFormatProperties);
     }
 }
 
-/* Instance creation: set up dispatch chain */
+/* ---- Instance lifecycle ---- */
+
 static VKAPI_ATTR VkResult VKAPI_CALL
 compat_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
                      const VkAllocationCallbacks *pAllocator,
@@ -147,21 +194,31 @@ compat_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
     if (result != VK_SUCCESS)
         return result;
 
-    g_dispatch.GetInstanceProcAddr = next_gipa;
-    g_dispatch.DestroyInstance =
+    /* Allocate and populate a per-instance dispatch entry */
+    InstanceDispatchEntry *entry =
+            (InstanceDispatchEntry *)malloc(sizeof(InstanceDispatchEntry));
+    if (!entry) {
+        PFN_vkDestroyInstance destroy =
+                (PFN_vkDestroyInstance)next_gipa(*pInstance, "vkDestroyInstance");
+        if (destroy)
+            destroy(*pInstance, pAllocator);
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+
+    entry->instance = *pInstance;
+    entry->dispatch.GetInstanceProcAddr = next_gipa;
+    entry->dispatch.DestroyInstance =
             (PFN_vkDestroyInstance)next_gipa(*pInstance, "vkDestroyInstance");
-    g_dispatch.EnumeratePhysicalDevices =
-            (PFN_vkEnumeratePhysicalDevices)next_gipa(
-                    *pInstance, "vkEnumeratePhysicalDevices");
-    g_dispatch.GetPhysicalDeviceFormatProperties =
+    entry->dispatch.GetPhysicalDeviceFormatProperties =
             (PFN_vkGetPhysicalDeviceFormatProperties)next_gipa(
                     *pInstance, "vkGetPhysicalDeviceFormatProperties");
-    g_dispatch.GetPhysicalDeviceFormatProperties2 =
+    entry->dispatch.GetPhysicalDeviceFormatProperties2 =
             (PFN_vkGetPhysicalDeviceFormatProperties2)next_gipa(
                     *pInstance, "vkGetPhysicalDeviceFormatProperties2");
-    g_dispatch.EnumerateDeviceExtensionProperties =
-            (PFN_vkEnumerateDeviceExtensionProperties)next_gipa(
-                    *pInstance, "vkEnumerateDeviceExtensionProperties");
+
+    /* Prepend to linked list */
+    entry->next = g_instances;
+    g_instances = entry;
 
     return VK_SUCCESS;
 }
@@ -170,10 +227,23 @@ static VKAPI_ATTR void VKAPI_CALL
 compat_DestroyInstance(VkInstance instance,
                       const VkAllocationCallbacks *pAllocator)
 {
-    if (g_dispatch.DestroyInstance)
-        g_dispatch.DestroyInstance(instance, pAllocator);
-    memset(&g_dispatch, 0, sizeof(g_dispatch));
+    InstanceDispatchEntry **prev = &g_instances;
+    InstanceDispatchEntry *entry = g_instances;
+
+    while (entry) {
+        if (entry->instance == instance) {
+            *prev = entry->next;
+            if (entry->dispatch.DestroyInstance)
+                entry->dispatch.DestroyInstance(instance, pAllocator);
+            free(entry);
+            return;
+        }
+        prev = &entry->next;
+        entry = entry->next;
+    }
 }
+
+/* ---- GetInstanceProcAddr ---- */
 
 __attribute__((visibility("default"))) VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
 compat_GetInstanceProcAddr(VkInstance instance, const char *pName)
@@ -189,12 +259,14 @@ compat_GetInstanceProcAddr(VkInstance instance, const char *pName)
     if (strcmp(pName, "vkGetPhysicalDeviceFormatProperties2KHR") == 0)
         return (PFN_vkVoidFunction)compat_GetPhysicalDeviceFormatProperties2;
 
-    if (g_dispatch.GetInstanceProcAddr)
-        return g_dispatch.GetInstanceProcAddr(instance, pName);
+    InstanceDispatch *dispatch = find_instance_dispatch(instance);
+    if (dispatch)
+        return dispatch->GetInstanceProcAddr(instance, pName);
     return NULL;
 }
 
-/* Layer negotiation (loader interface version 2) */
+/* ---- Layer negotiation (loader interface version 2) ---- */
+
 __attribute__((visibility("default"))) VKAPI_ATTR VkResult VKAPI_CALL
 vkNegotiateLoaderLayerInterfaceVersion(
         VkNegotiateLayerInterface *pVersionStruct)
@@ -215,6 +287,8 @@ vkNegotiateLoaderLayerInterfaceVersion(
 
     return VK_SUCCESS;
 }
+
+/* ---- Layer enumeration ---- */
 
 static const VkLayerProperties layer_props = {
         .layerName = "VK_LAYER_WAYDROID_compat",
