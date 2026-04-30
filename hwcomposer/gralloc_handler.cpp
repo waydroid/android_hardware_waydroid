@@ -56,6 +56,9 @@ namespace {
             case HAL_PIXEL_FORMAT_RGBA_8888:
                 fmt = WL_SHM_FORMAT_ARGB8888;
                 break;
+            case 0:
+                fmt = WL_SHM_FORMAT_ARGB8888;
+                break;
             default:
                 ALOGE("Cannot convert hal format to shm format %u", hal_format);
                 return -EINVAL;
