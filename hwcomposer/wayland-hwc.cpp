@@ -155,6 +155,20 @@ void choose_width_height(struct display* display, int32_t hint_width, int32_t hi
     display->height = height;
 }
 
+static void* hwc_wayland_thread(void* data) {
+    auto* display = static_cast<struct wl_display*>(data);
+    int ret = 0;
+
+    setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
+
+    while (ret != -1)
+        ret = wl_display_dispatch(display);
+
+    ALOGE("*** %s: Wayland client was disconnected: %s", __PRETTY_FUNCTION__, strerror(ret));
+
+    abort();
+}
+
 void
 finished_calibrating(struct display *d)
 {
@@ -168,6 +182,16 @@ finished_calibrating(struct display *d)
     }
 
     choose_width_height(d, d->req_width, d->req_height);
+
+    if (!d->wayland_thread_created && pthread_create(&d->wayland_thread, nullptr, hwc_wayland_thread, d->display) != 0) {
+        ALOGE("Couldn't create wayland thread");
+        wl_display_disconnect(d->display);
+        sem_destroy(&d->egl_go);
+        sem_destroy(&d->egl_done);
+        return;
+    }
+
+    d->wayland_thread_created = true;
 }
 
 static void
@@ -498,12 +522,13 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
     window->set_app_id(std::move(appID));
 
     wl_surface_commit(window->surface);
-    // Wait for first configure event
-    do {
-        wl_display_roundtrip(display->display);
-    } while (!window->configured);
 
     if (calibrating) {
+        // Wait for first configure event
+        do {
+            wl_display_roundtrip(display->display);
+        } while (!window->configured);
+
         wp_fractional_scale_v1* fs = nullptr;
         if (display->fractional_scale_manager) {
             // We only support one global scale
@@ -1998,20 +2023,6 @@ void open_windows::erase(const key_type& key) {
     }
 }
 
-static void* hwc_wayland_thread(void* data) {
-    auto* display = static_cast<struct wl_display*>(data);
-    int ret = 0;
-
-    setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
-
-    while (ret != -1)
-        ret = wl_display_dispatch(display);
-
-    ALOGE("*** %s: Wayland client was disconnected: %s", __PRETTY_FUNCTION__, strerror(ret));
-
-    abort();
-}
-
 struct display *
 create_display(const char *gralloc)
 {
@@ -2022,6 +2033,7 @@ create_display(const char *gralloc)
     }
     wl_log_set_handler_client(wayland_log_handler);
     display->system_version = property_get_int32("ro.system.build.version.sdk", 0);
+    display->wayland_thread_created = false;
     display->gtype = get_gralloc_type(gralloc);
     display->refresh = 0;
     display->isMaximized = true;
@@ -2045,14 +2057,6 @@ create_display(const char *gralloc)
     wl_registry_add_listener(display->registry,
                  &registry_listener, display);
     wl_display_roundtrip(display->display);
-
-    if (pthread_create(&display->wayland_thread, nullptr, hwc_wayland_thread, display->display) != 0) {
-        ALOGE("Couldn't create wayland thread");
-        wl_display_disconnect(display->display);
-        sem_destroy(&display->egl_go);
-        sem_destroy(&display->egl_done);
-        return nullptr;
-    }
 
     display->task = IWaydroidTask::getService();
     return display;
