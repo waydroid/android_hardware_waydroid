@@ -340,7 +340,9 @@ struct display {
     double wheelAccumulatorX;
     double wheelAccumulatorY;
     bool wheelEvtIsDiscrete;
+    bool wheelEvtIsTouchpad;
     bool reverseScroll;
+    int scrollSensitivity;
     int zoomSensitivity;
     int gesturePoints[2];
     int gesturePosX;
