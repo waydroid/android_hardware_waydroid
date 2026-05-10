@@ -16,6 +16,7 @@
 
 #include "WaydroidTask.h"
 
+#include <android/api-level.h>
 #include <utils/String16.h>
 #include <utils/String8.h>
 
@@ -69,7 +70,12 @@ Return<void> WaydroidTask::getAppName(const hidl_string& packageName, getAppName
     }
     if (mPlatform != nullptr)
         mPlatform->getAppName(android::String16(packageName.c_str()), &AppName);
-    const char* OutAppName = android::String8(AppName).string();
+    android::String8 AppName8(AppName);
+#if __ANDROID_API__ >= 34
+    const char* OutAppName = AppName8.c_str();
+#else
+    const char* OutAppName = AppName8.string();
+#endif
     if (strlen(OutAppName) == 0)
         OutAppName = packageName.c_str();
     _hidl_cb(OutAppName);
