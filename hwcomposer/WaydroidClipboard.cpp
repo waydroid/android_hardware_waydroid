@@ -27,7 +27,7 @@
 
 #include <wayland-client.h>
 
-static const std::vector<const std::string> MIME_TYPES = {
+static const std::vector<std::string> MIME_TYPES = {
     "text/plain;charset=utf-8",
     "UTF8_STRING",
     "text/plain",
