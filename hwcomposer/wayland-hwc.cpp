@@ -1944,7 +1944,7 @@ get_gralloc_type(const char *gralloc)
         return GrallocType::GRALLOC_DEFAULT;
     } else if (strcmp(gralloc, "gbm") == 0) {
         return GrallocType::GRALLOC_GBM;
-    } else if (str_starts_with(gralloc, "minigbm_") == 0) {
+    } else if (str_starts_with(gralloc, "minigbm") == 0) {
         return GrallocType::GRALLOC_CROS;
     } else {
         return GrallocType::GRALLOC_ANDROID;
