@@ -189,7 +189,7 @@ do_hotplug(struct display *display) {
 
         display->input_fd[INPUT_TOUCH] = -1;
         remove(INPUT_PIPE_NAME[INPUT_TOUCH]);
-        mkfifo(INPUT_PIPE_NAME[INPUT_TOUCH], S_IRWXO | S_IRWXG | S_IRWXU);
+        mkfifo(INPUT_PIPE_NAME[INPUT_TOUCH], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
         chown(INPUT_PIPE_NAME[INPUT_TOUCH], 1000, 1000);
     }
     if (display->procs && display->procs->invalidate) {
@@ -1346,7 +1346,7 @@ seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t wl_caps)
         d->ptrPrvX = 0;
         d->ptrPrvY = 0;
         d->reverseScroll = property_get_bool("persist.waydroid.reverse_scrolling", false);
-        mkfifo(INPUT_PIPE_NAME[INPUT_POINTER], S_IRWXO | S_IRWXG | S_IRWXU);
+        mkfifo(INPUT_PIPE_NAME[INPUT_POINTER], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
         chown(INPUT_PIPE_NAME[INPUT_POINTER], 1000, 1000);
         wl_pointer_add_listener(d->pointer, &pointer_listener, d);
     } else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && d->pointer) {
@@ -1358,7 +1358,7 @@ seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t wl_caps)
     if ((caps & WL_SEAT_CAPABILITY_KEYBOARD) && !d->keyboard) {
         d->keyboard = wl_seat_get_keyboard(seat);
         d->input_fd[INPUT_KEYBOARD] = -1;
-        mkfifo(INPUT_PIPE_NAME[INPUT_KEYBOARD], S_IRWXO | S_IRWXG | S_IRWXU);
+        mkfifo(INPUT_PIPE_NAME[INPUT_KEYBOARD], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
         chown(INPUT_PIPE_NAME[INPUT_KEYBOARD], 1000, 1000);
         wl_keyboard_add_listener(d->keyboard, &keyboard_listener, d);
     } else if (!(caps & WL_SEAT_CAPABILITY_KEYBOARD) && d->keyboard) {
@@ -1370,7 +1370,7 @@ seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t wl_caps)
     if ((caps & WL_SEAT_CAPABILITY_TOUCH) && !d->touch) {
         d->touch = wl_seat_get_touch(seat);
         d->input_fd[INPUT_TOUCH] = -1;
-        mkfifo(INPUT_PIPE_NAME[INPUT_TOUCH], S_IRWXO | S_IRWXG | S_IRWXU);
+        mkfifo(INPUT_PIPE_NAME[INPUT_TOUCH], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
         chown(INPUT_PIPE_NAME[INPUT_TOUCH], 1000, 1000);
         for (int i = 0; i < MAX_TOUCHPOINTS; i++)
             d->touch_id[i] = -1;
@@ -1865,7 +1865,7 @@ static const struct zwp_tablet_seat_v2_listener tablet_seat_listener = {
 
 static void add_tablet_seat(struct display *d) {
     d->input_fd[INPUT_TABLET] = -1;
-    mkfifo(INPUT_PIPE_NAME[INPUT_TABLET], S_IRWXO | S_IRWXG | S_IRWXU);
+    mkfifo(INPUT_PIPE_NAME[INPUT_TABLET], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
     chown(INPUT_PIPE_NAME[INPUT_TABLET], 1000, 1000);
 
     d->tablet_seat = zwp_tablet_manager_v2_get_tablet_seat(d->tablet_manager, d->seat);
@@ -2078,7 +2078,7 @@ create_display(const char *gralloc)
     sem_init(&display->egl_done, 0, 0);
 
     umask(0);
-    mkdir("/dev/input", S_IRWXO | S_IRWXG | S_IRWXU);
+    mkdir("/dev/input", S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
     chown("/dev/input", 1000, 1000);
 
     display->registry = wl_display_get_registry(display->display);
