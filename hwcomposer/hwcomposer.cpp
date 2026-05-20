@@ -102,6 +102,11 @@ namespace {
     }
 
     buffer *get_wl_buffer(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, size_t pos) {
+        if (!layer->handle) {
+            ALOGE("cannot create a wayland buffer for a null handle");
+            return nullptr;
+        }
+
         const auto& gralloc_handler = pdev->gralloc_handler;
         auto metadata = gralloc_handler.get_buffer_metadata(pdev->display, layer, pos);
         buffer *buf = find_cached_buffer(pdev, metadata, layer->handle);
