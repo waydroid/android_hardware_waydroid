@@ -1403,8 +1403,8 @@ gesture_swipe_update(struct display* display, uint32_t axis, int value) {
     ADD_EVENT(EV_ABS, ABS_MT_PRESSURE, 50);
     ADD_EVENT(EV_SYN, SYN_REPORT, 0);
 
-    res = write(display->input_fd[INPUT_TOUCH], &event, sizeof(event));
-    if (res < sizeof(event))
+    res = write(display->input_fd[INPUT_TOUCH], &event, n * sizeof(input_event));
+    if (res < n * sizeof(input_event))
         ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
 }
 
