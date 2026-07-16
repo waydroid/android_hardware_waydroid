@@ -460,8 +460,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             found_cursor = true;
             pdev->display->cursor_handler->apply_cursor(pdev, layer, l);
         } else {
-            if (layer->handle)
-                mode->handle_layer(pdev, layer, l);
+            mode->handle_layer(pdev, layer, l);
         }
     }
     if (!found_cursor) {
