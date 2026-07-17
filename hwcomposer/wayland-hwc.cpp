@@ -201,6 +201,35 @@ do_hotplug(struct display *display) {
     }
 }
 
+/* Grace before concluding "no Waydroid toplevel is engaged" and dozing.
+ * Deliberately lazy: brief focus loss (a drawer peek, an A->B switch, reading
+ * a notification) must not pause apps. Closing all cards and host visibility
+ * loss doze through the immediate visibility path instead; this timer is only
+ * insurance for host states that emit no visibility signal. Tunable via
+ * persist.waydroid.unfocused_doze_ms; 0 disables the unfocused doze. */
+static constexpr int32_t kUnfocusedDozeDefaultMs = 10000;
+
+static std::chrono::milliseconds
+unfocused_doze_grace()
+{
+    return std::chrono::milliseconds(property_get_int32(
+        "persist.waydroid.unfocused_doze_ms", kUnfocusedDozeDefaultMs));
+}
+
+/* (Re)start the grace timer; deactivate_worker re-checks state once it
+ * expires. Safe to call repeatedly -- each call just pushes the deadline. */
+static void
+arm_deactivate_check(struct display *display)
+{
+    auto grace = unfocused_doze_grace();
+    if (grace <= std::chrono::milliseconds::zero())
+        return;
+    std::scoped_lock lock(display->deactivate_mutex);
+    display->deactivate_deadline = std::chrono::steady_clock::now() + grace;
+    display->deactivate_armed = true;
+    display->deactivate_cond.notify_one();
+}
+
 static void
 xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
                               int32_t width, int32_t height,
@@ -236,7 +265,19 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
         && window->taskID != "none" && window->taskID != "0") {
         display->task->setFocusedTask(stoi(window->taskID));
     }
+
+    /* Any activation edge re-evaluates screen power: a rising edge wakes
+     * Android immediately (the resume needs the display awake to produce a
+     * frame); a falling edge only arms the debounced doze via
+     * update_screen_power, never acts synchronously -- during an A->B switch
+     * B's ACTIVATED can arrive right after A's deactivation, and enter/leave
+     * flapping is known. */
+    bool activation_edge = is_activated != window->activated;
+
     window->activated = is_activated;
+
+    if (activation_edge)
+        update_screen_power(display);
 
 #ifdef XDG_TOPLEVEL_STATE_SUSPENDED
     /* suspended (xdg-shell v6+) is the explicit "content not visible" signal,
@@ -535,6 +576,7 @@ surface_handle_enter(void *data, struct wl_surface *, struct wl_output *)
 {
     auto *window = static_cast<struct window *>(data);
     window->outputs_entered++;
+    window->ever_shown = true;
     update_screen_power(window->display);
 }
 
@@ -607,9 +649,6 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
         abort();
     }
 
-    if (display->isMaximized || calibrating) {
-        window->set_maximize(true);
-    }
     // Set title
     if (appID != "Waydroid" && display->task) {
         const hidl_string appID_hidl(appID);
@@ -621,6 +660,15 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
     }
     // Set appID
     window->set_app_id(std::move(appID));
+
+    /* Maximize must come after title/app_id: Mir handles set_maximized
+     * immediately and creates the scene surface right there, so anything not
+     * yet sent is missing from the creation params. qtmir snapshots app_id at
+     * surface creation and ignores later changes, leaving the window
+     * mislabeled under the generic "Waydroid" app. */
+    if (display->isMaximized || calibrating) {
+        window->set_maximize(true);
+    }
 
     wl_surface_commit(window->surface);
     // Wait for first configure event
@@ -845,10 +893,25 @@ send_key_event(display *data, uint32_t key, wl_keyboard_key_state state)
     display->keysDown[(uint8_t)key] = state;
 }
 
+/* How long a freshly-mapped window keeps the Android display awake while it
+ * waits to be shown. Cold starts draw in well under a second once the display
+ * is awake; the bound only guards against a window that never appears. */
+static constexpr auto kNewWindowAwakeGrace = std::chrono::seconds(10);
+
 static bool any_window_visible(struct display *display) {
+    auto now = std::chrono::steady_clock::now();
     for (auto const& [key, w] : display->windows) {
         (void)key;
-        if (w && w->outputs_entered > 0 && !w->suspended)
+        if (!w)
+            continue;
+        if (w->outputs_entered > 0 && !w->suspended)
+            return true;
+        /* A just-launched app hasn't been shown yet, so outputs_entered == 0.
+         * If we let the display sleep now it can never draw its first frame (a
+         * dozed display pauses rendering), the compositor never shows it, and
+         * its card is stranded on the splash. Keep the display awake until it
+         * has been shown once, bounded by kNewWindowAwakeGrace. */
+        if (!w->ever_shown && now - w->created_at < kNewWindowAwakeGrace)
             return true;
     }
     return false;
@@ -858,7 +921,7 @@ static void set_screen_state(struct display *display, bool on) {
     if (display->screen_on == on)
         return;
     display->screen_on = on;
-    ALOGI("waydroid: host visibility changed, turning Android screen %s",
+    ALOGI("waydroid: host visibility/engagement changed, turning Android screen %s",
           on ? "on" : "off");
     /* Inject KEY_SLEEP/KEY_WAKEUP. Android's PhoneWindowManager routes these
      * through goToSleep/wakeUp, so hidden apps powersave (doze) while their
@@ -871,13 +934,81 @@ static void set_screen_state(struct display *display, bool on) {
     send_key_event(display, key, WL_KEYBOARD_KEY_STATE_RELEASED);
 }
 
+/* Whether any window justifies keeping Android resumed: the host has one
+ * focused (ACTIVATED), one is too fresh to have been focused yet (mirrors the
+ * any_window_visible grace), or Android itself asked to stay awake through
+ * a window's idle inhibitor (video playback, PiP). */
+static bool any_window_engaged(struct display *display) {
+    auto now = std::chrono::steady_clock::now();
+    for (auto const& [key, w] : display->windows) {
+        (void)key;
+        if (!w)
+            continue;
+        if (w->activated || w->idle_inhibitor)
+            return true;
+        if (now - w->created_at < kNewWindowAwakeGrace)
+            return true;
+    }
+    return false;
+}
+
 /* Recompute whether anything is on-screen and flip Android's screen power to
  * match. Safe to call from either the wayland thread or the compose thread:
  * windowsMutex is recursive, so re-entry during window::create's roundtrip
- * (which runs under the compose thread's lock) is fine. */
+ * (which runs under the compose thread's lock) is fine.
+ *
+ * Beyond visibility, engagement gates the screen: windows that are visible
+ * but all deactivated (host on its shell/drawer, cards in the spread) must
+ * not keep the top task RESUMED forever -- an ATM-side relaunch of an
+ * already-top RESUMED task is a no-op that never produces a frame, so the
+ * relaunch would hang on the host's splash. Dozing pauses the task in place
+ * (no focus/window switch Android-side), and the next ACTIVATED edge wakes
+ * and genuinely resumes it. The doze is never taken synchronously, only via
+ * deactivate_worker after unfocused_doze_grace(). */
 void update_screen_power(struct display *display) {
     std::scoped_lock lock(display->windowsMutex);
-    set_screen_state(display, any_window_visible(display));
+    if (!any_window_visible(display)) {
+        set_screen_state(display, false);
+    } else if (any_window_engaged(display)) {
+        set_screen_state(display, true);
+    } else if (display->screen_on) {
+        /* Visible but nothing engaged: debounce, then doze if it stays so. */
+        arm_deactivate_check(display);
+    }
+}
+
+/* Runs on deactivate_thread once the grace expires: doze only if nothing got
+ * (re)engaged meanwhile. Re-checking current state here is what makes A->B
+ * switch races and activation flapping cancel the doze naturally. */
+static void deactivate_settled_check(struct display *display) {
+    std::scoped_lock lock(display->windowsMutex);
+    if (!display->screen_on)
+        return;
+    if (any_window_engaged(display))
+        return;
+    set_screen_state(display, false);
+}
+
+static void
+deactivate_worker(struct display *display)
+{
+    std::unique_lock<std::mutex> lock(display->deactivate_mutex);
+    while (!display->deactivate_quit) {
+        if (!display->deactivate_armed) {
+            display->deactivate_cond.wait(lock);
+            continue;
+        }
+        display->deactivate_cond.wait_until(lock, display->deactivate_deadline);
+        if (display->deactivate_quit)
+            break;
+        /* The deadline may have been pushed forward while we slept. */
+        if (std::chrono::steady_clock::now() < display->deactivate_deadline)
+            continue;
+        display->deactivate_armed = false;
+        lock.unlock();
+        deactivate_settled_check(display);
+        lock.lock();
+    }
 }
 
 static void
@@ -2381,6 +2512,9 @@ window *open_windows::add(waydroid_hwc_composer_device_1 *pdev, const std::strin
         assert(res.second);
         window = res.first->second.get();
     });
+    /* A new toplevel may need the display awake to draw its first frame; if it
+     * launched while Android was dozed, wake it now (see any_window_visible). */
+    update_screen_power(pdev->display);
     return window;
 }
 
@@ -2397,6 +2531,25 @@ void open_windows::add(const std::string& key, std::unique_ptr<window> window) {
 void open_windows::clear() {
     windows.clear();
     property_set("waydroid.open_windows", "0");
+    publish_open_apps();
+}
+
+/* Maintain waydroid.open.<appID> for "waydroid app launch --wait". */
+void open_windows::publish_open_apps() {
+    std::set<std::string> current;
+    for (auto const& [key, win] : windows) {
+        if (!win->appID.empty() && win->appID != "none")
+            current.insert(win->appID);
+    }
+    for (auto const& aid : published_apps) {
+        if (!current.count(aid))
+            property_set(("waydroid.open." + aid).c_str(), "0");
+    }
+    for (auto const& aid : current) {
+        if (!published_apps.count(aid))
+            property_set(("waydroid.open." + aid).c_str(), "1");
+    }
+    published_apps = std::move(current);
 }
 
 void open_windows::erase(const_iterator pos) {
@@ -2419,6 +2572,7 @@ void open_windows::erase(const key_type& key) {
     windows.erase(pos);
     std::string windows_size_str = std::to_string(windows.size());
     property_set("waydroid.open_windows", windows_size_str.c_str());
+    publish_open_apps();
     update_screen_power(display);
 }
 
@@ -2573,6 +2727,7 @@ create_display(const char *gralloc)
     }
 
     display->task = IWaydroidTask::getService();
+    display->deactivate_thread = std::thread(deactivate_worker, display);
     return display;
 }
 
@@ -2581,6 +2736,15 @@ destroy_display(struct display *display)
 {
     pthread_kill(display->wayland_thread, SIGTERM);
     pthread_join(display->wayland_thread, nullptr);
+
+    if (display->deactivate_thread.joinable()) {
+        {
+            std::scoped_lock lock(display->deactivate_mutex);
+            display->deactivate_quit = true;
+            display->deactivate_cond.notify_one();
+        }
+        display->deactivate_thread.join();
+    }
 
     if (display->wm_base)
         xdg_wm_base_destroy(display->wm_base);

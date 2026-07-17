@@ -42,6 +42,7 @@
 #include <fcntl.h>
 #include <getopt.h>
 #include <errno.h>
+#include <chrono>
 #include <map>
 #include <list>
 #include <set>
@@ -57,7 +58,10 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 
+#include <condition_variable>
 #include <functional>
+#include <mutex>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -221,6 +225,14 @@ struct window {
     int outputs_entered = 0;
     bool suspended = false;
 
+    /* A newly-mapped toplevel has outputs_entered == 0 until the compositor
+     * first shows it. ever_shown records that first wl_surface.enter; created_at
+     * bounds how long we keep the Android display awake waiting for that first
+     * present (see any_window_visible), so a window that never appears cannot
+     * pin the screen on forever. */
+    bool ever_shown = false;
+    std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now();
+
     // Reset every hwc_set cycle
     struct wl_region* input_region;
     int lastLayer;
@@ -250,6 +262,9 @@ void update_screen_power(struct display *display);
 class open_windows {
     using Collection = std::map<std::string, std::unique_ptr<window>>;
     Collection windows;
+    /* Apps we last published a waydroid.open.<appID> prop for. */
+    std::set<std::string> published_apps;
+    void publish_open_apps();
 
   public:
     using key_type = Collection::key_type;
@@ -288,6 +303,7 @@ class open_windows {
 
         std::string windows_size_str = std::to_string(windows.size());
         property_set("waydroid.open_windows", windows_size_str.c_str());
+        publish_open_apps();
     }
 
     window *add(waydroid_hwc_composer_device_1 *pdev, const std::string& key, const std::string& aid, const std::string& tid, hwc_color_t color = {0, 0, 0, 255});
@@ -435,6 +451,20 @@ struct display {
     /* Desired Android screen state, tracked so we only inject a sleep/wake
      * key on an actual on<->off transition driven by host visibility. */
     bool screen_on = true;
+
+    /* Deactivate-side propagation. When the host shell deactivates the last
+     * Waydroid toplevel (user went to the shell/drawer, not an app switch)
+     * Android is dozed so the top task leaves RESUMED; otherwise a relaunch
+     * is a no-op that never draws (stuck on splash). A deactivation only arms
+     * a deadline; deactivate_thread re-checks engagement once it expires, so
+     * A->B activation races and enter/leave flapping cancel it naturally.
+     * See update_screen_power. */
+    std::mutex deactivate_mutex;
+    std::condition_variable deactivate_cond;
+    std::chrono::steady_clock::time_point deactivate_deadline;
+    bool deactivate_armed = false;
+    bool deactivate_quit = false;
+    std::thread deactivate_thread;
 };
 
 void

@@ -56,7 +56,20 @@ int single_window_mode_base::cleanup_stale_windows(waydroid_hwc_composer_device_
     });
     if (first_tid_layer != layer_infos.container().cend()) {
         if (is_blacklisted(pdev, first_tid_layer->aid, first_tid_layer->component)) {
-            clear_open_windows(pdev);
+            /* The (hidden) launcher is foreground: all open tasks are
+             * background cards now. Keep their windows alive as snapshots;
+             * closing them would close the host's cards. */
+            pdev->display->windows.erase("Waydroid");
+            for (auto const& [layer_tid, window] : pdev->display->windows) {
+                (void)layer_tid;
+                if (!window->snapshot_buffer) {
+                    pdev->display->egl_work_queue.push_back(std::bind(snapshot_inactive_app_window, pdev->display, window.get()));
+                }
+            }
+            if (!pdev->display->egl_work_queue.empty()) {
+                sem_post(&pdev->display->egl_go);
+                sem_wait(&pdev->display->egl_done);
+            }
             return 0;
         } else if (pdev->display->ignored_apps.count(first_tid_layer->tid) == 0) {
             target_layer_tid = first_tid_layer->tid;

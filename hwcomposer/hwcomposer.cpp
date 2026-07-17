@@ -490,6 +490,14 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         std::scoped_lock lock(pdev->display->windowsMutex);
         if (!pdev->display->wl_alive.load()) {
             if (!frame_has_content(pdev, contents)) {
+                /* Parked with nothing to map. cleanup_stale_windows (which
+                 * clears ignored_apps) never runs while parked, so a task
+                 * swipe-closed as the last window would stay ignored forever
+                 * and its relaunch (Android reuses the task ID) would never
+                 * present. When Android reports no foreground app the ignores
+                 * are provably stale, so drop them here to break that loop. */
+                if (property_get_string("waydroid.active_apps", "none") == "none")
+                    pdev->display->ignored_apps.clear();
                 /* Consume the frame without touching wayland. */
                 for (size_t l = 0; l < contents->numHwLayers; l++) {
                     if (contents->hwLayers[l].acquireFenceFd != -1)
