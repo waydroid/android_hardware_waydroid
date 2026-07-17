@@ -203,10 +203,50 @@ do_hotplug(struct display *display) {
 static void
 xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
                               int32_t width, int32_t height,
-                              struct wl_array *)
+                              struct wl_array *states)
 {
     struct window *window = (struct window *)data;
     struct display *display = window->display;
+
+    bool is_activated = false;
+#ifdef XDG_TOPLEVEL_STATE_SUSPENDED
+    bool is_suspended = false;
+#endif
+    if (states) {
+        const uint32_t *state = static_cast<const uint32_t *>(states->data);
+        const size_t count = states->size / sizeof(uint32_t);
+        for (size_t i = 0; i < count; i++) {
+            if (state[i] == XDG_TOPLEVEL_STATE_ACTIVATED)
+                is_activated = true;
+#ifdef XDG_TOPLEVEL_STATE_SUSPENDED
+            else if (state[i] == XDG_TOPLEVEL_STATE_SUSPENDED)
+                is_suspended = true;
+#endif
+        }
+    }
+
+    /* Rising edge of ACTIVATED: the host compositor (Lomiri) just gave this
+     * toplevel focus, e.g. the user tapped its entry in the staged switcher.
+     * Bring the matching Android task to the front so SurfaceFlinger starts
+     * sending its layers again (it currently shows a snapshot). setFocusedTask()
+     * moves the task to top and resumes it. taskID "0"/"none" is the launcher /
+     * full-ui surface, which has no app task to focus. */
+    if (is_activated && !window->activated && display->task != nullptr
+        && window->taskID != "none" && window->taskID != "0") {
+        display->task->setFocusedTask(stoi(window->taskID));
+    }
+    window->activated = is_activated;
+
+#ifdef XDG_TOPLEVEL_STATE_SUSPENDED
+    /* suspended (xdg-shell v6+) is the explicit "content not visible" signal,
+     * which covers minimize. Feed it into the screen-power decision. Compiled
+     * in only when the protocol header is new enough; harmless if the host
+     * never sends it. */
+    if (window->suspended != is_suspended) {
+        window->suspended = is_suspended;
+        update_screen_power(display);
+    }
+#endif
 
     if (width <= 1 || height <= 1) {
 		/* Compositor is deferring to us */
@@ -474,6 +514,37 @@ static const struct wp_fractional_scale_v1_listener fractional_scale_listener = 
     .preferred_scale = fractional_scale_handle_preferred_scale
 };
 
+/* Track which outputs a toplevel is shown on. A compositor that minimizes or
+ * fully occludes a surface sends leave for its output(s); when a window is on
+ * zero outputs it is off-screen. Drives Android screen power (see
+ * update_screen_power). Reliability of leave-on-minimize is compositor
+ * dependent; the suspended state (xdg-shell v6+) is the precise signal. */
+static void
+surface_handle_enter(void *data, struct wl_surface *, struct wl_output *)
+{
+    auto *window = static_cast<struct window *>(data);
+    window->outputs_entered++;
+    update_screen_power(window->display);
+}
+
+static void
+surface_handle_leave(void *data, struct wl_surface *, struct wl_output *)
+{
+    auto *window = static_cast<struct window *>(data);
+    if (window->outputs_entered > 0)
+        window->outputs_entered--;
+    update_screen_power(window->display);
+}
+
+/* Only enter/leave are wired; preferred_buffer_scale/transform (wl_surface v6)
+ * are left unset and never fire because wl_compositor is bound at version <= 5.
+ * Designated initializers keep this valid whether libwayland's listener struct
+ * has the v1 (2-field) or v6 (4-field) layout. */
+static const struct wl_surface_listener surface_listener = {
+    .enter = surface_handle_enter,
+    .leave = surface_handle_leave,
+};
+
 std::unique_ptr<window>
 window::create(struct display *display, bool use_subsurfaces, std::string appID, std::string taskID, hwc_color_t color)
 {
@@ -484,6 +555,7 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
     window->display = display;
     window->surface = wl_compositor_create_surface(display->compositor);
     wl_surface_set_user_data(window->surface, window.get());
+    wl_surface_add_listener(window->surface, &surface_listener, window.get());
     if (display->viewporter)
         window->viewport = wp_viewporter_get_viewport(display->viewporter, window->surface);
     window->taskID = std::move(taskID);
@@ -760,6 +832,41 @@ send_key_event(display *data, uint32_t key, wl_keyboard_key_state state)
     if (res < sizeof(event))
         ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
     display->keysDown[(uint8_t)key] = state;
+}
+
+static bool any_window_visible(struct display *display) {
+    for (auto const& [key, w] : display->windows) {
+        (void)key;
+        if (w && w->outputs_entered > 0 && !w->suspended)
+            return true;
+    }
+    return false;
+}
+
+static void set_screen_state(struct display *display, bool on) {
+    if (display->screen_on == on)
+        return;
+    display->screen_on = on;
+    ALOGI("waydroid: host visibility changed, turning Android screen %s",
+          on ? "on" : "off");
+    /* Inject KEY_SLEEP/KEY_WAKEUP. Android's PhoneWindowManager routes these
+     * through goToSleep/wakeUp, so hidden apps powersave (doze) while their
+     * processes stay alive to receive notifications. HAL-internal: uses the
+     * existing input pipe, so no binder call and no DEVICE_POWER permission
+     * are needed. Unlike KEY_POWER these are not toggles, so a lost injection
+     * (input pipe not up yet during early boot) cannot invert the state. */
+    uint32_t key = on ? KEY_WAKEUP : KEY_SLEEP;
+    send_key_event(display, key, WL_KEYBOARD_KEY_STATE_PRESSED);
+    send_key_event(display, key, WL_KEYBOARD_KEY_STATE_RELEASED);
+}
+
+/* Recompute whether anything is on-screen and flip Android's screen power to
+ * match. Safe to call from either the wayland thread or the compose thread:
+ * windowsMutex is recursive, so re-entry during window::create's roundtrip
+ * (which runs under the compose thread's lock) is fine. */
+void update_screen_power(struct display *display) {
+    std::scoped_lock lock(display->windowsMutex);
+    set_screen_state(display, any_window_visible(display));
 }
 
 static void
@@ -2282,16 +2389,26 @@ void open_windows::clear() {
 }
 
 void open_windows::erase(const_iterator pos) {
+    struct display *display = pos->second->display;
     update([&](){
         windows.erase(pos);
     });
+    /* Destroying a surface emits no wl_output leave, so recheck visibility
+     * here or the screen-power tracking stays "on" after the last window
+     * closes. Not done in clear(): reconnect_display() tears down windows
+     * only to recreate them, and must not flip the screen meanwhile. */
+    update_screen_power(display);
 }
 
 void open_windows::erase(const key_type& key) {
-    if (windows.erase(key) > 0) {
-        std::string windows_size_str = std::to_string(windows.size());
-        property_set("waydroid.open_windows", windows_size_str.c_str());
-    }
+    auto pos = windows.find(key);
+    if (pos == windows.end())
+        return;
+    struct display *display = pos->second->display;
+    windows.erase(pos);
+    std::string windows_size_str = std::to_string(windows.size());
+    property_set("waydroid.open_windows", windows_size_str.c_str());
+    update_screen_power(display);
 }
 
 static void* hwc_wayland_thread(void* data) {

@@ -207,6 +207,20 @@ struct window {
 
     std::atomic<bool> configured;
 
+    /* Last XDG_TOPLEVEL_STATE_ACTIVATED state seen from the host compositor.
+     * Used to detect the rising edge so a Lomiri-driven focus/raise of this
+     * toplevel brings the matching Android task to the front exactly once. */
+    bool activated = false;
+
+    /* Host-side visibility tracking, used to drive Android screen power.
+     * outputs_entered: number of wl_outputs this toplevel is currently shown
+     * on (wl_surface.enter/leave); 0 means off-screen/minimized on compositors
+     * that report it. suspended: XDG_TOPLEVEL_STATE_SUSPENDED (xdg-shell v6+),
+     * the explicit "content not visible" signal. A window counts as visible
+     * when outputs_entered > 0 && !suspended. */
+    int outputs_entered = 0;
+    bool suspended = false;
+
     // Reset every hwc_set cycle
     struct wl_region* input_region;
     int lastLayer;
@@ -228,6 +242,10 @@ struct window {
   private:
     window() = default;
 };
+
+/* Recompute host-side visibility and flip Android screen power to match.
+ * Defined in wayland-hwc.cpp. */
+void update_screen_power(struct display *display);
 
 class open_windows {
     using Collection = std::map<std::string, std::unique_ptr<window>>;
@@ -279,15 +297,20 @@ class open_windows {
     void erase(const key_type& key);
     template<class Pred>
     void erase_if(Pred pred) {
+        struct display *display = nullptr;
         update([&](){
             for (auto it = windows.begin(), end = windows.end(); it != end;) {
                 if (pred(*it)) {
+                    display = it->second->display;
                     it = windows.erase(it);
                 } else {
                     ++it;
                 }
             }
         });
+        /* See open_windows::erase: destroyed surfaces emit no output leave. */
+        if (display)
+            update_screen_power(display);
     }
 };
 
@@ -397,6 +420,10 @@ struct display {
 
     const hwc_procs_t *procs;
     bool needHotplug;
+
+    /* Desired Android screen state, tracked so we only inject a sleep/wake
+     * key on an actual on<->off transition driven by host visibility. */
+    bool screen_on = true;
 };
 
 void
