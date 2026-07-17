@@ -442,6 +442,36 @@ static void reset_per_commit_state_window(waydroid_hwc_composer_device_1 *pdev) 
     }
 }
 
+static void init_cursor_handler(waydroid_hwc_composer_device_1 *pdev) {
+    if (!property_get_bool("persist.waydroid.cursor_on_subsurface", false)) {
+        pdev->display->cursor_handler.reset(new wl_cursor_cursor_handler(pdev));
+    } else {
+        pdev->display->cursor_handler.reset(new subsurface_cursor_handler());
+    }
+}
+
+/* Whether this frame contains anything we would map a window for. */
+static bool frame_has_content(waydroid_hwc_composer_device_1 *pdev, hwc_display_contents_1_t *contents) {
+    std::string active_apps = property_get_string("waydroid.active_apps", "none");
+    if (active_apps == "none")
+        return false;
+    if (active_apps == "Waydroid")
+        return true;
+
+    split_layer_names_helper layer_infos;
+    layer_infos.setup(pdev, contents->hwLayers, contents->numHwLayers);
+    for (const auto &layer_info : layer_infos.container()) {
+        if (layer_info.type != LayerSplitType::TID)
+            continue;
+        if (pdev->display->ignored_apps.count(layer_info.tid))
+            continue;
+        if (is_blacklisted(pdev, layer_info.aid, layer_info.component))
+            continue;
+        return true;
+    }
+    return false;
+}
+
 static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                    hwc_display_contents_1_t** displays) {
     if (HWC_DISPLAY_PRIMARY >= numDisplays || !displays)
@@ -451,6 +481,30 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
     hwc_display_contents_1_t* contents = displays[HWC_DISPLAY_PRIMARY];
     assert(contents);
+
+    /* If the wayland thread saw the connection drop, reconnect here (we own
+     * pdev, hence the cursor handler) before touching any wayland proxy.
+     * Defer the reconnect until a frame has a window to map: a bare client
+     * connection already makes qtmir spawn a splash-screen application. */
+    if (!pdev->display->wl_alive.load()) {
+        std::scoped_lock lock(pdev->display->windowsMutex);
+        if (!pdev->display->wl_alive.load()) {
+            if (!frame_has_content(pdev, contents)) {
+                /* Consume the frame without touching wayland. */
+                for (size_t l = 0; l < contents->numHwLayers; l++) {
+                    if (contents->hwLayers[l].acquireFenceFd != -1)
+                        close(contents->hwLayers[l].acquireFenceFd);
+                }
+                sw_sync_timeline_inc(pdev->timeline_fd, 1);
+                contents->retireFenceFd = sw_sync_fence_create(pdev->timeline_fd, "hwc_contents_release", ++pdev->next_sync_point);
+                return 0;
+            }
+            reconnect_display(pdev->display);
+            init_cursor_handler(pdev);
+            pdev->display->wl_alive = true;
+            sem_post(&pdev->display->reconnect_resume);
+        }
+    }
 
     if (pdev->should_compose && contents->flags & HWC_GEOMETRY_CHANGED) {
         pdev->display->buffer_map.clear();
@@ -785,11 +839,7 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
         pdev->should_compose = false;
     }
 
-    if (!property_get_bool("persist.waydroid.cursor_on_subsurface", false)) {
-        pdev->display->cursor_handler.reset(new wl_cursor_cursor_handler(pdev));
-    } else {
-        pdev->display->cursor_handler.reset(new subsurface_cursor_handler());
-    }
+    init_cursor_handler(pdev);
 
     auto first_window = window::create(pdev->display, pdev->should_compose, "Waydroid", "0", {0, 0, 0, 255});
     if (!property_get_bool("waydroid.background_start", true)) {

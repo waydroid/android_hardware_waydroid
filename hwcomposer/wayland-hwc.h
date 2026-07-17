@@ -421,6 +421,17 @@ struct display {
     const hwc_procs_t *procs;
     bool needHotplug;
 
+    /*
+     * Reconnect support. When the host compositor drops our wl_client (e.g.
+     * Lomiri tearing down the connection on a single toplevel close), the
+     * wayland thread sets wl_alive=false and parks on reconnect_resume instead
+     * of aborting the whole HAL. The hwc compose thread (which owns pdev, and
+     * therefore the cursor handler) performs the actual reconnect and posts
+     * reconnect_resume to wake the wayland thread on the new connection.
+     */
+    std::atomic<bool> wl_alive{true};
+    sem_t reconnect_resume;
+
     /* Desired Android screen state, tracked so we only inject a sleep/wake
      * key on an actual on<->off transition driven by host visibility. */
     bool screen_on = true;
@@ -437,3 +448,12 @@ struct display *
 create_display(const char* gralloc);
 void
 destroy_display(struct display *display);
+
+/*
+ * Tear down all wayland-side state of a disconnected display and reconnect,
+ * rebinding globals. Caller MUST hold display->windowsMutex and MUST recreate
+ * the cursor handler afterwards (it lives in hwcomposer.cpp and holds surfaces
+ * that this drops). On return display->display is a fresh, bound connection.
+ */
+void
+reconnect_display(struct display *display);

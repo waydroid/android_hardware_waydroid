@@ -38,6 +38,7 @@
 #include <assert.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <signal.h>
@@ -298,6 +299,16 @@ xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
     }
     display->ignored_apps.insert(key);
     display->windows.erase(key);
+
+    /* The shell may have dropped the app entry backing this connection
+     * (qtmir authorizes clients only at connect time), never presenting our
+     * windows again. Kill the socket; hwc_set reconnects. Not needed with
+     * shells that keep the session presentable. */
+    if (display->windows.size() == 0 && display->wl_alive.load() &&
+            property_get_bool("persist.waydroid.reconnect_on_close", true)) {
+        ALOGI("last toplevel closed by compositor, forcing wayland reconnect");
+        shutdown(wl_display_get_fd(display->display), SHUT_RDWR);
+    }
 }
 
 static const struct xdg_toplevel_listener xdg_toplevel_listener = {
@@ -2411,18 +2422,107 @@ void open_windows::erase(const key_type& key) {
     update_screen_power(display);
 }
 
+/* Null every wayland global proxy pointer. The proxies themselves are freed by
+ * wl_display_disconnect(); this just prevents stale use until they are rebound
+ * by registry_handle_global() on the next roundtrip. */
+static void reset_wayland_globals(struct display *display) {
+    display->registry = nullptr;
+    display->compositor = nullptr;
+    display->subcompositor = nullptr;
+    display->seat = nullptr;
+    display->shell = nullptr;
+    display->shm = nullptr;
+    display->pointer = nullptr;
+    display->keyboard = nullptr;
+    display->touch = nullptr;
+    display->output = nullptr;
+    display->presentation = nullptr;
+    display->viewporter = nullptr;
+    display->android_wlegl = nullptr;
+    display->dmabuf = nullptr;
+    display->wm_base = nullptr;
+    display->tablet_manager = nullptr;
+    display->tablet_seat = nullptr;
+    display->pointer_constraints = nullptr;
+    display->relative_pointer_manager = nullptr;
+    display->relative_pointer = nullptr;
+    display->idle_manager = nullptr;
+    display->fractional_scale_manager = nullptr;
+    display->data_device_manager = nullptr;
+    display->data_device = nullptr;
+}
+
+void reconnect_display(struct display *display) {
+    /* If the previous reconnect was moments ago, the new connection died
+     * right away (e.g. a protocol error every frame). Back off so a
+     * reconnect loop cannot saturate a core and drown the host compositor
+     * in connection churn. */
+    static struct timespec last = {0, 0};
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (last.tv_sec && now.tv_sec - last.tv_sec < 2) {
+        ALOGE("reconnect_display: reconnecting again within 2s, backing off");
+        usleep(500 * 1000);
+    }
+    last = now;
+
+    /* Caller holds windowsMutex. Drop everything that references the dead
+     * connection's proxies BEFORE wl_display_disconnect() frees them. */
+    display->windows.clear();
+    display->layers.clear();
+    display->touch_surfaces.clear();
+    display->tablet_tools.clear();
+    display->tablet_tools_evt.clear();
+    display->pointer_surface = nullptr;
+    display->tablet_surface = nullptr;
+    /* Cached wl_buffers are keyed by gralloc handle, which Android reuses
+     * across the reconnect: a stale hit would attach a freed proxy. */
+    display->buffer_map.clear();
+    display->formats.clear();
+    display->modifiers.clear();
+    /* The cursor handler holds wl_surfaces; drop it now and let the caller
+     * (which has pdev) recreate it after we rebind the compositor. */
+    display->cursor_handler.reset();
+
+    if (display->registry)
+        wl_registry_destroy(display->registry);
+    wl_display_disconnect(display->display);
+    display->display = nullptr;
+    reset_wayland_globals(display);
+
+    /* Reconnect with backoff; the host compositor may not be ready yet. */
+    while (true) {
+        display->display = wl_display_connect(NULL);
+        if (display->display)
+            break;
+        ALOGE("reconnect_display: wl_display_connect failed, retrying");
+        usleep(500 * 1000);
+    }
+
+    display->registry = wl_display_get_registry(display->display);
+    wl_registry_add_listener(display->registry, &registry_listener, display);
+    wl_display_roundtrip(display->display);
+    ALOGI("reconnect_display: rebound wayland globals on new connection");
+}
+
 static void* hwc_wayland_thread(void* data) {
-    auto* display = static_cast<struct wl_display*>(data);
-    int ret = 0;
+    auto* display = static_cast<struct display*>(data);
 
     setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
 
-    while (ret != -1)
-        ret = wl_display_dispatch(display);
+    while (true) {
+        if (wl_display_dispatch(display->display) != -1)
+            continue;
 
-    ALOGE("*** %s: Wayland client was disconnected: %s", __PRETTY_FUNCTION__, strerror(ret));
-
-    abort();
+        /* The connection dropped. Rather than aborting the whole HAL, signal
+         * the compose thread to reconnect and park until it wakes us on the
+         * fresh connection. */
+        ALOGE("*** %s: Wayland client was disconnected: %s; awaiting reconnect",
+              __PRETTY_FUNCTION__, strerror(errno));
+        display->wl_alive = false;
+        sem_wait(&display->reconnect_resume);
+        ALOGI("*** %s: resuming dispatch on reconnected display", __PRETTY_FUNCTION__);
+    }
 }
 
 struct display *
@@ -2449,6 +2549,7 @@ create_display(const char *gralloc)
     }
     sem_init(&display->egl_go, 0, 0);
     sem_init(&display->egl_done, 0, 0);
+    sem_init(&display->reconnect_resume, 0, 0);
 
     umask(0);
     mkdir("/dev/input", S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
@@ -2462,11 +2563,12 @@ create_display(const char *gralloc)
     if (display->gtype == GrallocType::GRALLOC_ANDROID && !display->android_wlegl)
         ALOGE("GRALLOC_ANDROID requested, but the Wayland compositor did not advertise android_wlegl");
 
-    if (pthread_create(&display->wayland_thread, nullptr, hwc_wayland_thread, display->display) != 0) {
+    if (pthread_create(&display->wayland_thread, nullptr, hwc_wayland_thread, display) != 0) {
         ALOGE("Couldn't create wayland thread");
         wl_display_disconnect(display->display);
         sem_destroy(&display->egl_go);
         sem_destroy(&display->egl_done);
+        sem_destroy(&display->reconnect_resume);
         return nullptr;
     }
 
@@ -2506,6 +2608,8 @@ destroy_display(struct display *display)
     wl_registry_destroy(display->registry);
     wl_display_flush(display->display);
     wl_display_disconnect(display->display);
+
+    sem_destroy(&display->reconnect_resume);
 
     delete display;
 }
