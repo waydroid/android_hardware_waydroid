@@ -86,8 +86,9 @@ using ::android::hardware::hidl_string;
 struct buffer;
 
 buffer::~buffer() {
-    wl_buffer_destroy(wl_buffer);
-    if (isShm)
+    if (wl_buffer)
+        wl_buffer_destroy(wl_buffer);
+    if (isShm && shm_data && shm_data != MAP_FAILED)
         munmap(shm_data, size);
 }
 
@@ -2340,6 +2341,9 @@ create_display(const char *gralloc)
     wl_registry_add_listener(display->registry,
                  &registry_listener, display);
     wl_display_roundtrip(display->display);
+
+    if (display->gtype == GrallocType::GRALLOC_ANDROID && !display->android_wlegl)
+        ALOGE("GRALLOC_ANDROID requested, but the Wayland compositor did not advertise android_wlegl");
 
     if (pthread_create(&display->wayland_thread, nullptr, hwc_wayland_thread, display->display) != 0) {
         ALOGE("Couldn't create wayland thread");

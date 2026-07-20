@@ -191,6 +191,11 @@ std::unique_ptr<buffer> create_dmabuf_wl_buffer(display *display, const buffer_m
 
 std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_metadata& metadata, buffer_handle_t handle)
 {
+    if (!display->android_wlegl) {
+        ALOGE("create_android_wl_buffer called without android_wlegl");
+        return nullptr;
+    }
+
     std::unique_ptr<buffer> buf { new buffer() };
 
     buf->metadata = metadata;
@@ -202,6 +207,10 @@ std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_
     memcpy(the_ints, handle->data + handle->numFds, handle->numInts * sizeof(int));
     android_wlegl_handle *wlegl_handle = android_wlegl_create_handle(display->android_wlegl, handle->numFds, &ints);
     wl_array_release(&ints);
+    if (!wlegl_handle) {
+        ALOGE("android_wlegl_create_handle failed");
+        return nullptr;
+    }
 
     for (int i = 0; i < handle->numFds; i++) {
         android_wlegl_handle_add_fd(wlegl_handle, handle->data[i]);
@@ -209,6 +218,11 @@ std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_
 
     buf->wl_buffer = android_wlegl_create_buffer(display->android_wlegl, buf->metadata.width, buf->metadata.height, buf->metadata.pixel_stride, metadata.format, GRALLOC_USAGE_HW_RENDER, wlegl_handle);
     android_wlegl_handle_destroy(wlegl_handle);
+    if (!buf->wl_buffer) {
+        ALOGE("android_wlegl_create_buffer failed for format=%u stride=%u %ux%u handle=%p",
+              metadata.format, metadata.pixel_stride, metadata.width, metadata.height, handle);
+        return nullptr;
+    }
 
     wl_buffer_add_listener(buf->wl_buffer, &buffer_listener, nullptr);
 
@@ -270,6 +284,13 @@ std::unique_ptr<buffer> create_buffer_cros(display *display, const buffer_metada
 std::unique_ptr<buffer> create_buffer_android(display *display, const buffer_metadata& metadata, buffer_handle_t handle) {
     return create_android_wl_buffer(display, metadata, handle);
 }
+// SHM cannot present gralloc-android buffers, so fail loudly instead of
+// falling back to it and rendering garbage.
+std::unique_ptr<buffer> create_buffer_missing_android_wlegl(display *display __unused, const buffer_metadata& metadata, buffer_handle_t handle) {
+    ALOGE("GRALLOC_ANDROID selected but Wayland compositor does not advertise android_wlegl; refusing SHM fallback for format=%u stride=%u %ux%u handle=%p",
+          metadata.format, metadata.pixel_stride, metadata.width, metadata.height, handle);
+    return nullptr;
+}
 
 void update_shm_buffer_generic(display *display, buffer *buffer) {
     display->egl_work_queue.emplace_back(std::bind(egl_render_to_pixels, display, buffer));
@@ -319,8 +340,11 @@ gralloc_handler::create_buffer_func gralloc_handler::select_create_buffer_impl(d
         return create_buffer_gbm;
     } else if (gralloc_type == GrallocType::GRALLOC_CROS && display->dmabuf) {
         return create_buffer_cros;
-    } else if (gralloc_type == GrallocType::GRALLOC_ANDROID && display->android_wlegl) {
-        return create_buffer_android;
+    } else if (gralloc_type == GrallocType::GRALLOC_ANDROID) {
+        if (display->android_wlegl)
+            return create_buffer_android;
+        ALOGE("GRALLOC_ANDROID requested, but android_wlegl is unavailable on the Wayland compositor");
+        return create_buffer_missing_android_wlegl;
     } else {
         return create_buffer_generic;
     }

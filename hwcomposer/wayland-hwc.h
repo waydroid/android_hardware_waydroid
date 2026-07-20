@@ -122,14 +122,14 @@ constexpr bool operator!=(const buffer_metadata &lhs, const buffer_metadata &rhs
 }
 
 struct buffer {
-    struct wl_buffer *wl_buffer;
+    struct wl_buffer *wl_buffer = nullptr;
 
-    buffer_handle_t handle;
-    buffer_metadata metadata;
+    buffer_handle_t handle = nullptr;
+    buffer_metadata metadata {};
 
-    bool isShm;
-    void *shm_data;
-    int size;
+    bool isShm = false;
+    void *shm_data = nullptr;
+    int size = 0;
 
     ~buffer();
 };
