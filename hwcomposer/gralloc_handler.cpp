@@ -231,17 +231,27 @@ std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_
 
 namespace {
 buffer_metadata get_buffer_metadata_generic(display *display, hwc_layer_1_t *layer, size_t pos) {
-    uint32_t format, pixel_stride, width, height;
+    uint32_t format = 0, pixel_stride = 0, width = 0, height = 0;
     if (layer->compositionType == HWC_FRAMEBUFFER_TARGET) {
         format = display->target_layer_handle_ext.format;
         pixel_stride = display->target_layer_handle_ext.stride;
         width = display->target_layer_handle_ext.width;
         height = display->target_layer_handle_ext.height;
     } else {
-        format = display->layer_handles_ext[pos].format;
-        pixel_stride = display->layer_handles_ext[pos].stride;
-        width = display->layer_handles_ext[pos].width;
-        height = display->layer_handles_ext[pos].height;
+        // layer_handles_ext is keyed by z-order (set via IWaydroidDisplay HIDL),
+        // but pos is the sequential index in hwLayers[]. Walk the ordered map to
+        // the pos-th element instead of using pos as a key.
+        if (pos < display->layer_handles_ext.size()) {
+            auto it = display->layer_handles_ext.begin();
+            std::advance(it, pos);
+            format = it->second.format;
+            pixel_stride = it->second.stride;
+            width = it->second.width;
+            height = it->second.height;
+        } else {
+            ALOGE("get_buffer_metadata_generic: pos=%zu exceeds layer_handles_ext size=%zu",
+                  pos, display->layer_handles_ext.size());
+        }
     }
 
     if (!width)

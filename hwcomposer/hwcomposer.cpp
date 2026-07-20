@@ -104,6 +104,12 @@ namespace {
     buffer *get_wl_buffer(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, size_t pos) {
         const auto& gralloc_handler = pdev->gralloc_handler;
         auto metadata = gralloc_handler.get_buffer_metadata(pdev->display, layer, pos);
+        if (!metadata.format) {
+            // hwc_set can run before the setLayerHandleInfo HIDL call arrives.
+            ALOGW("get_wl_buffer: skipping pos=%zu, metadata not ready (map size=%zu)",
+                  pos, pdev->display->layer_handles_ext.size());
+            return nullptr;
+        }
         buffer *buf = find_cached_buffer(pdev, metadata, layer->handle);
 
         if (!buf) {
