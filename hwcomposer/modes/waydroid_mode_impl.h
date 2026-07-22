@@ -158,10 +158,12 @@ class non_compositing_window_mode : public virtual waydroid_mode {
          */
         int res = 0;
         if (i == m_draw_framebuffer_at) {
-            assert(m_framebuffer_target->handle);
-            window *window = derived()->get_window(pdev);
-
-            res = apply_hwc_layer_to_window(pdev, m_framebuffer_target, m_framebuffer_target_index, window);
+            if (m_framebuffer_target && m_framebuffer_target->handle) {
+                window *window = derived()->get_window(pdev);
+                res = apply_hwc_layer_to_window(pdev, m_framebuffer_target, m_framebuffer_target_index, window);
+            } else {
+                ALOGW("m_framebuffer_target is not ready or has null handle");
+            }
         }
 
         // The acquireFenceFd of HWC_FRAMEBUFFER_TARGET is closed in apply_hwc_layer_to_window
