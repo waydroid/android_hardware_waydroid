@@ -102,6 +102,12 @@ namespace {
 
     buffer *get_wl_buffer(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, size_t pos) {
         const auto& gralloc_handler = pdev->gralloc_handler;
+        if (!layer->handle) {
+            // FRAMEBUFFER_TARGET metadata comes from the HIDL side,
+            // so the metadata check below doesn't catch a null handle.
+            ALOGW("get_wl_buffer: skipping pos=%zu, layer has no buffer handle", pos);
+            return nullptr;
+        }
         auto metadata = gralloc_handler.get_buffer_metadata(pdev->display, layer, pos);
         if (!metadata.format) {
             // hwc_set can run before the setLayerHandleInfo HIDL call arrives.

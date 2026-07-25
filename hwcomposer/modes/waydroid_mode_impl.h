@@ -129,6 +129,23 @@ class non_compositing_window_mode : public virtual waydroid_mode {
         return static_cast<T *>(this);
     }
 
+    // Rate limited: the first few, then one in every 300 (~5s at 60Hz).
+    static void log_frame(const char *why, hwc_display_contents_1_t *contents) {
+        static unsigned count = 0;
+        if (count < 5 || count % 300 == 0) {
+            ALOGW("%s: numHwLayers=%zu flags=0x%08x", why, contents->numHwLayers, contents->flags);
+            for (size_t i = 0; i < contents->numHwLayers; ++i) {
+                const auto& l = contents->hwLayers[i];
+                ALOGW("  layer[%zu] compositionType=%" PRId32 " flags=0x%08" PRIx32
+                      " handle=%p acquireFenceFd=%d displayFrame=%d,%d-%d,%d",
+                      i, l.compositionType, l.flags, l.handle, l.acquireFenceFd,
+                      l.displayFrame.left, l.displayFrame.top,
+                      l.displayFrame.right, l.displayFrame.bottom);
+            }
+        }
+        ++count;
+    }
+
   public:
     int prepare(hwc_layer_1 *hwc_layer, size_t) override {
         hwc_layer->compositionType = HWC_FRAMEBUFFER;
@@ -136,6 +153,12 @@ class non_compositing_window_mode : public virtual waydroid_mode {
     }
 
     int setup_set(waydroid_hwc_composer_device_1 *, hwc_display_contents_1_t *contents) override {
+        // Don't keep indices from the previous frame around,
+        // they point into a different hwLayers[].
+        m_draw_framebuffer_at = UNSET_VALUE;
+        m_framebuffer_target = nullptr;
+        m_framebuffer_target_index = UNSET_VALUE;
+
         for (size_t i = 0; i < contents->numHwLayers; ++i) {
             auto& layer = contents->hwLayers[i];
             if (m_draw_framebuffer_at == UNSET_VALUE
@@ -148,6 +171,18 @@ class non_compositing_window_mode : public virtual waydroid_mode {
                 break;
             }
         }
+
+        /* On its first present SurfaceFlinger has no client target buffer
+         * yet, so the FRAMEBUFFER_TARGET layer comes with a null handle.
+         * There is nothing to draw then. */
+        if (m_draw_framebuffer_at != UNSET_VALUE && (!m_framebuffer_target || !m_framebuffer_target->handle)) {
+            log_frame(m_framebuffer_target ? "framebuffer target has no handle"
+                                           : "no framebuffer target in frame",
+                      contents);
+            m_draw_framebuffer_at = UNSET_VALUE;
+            m_framebuffer_target = nullptr;
+            m_framebuffer_target_index = UNSET_VALUE;
+        }
         return 0;
     }
     int handle_layer(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t i) override {
@@ -158,7 +193,6 @@ class non_compositing_window_mode : public virtual waydroid_mode {
          */
         int res = 0;
         if (i == m_draw_framebuffer_at) {
-            assert(m_framebuffer_target->handle);
             window *window = derived()->get_window(pdev);
 
             res = apply_hwc_layer_to_window(pdev, m_framebuffer_target, m_framebuffer_target_index, window);
