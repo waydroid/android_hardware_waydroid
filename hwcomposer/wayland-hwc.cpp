@@ -2084,6 +2084,21 @@ create_display(const char *gralloc)
         return NULL;
     }
     wl_log_set_handler_client(wayland_log_handler);
+
+    /* Buffers arrive over the Wayland socket as fd-carrying messages;
+     * hitting RLIMIT_NOFILE kills the connection (EMFILE) and takes the
+     * whole session down. Run with the hard limit instead of the soft
+     * default. */
+    struct rlimit nofile;
+    if (getrlimit(RLIMIT_NOFILE, &nofile) == 0 &&
+            nofile.rlim_cur < nofile.rlim_max) {
+        ALOGI("Raising RLIMIT_NOFILE %llu -> %llu",
+              (unsigned long long)nofile.rlim_cur,
+              (unsigned long long)nofile.rlim_max);
+        nofile.rlim_cur = nofile.rlim_max;
+        setrlimit(RLIMIT_NOFILE, &nofile);
+    }
+
     display->system_version = property_get_int32("ro.system.build.version.sdk", 0);
     display->gtype = get_gralloc_type(gralloc);
     display->refresh = 0;
