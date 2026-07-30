@@ -69,6 +69,7 @@ class compositing_window_mode : public virtual waydroid_mode {
             // Draw the content composited by SurfaceFlinger here
             if (hwc_layer->acquireFenceFd != -1) {
                 close(hwc_layer->acquireFenceFd);
+                hwc_layer->acquireFenceFd = -1;
             }
 
             hwc_layer = skipped_layers.framebuffer_target_layer();
@@ -77,6 +78,7 @@ class compositing_window_mode : public virtual waydroid_mode {
         } else if (skipped_layers.first_skipped() < i && i <= skipped_layers.last_skipped()) {
             if (hwc_layer->acquireFenceFd != -1) {
                 close(hwc_layer->acquireFenceFd);
+                hwc_layer->acquireFenceFd = -1;
             }
             return 0;
         } else if (hwc_layer == skipped_layers.framebuffer_target_layer()) {
@@ -90,6 +92,7 @@ class compositing_window_mode : public virtual waydroid_mode {
              */
             if (!skipped_layers.has_skipped_layers() && hwc_layer->acquireFenceFd != -1) {
                 close(hwc_layer->acquireFenceFd);
+                hwc_layer->acquireFenceFd = -1;
             }
             return 0;
         } else if (hwc_layer->compositionType != HWC_OVERLAY) {
@@ -97,6 +100,7 @@ class compositing_window_mode : public virtual waydroid_mode {
             // TODO: Support HWC_BACKGROUND
             if (hwc_layer->acquireFenceFd != -1) {
                 close(hwc_layer->acquireFenceFd);
+                hwc_layer->acquireFenceFd = -1;
             }
             return 0;
         } else if (!hwc_layer->handle) {
@@ -168,6 +172,15 @@ class non_compositing_window_mode : public virtual waydroid_mode {
         if (i != m_framebuffer_target_index) {
             if (hwc_layer->acquireFenceFd != -1) {
                 close(hwc_layer->acquireFenceFd);
+                hwc_layer->acquireFenceFd = -1;
+            }
+        } else if (i != m_draw_framebuffer_at) {
+            /* The framebuffer target was not drawn this frame (the draw
+             * position layer never reached handle_layer), but the adapter
+             * still handed us a fresh dup of its fence. */
+            if (hwc_layer->acquireFenceFd != -1) {
+                close(hwc_layer->acquireFenceFd);
+                hwc_layer->acquireFenceFd = -1;
             }
         }
         return res;
