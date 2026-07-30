@@ -429,6 +429,8 @@ void window::minimize() {
 }
 
 window::~window() {
+    if (fractional_scale)
+        wp_fractional_scale_v1_destroy(fractional_scale);
     if (xdg_toplevel)
         xdg_toplevel_destroy(xdg_toplevel);
     if (xdg_surface)
@@ -465,7 +467,25 @@ static void fractional_scale_handle_preferred_scale(void *data, struct wp_fracti
         // but for debugging purpuses we may decide to disable one
         return;
     }
-    display->scale = scale_times_120 / 120.0;
+
+    double new_scale = scale_times_120 / 120.0;
+    if (new_scale == display->scale)
+        return;
+    display->scale = new_scale;
+
+    // Before the first window has calibrated the display, window::create()
+    // publishes the scale and configures the Android display itself, so there
+    // is nothing to reconfigure yet.
+    if (!display->width || !display->height)
+        return;
+
+    // Warm output-scale change: keep waydroid.display_scale in sync and force a
+    // recomposition so every surface (new and existing) is re-committed with a
+    // buffer scale / viewport consistent with the compositor's current scale.
+    // Without this the value latched at boot would be used forever.
+    std::string display_scale = std::to_string(display->scale);
+    property_set("waydroid.display_scale", display_scale.c_str());
+    do_hotplug(display);
 }
 
 static const struct wp_fractional_scale_v1_listener fractional_scale_listener = {
@@ -484,6 +504,16 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
     wl_surface_set_user_data(window->surface, window.get());
     if (display->viewporter)
         window->viewport = wp_viewporter_get_viewport(display->viewporter, window->surface);
+    // Keep a fractional-scale object alive for the whole surface (not just during
+    // calibration) so the compositor keeps telling us when the output scale
+    // changes while the session is warm. We only support one global scale, so
+    // every surface reports into the same display->scale.
+    if (display->fractional_scale_manager) {
+        window->fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(
+                display->fractional_scale_manager, window->surface);
+        wp_fractional_scale_v1_add_listener(window->fractional_scale,
+                &fractional_scale_listener, display);
+    }
     window->taskID = std::move(taskID);
     window->dedicated_background_surface = true;
     window->bg_buffer = nullptr;
@@ -544,14 +574,6 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
     } while (!window->configured);
 
     if (calibrating) {
-        wp_fractional_scale_v1* fs = nullptr;
-        if (display->fractional_scale_manager) {
-            // We only support one global scale
-            fs = wp_fractional_scale_manager_v1_get_fractional_scale(
-                    display->fractional_scale_manager, window->surface);
-            wp_fractional_scale_v1_add_listener(fs, &fractional_scale_listener, display);
-        }
-
         // Some compositors fail to give us a window size or scale without a buffer attached
         // See: https://github.com/swaywm/sway/issues/2176
         // Some other compositors may refine the window size after a buffer is attached (Hyprland)
@@ -562,10 +584,6 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
             wp_viewport_set_destination(window->viewport, display->req_width, display->req_height);
         wl_surface_commit(window->surface);
         wl_display_roundtrip(display->display);
-
-        if (fs) {
-            wp_fractional_scale_v1_destroy(fs);
-        }
 
         // If after all of this we still did not receive a proper configure event,
         // fallback to using the full output size.
@@ -1464,6 +1482,19 @@ output_handle_scale(void *data, struct wl_output *,
             int32_t scale)
 {
     struct display *d = (struct display*)data;
+    if (d->fractional_scale_manager) {
+        // wl_output.scale only carries the legacy *integer* scale: a compositor
+        // using fractional scaling reports ceil() here (e.g. 2 for 1.5). Feeding
+        // that through std::max() latches the display at the ceiling forever once
+        // the output is ever bumped to a fractional scale and back, which halves
+        // every subsequent surface on a scale-1 output. When fractional scaling is
+        // available the authoritative value comes from
+        // wp_fractional_scale_v1.preferred_scale, so only use this as an initial
+        // fallback (in case preferred_scale never arrives) and otherwise ignore it.
+        if (d->scale == 0)
+            d->scale = scale;
+        return;
+    }
     d->scale = std::max((int)d->scale, scale);
 }
 

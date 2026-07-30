@@ -193,6 +193,10 @@ struct window {
     bool dedicated_background_surface;
     struct wl_surface *surface;
     struct wp_viewport *viewport;
+    /* Kept for the lifetime of the surface so the compositor keeps delivering
+     * wp_fractional_scale_v1.preferred_scale events (used to track live output
+     * scale changes, not just the value latched at boot). */
+    struct wp_fractional_scale_v1 *fractional_scale;
     struct wl_buffer *bg_buffer;
     struct zwp_locked_pointer_v1 *locked_pointer;
 
