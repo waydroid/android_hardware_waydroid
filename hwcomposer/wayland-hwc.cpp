@@ -166,7 +166,13 @@ finished_calibrating(struct display *d)
     if (property_get("ro.sf.lcd_density", property, nullptr) <= 0) {
         std::string lcd_density = std::to_string(int(default_density * d->scale));
         property_set("ro.sf.lcd_density", lcd_density.c_str());
+        d->density = int(default_density * d->scale);
+    } else {
+        d->density = atoi(property);
     }
+    /* Remember the unscaled density so a later scale change can re-derive the
+     * DPI the same way a fresh boot at that scale would. */
+    d->base_density = d->scale > 0 ? int(round(d->density / d->scale)) : default_density;
 
     choose_width_height(d, d->req_width, d->req_height);
 }
@@ -222,6 +228,11 @@ apply_scale_change(struct display *display, double new_scale)
 
     std::string display_scale = std::to_string(display->scale);
     property_set("waydroid.display_scale", display_scale.c_str());
+
+    /* ro.sf.lcd_density is read-only and keeps its boot value, so the live DPI
+     * is carried in display->density, which hwc_attribute() reports. */
+    if (display->base_density > 0)
+        display->density = int(round(display->base_density * display->scale));
 
     /* display->width/height are logical; the physical size is width * scale.
      * Re-derive from the compositor's current logical size when we know it so

@@ -346,6 +346,13 @@ struct display {
     int logical_width;
     int logical_height;
 
+    /* Density bookkeeping so a warm scale change can keep the reported DPI in
+     * step with the scale, exactly as a fresh boot at that scale would.
+     * ro.sf.lcd_density is a read-only property and cannot be re-set once the
+     * boot value is published, so hwc_attribute() reports `density` instead. */
+    int density;
+    int base_density;
+
     /* Number of live windows. preferred_scale is per-surface and is the
      * authoritative scale whenever any surface exists; the xdg_output-derived
      * scale is only applied when there is none (otherwise the two can disagree
