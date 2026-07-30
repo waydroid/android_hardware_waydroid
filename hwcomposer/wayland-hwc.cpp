@@ -79,6 +79,7 @@
 #include "relative-pointer-unstable-v1-client-protocol.h"
 #include "idle-inhibit-unstable-v1-client-protocol.h"
 #include "fractional-scale-v1-client-protocol.h"
+#include "xdg-output-unstable-v1-client-protocol.h"
 
 using ::android::hardware::hidl_string;
 
@@ -196,6 +197,40 @@ do_hotplug(struct display *display) {
         display->needHotplug = true;
         display->procs->invalidate(display->procs);
     }
+}
+
+/*
+ * Apply a new output scale to a *calibrated* display: publish it, keep the
+ * reported DPI in step, re-derive the display size from the compositor's
+ * logical size, and hotplug so SurfaceFlinger re-reads the config. The goal is
+ * that a warm scale change converges on the same state a fresh boot at that
+ * scale would produce.
+ */
+void
+apply_scale_change(struct display *display, double new_scale)
+{
+    if (new_scale <= 0 || new_scale == display->scale)
+        return;
+
+    ALOGI("output scale changed: %f -> %f", display->scale, new_scale);
+    display->scale = new_scale;
+
+    /* Before the first window has calibrated the display, window::create()
+     * publishes the scale and sizes the display itself. */
+    if (!display->width || !display->height)
+        return;
+
+    std::string display_scale = std::to_string(display->scale);
+    property_set("waydroid.display_scale", display_scale.c_str());
+
+    /* display->width/height are logical; the physical size is width * scale.
+     * Re-derive from the compositor's current logical size when we know it so
+     * the physical size keeps matching the output instead of being scaled a
+     * second time. */
+    if (display->logical_width > 0 && display->logical_height > 0)
+        choose_width_height(display, display->logical_width, display->logical_height);
+
+    do_hotplug(display);
 }
 
 static void
@@ -429,6 +464,7 @@ void window::minimize() {
 }
 
 window::~window() {
+    display->live_windows--;
     if (fractional_scale)
         wp_fractional_scale_v1_destroy(fractional_scale);
     if (xdg_toplevel)
@@ -468,24 +504,10 @@ static void fractional_scale_handle_preferred_scale(void *data, struct wp_fracti
         return;
     }
 
-    double new_scale = scale_times_120 / 120.0;
-    if (new_scale == display->scale)
-        return;
-    display->scale = new_scale;
-
-    // Before the first window has calibrated the display, window::create()
-    // publishes the scale and configures the Android display itself, so there
-    // is nothing to reconfigure yet.
-    if (!display->width || !display->height)
-        return;
-
-    // Warm output-scale change: keep waydroid.display_scale in sync and force a
-    // recomposition so every surface (new and existing) is re-committed with a
-    // buffer scale / viewport consistent with the compositor's current scale.
-    // Without this the value latched at boot would be used forever.
-    std::string display_scale = std::to_string(display->scale);
-    property_set("waydroid.display_scale", display_scale.c_str());
-    do_hotplug(display);
+    // preferred_scale is per-surface and therefore the authoritative scale
+    // whenever a surface exists: it reflects the output the surface is actually
+    // on, which the globally-bound wl_output/xdg_output may not be.
+    apply_scale_change(display, scale_times_120 / 120.0);
 }
 
 static const struct wp_fractional_scale_v1_listener fractional_scale_listener = {
@@ -500,6 +522,7 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
         return nullptr;
 
     window->display = display;
+    display->live_windows++;
     window->surface = wl_compositor_create_surface(display->compositor);
     wl_surface_set_user_data(window->surface, window.get());
     if (display->viewporter)
@@ -587,11 +610,18 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
 
         // If after all of this we still did not receive a proper configure event,
         // fallback to using the full output size.
-        // NOTICE: full_width and full_heigth should be in compositor logical size!
+        // NOTICE: req_width/req_height are in compositor *logical* size!
+        // xdg_output reports exactly that, so prefer it. wl_output.mode is in
+        // physical pixels, so the fallback has to divide it by the scale - which
+        // silently bakes in a wrong size if the scale is not yet known.
         if (!display->req_height)
-            display->req_height = display->full_height / display->scale;
+            display->req_height = display->logical_height
+                                ? display->logical_height
+                                : int(display->full_height / display->scale);
         if (!display->req_width)
-            display->req_width = display->full_width / display->scale;
+            display->req_width = display->logical_width
+                               ? display->logical_width
+                               : int(display->full_width / display->scale);
 
         finished_calibrating(display);
         if (!display->isMaximized)
@@ -1505,6 +1535,80 @@ static const struct wl_output_listener output_listener = {
     output_handle_scale,
 };
 
+/*
+ * xdg_output gives us the output size in the compositor's *logical* coordinate
+ * space. Together with wl_output.mode (physical pixels) that yields the true
+ * fractional scale without needing a mapped surface, which is the only way to
+ * follow a scale change while no app window exists (preferred_scale is only
+ * ever delivered for a surface that is actually mapped).
+ */
+static void
+xdg_output_handle_logical_size(void *data, struct zxdg_output_v1 *,
+            int32_t width, int32_t height)
+{
+    struct display *d = (struct display *)data;
+    if (width <= 0 || height <= 0)
+        return;
+    d->logical_width = width;
+    d->logical_height = height;
+}
+
+static void
+xdg_output_handle_logical_position(void *, struct zxdg_output_v1 *,
+            int32_t, int32_t)
+{
+}
+
+static void
+xdg_output_handle_done(void *data, struct zxdg_output_v1 *)
+{
+    struct display *d = (struct display *)data;
+
+    if (!d->logical_width || !d->full_width)
+        return;
+
+    // Only trust this while no surface exists. With a surface mapped,
+    // preferred_scale is authoritative (it tracks the output that surface is
+    // actually on); applying both on a mixed-DPI multi-output setup would make
+    // the two sources fight each other.
+    if (d->live_windows.load() != 0)
+        return;
+
+    apply_scale_change(d, (double)d->full_width / (double)d->logical_width);
+}
+
+static void
+xdg_output_handle_name(void *, struct zxdg_output_v1 *, const char *)
+{
+}
+
+static void
+xdg_output_handle_description(void *, struct zxdg_output_v1 *, const char *)
+{
+}
+
+static const struct zxdg_output_v1_listener xdg_output_listener = {
+    xdg_output_handle_logical_position,
+    xdg_output_handle_logical_size,
+    xdg_output_handle_done,
+    xdg_output_handle_name,
+    xdg_output_handle_description,
+};
+
+/*
+ * The xdg_output manager and the wl_output can be advertised in either order,
+ * so hook them up as soon as we have both.
+ */
+void
+maybe_create_xdg_output(struct display *d)
+{
+    if (d->xdg_output || !d->xdg_output_manager || !d->output)
+        return;
+    d->xdg_output = zxdg_output_manager_v1_get_xdg_output(d->xdg_output_manager, d->output);
+    zxdg_output_v1_add_listener(d->xdg_output, &xdg_output_listener, d);
+    ALOGI("xdg_output: bound, will track output scale without a mapped surface");
+}
+
 static void
 presentation_clock_id(void *, struct wp_presentation *,
               uint32_t clk_id)
@@ -1939,7 +2043,15 @@ registry_handle_global(void *data, struct wl_registry *registry,
         d->output = (struct wl_output*)wl_registry_bind(registry, id,
                 &wl_output_interface, std::min(version, 3U));
         wl_output_add_listener(d->output, &output_listener, d);
+        maybe_create_xdg_output(d);
         wl_display_roundtrip(d->display);
+    } else if (strcmp(interface, zxdg_output_manager_v1_interface.name) == 0) {
+        // Bind at most version 2: version 3 deprecates zxdg_output_v1.done (the
+        // compositor sends wl_output.done instead), and we rely on done to know
+        // when a logical_size update is complete.
+        d->xdg_output_manager = (struct zxdg_output_manager_v1*)wl_registry_bind(registry, id,
+                &zxdg_output_manager_v1_interface, std::min(version, 2U));
+        maybe_create_xdg_output(d);
     } else if (strcmp(interface, "wp_presentation") == 0) {
         bool no_presentation = property_get_bool("persist.waydroid.no_presentation", false);
         if (!no_presentation) {

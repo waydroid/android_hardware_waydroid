@@ -42,6 +42,7 @@
 #include <fcntl.h>
 #include <getopt.h>
 #include <errno.h>
+#include <atomic>
 #include <map>
 #include <list>
 #include <set>
@@ -329,12 +330,27 @@ struct display {
     struct zwp_relative_pointer_v1 *relative_pointer;
     struct zwp_idle_inhibit_manager_v1 *idle_manager;
     struct wp_fractional_scale_manager_v1 *fractional_scale_manager;
+    struct zxdg_output_manager_v1 *xdg_output_manager;
+    struct zxdg_output_v1 *xdg_output;
     struct wl_data_device_manager *data_device_manager;
     struct wl_data_device *data_device;
 
     int system_version;
     GrallocType gtype;
     double scale;
+
+    /* Output geometry in the compositor's *logical* coordinate space, from
+     * xdg_output. Unlike wl_output.mode (which is in physical pixels) this lets
+     * us derive the fractional scale without a mapped surface, and gives
+     * window::create() a correct size to fall back on. 0 until we get one. */
+    int logical_width;
+    int logical_height;
+
+    /* Number of live windows. preferred_scale is per-surface and is the
+     * authoritative scale whenever any surface exists; the xdg_output-derived
+     * scale is only applied when there is none (otherwise the two can disagree
+     * on a mixed-DPI multi-output setup and fight each other). */
+    std::atomic<int> live_windows;
 
     int input_fd[INPUT_TOTAL];
     int ptrPrvX;
