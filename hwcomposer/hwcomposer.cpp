@@ -924,6 +924,10 @@ int wl_cursor_cursor_handler::apply_cursor(waydroid_hwc_composer_device_1* pdev,
             return -1;
         }
         set_cursor(pdev->display);
+    } else if (hwc_layer->acquireFenceFd != -1) {
+        /* Not rendering the cursor still leaves us owning its fence */
+        close(hwc_layer->acquireFenceFd);
+        hwc_layer->acquireFenceFd = -1;
     }
     return 0;
 }
