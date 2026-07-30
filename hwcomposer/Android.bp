@@ -72,8 +72,32 @@ cc_library_shared {
         "-Wall",
         "-Werror",
     ],
-    generated_sources: ["wayland_android_client_protocol_sources"],
-    generated_headers: ["wayland_android_client_protocol_headers"],
+    generated_sources: [
+        "wayland_android_client_protocol_sources",
+        "pointer_gestures_client_protocol_sources",
+    ],
+    generated_headers: [
+        "wayland_android_client_protocol_headers",
+        "pointer_gestures_client_protocol_headers",
+    ],
+}
+
+// Generate pointer-gestures protocol code from the vendored XML: the
+// external/wayland-protocols snapshot only carries v2 of this protocol,
+// which lacks hold gestures (v3).
+genrule {
+    name: "pointer_gestures_client_protocol_sources",
+    srcs: ["pointer-gestures-unstable-v1.xml"],
+    tools: ["wayland_scanner"],
+    cmd: "$(location wayland_scanner) code < $(in) > $(out)",
+    out: ["pointer-gestures-unstable-v1-protocol.c"],
+}
+genrule {
+    name: "pointer_gestures_client_protocol_headers",
+    srcs: ["pointer-gestures-unstable-v1.xml"],
+    tools: ["wayland_scanner"],
+    cmd: "$(location wayland_scanner) client-header < $(in) > $(out)",
+    out: ["pointer-gestures-unstable-v1-client-protocol.h"],
 }
 
 // Generate wayland-android protocol source file

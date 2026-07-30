@@ -79,6 +79,7 @@
 #include "relative-pointer-unstable-v1-client-protocol.h"
 #include "idle-inhibit-unstable-v1-client-protocol.h"
 #include "fractional-scale-v1-client-protocol.h"
+#include "pointer-gestures-unstable-v1-client-protocol.h"
 
 using ::android::hardware::hidl_string;
 
@@ -155,6 +156,8 @@ void choose_width_height(struct display* display, int32_t hint_width, int32_t hi
     display->height = height;
 }
 
+void do_hotplug(struct display *display);
+
 void
 finished_calibrating(struct display *d)
 {
@@ -168,29 +171,88 @@ finished_calibrating(struct display *d)
     }
 
     choose_width_height(d, d->req_width, d->req_height);
+
+    /* Create the input pipes right away: the first configure event that
+     * would otherwise trigger the hotplug can be a long time coming, and
+     * until then injected touch events have nowhere to go. */
+    do_hotplug(d);
 }
+
+/*
+ * Trackpad two-finger scrolling (wl_pointer axis events with axis_source
+ * "finger") is translated into a synthetic touchscreen drag instead of
+ * mouse wheel notches, so apps receive a real touch gesture: 1:1 finger
+ * tracking, native fling momentum computed by Android's velocity tracker,
+ * working pull-to-refresh and pager snap-back. Gated by the
+ * persist.waydroid.touch_scrolling property (default enabled), with
+ * persist.waydroid.touch_scrolling_speed as a scroll-distance multiplier.
+ */
+#define SCROLL_SYNTH_TOUCH_ID 0x77645343
+#define SCROLL_EDGE_MARGIN 4
+#define SCROLL_ANCHOR_INSET_FRAC 0.15
+/* Two fingers resting on the trackpad this soon after a scroll lift are
+ * treated as catching the fling (synthetic touch down); any later, resting
+ * fingers must not touch the screen or idle holds would press UI elements. */
+#define SCROLL_HOLD_CATCH_WINDOW_MS 4000
+
+static int get_touch_id(struct display *display, int id);
+static int create_touch_id(struct display *display, int id);
+static int flush_touch_id(struct display *display, int id);
+static void scroll_gesture_end(struct display *display, bool cancel);
 
 void
 do_hotplug(struct display *display) {
-    if (display->touch) {
+    /* The touch pipe is also needed on hosts without a touchscreen when
+     * trackpad scrolling is translated into synthetic touch gestures. */
+    if (display->touch ||
+            property_get_bool("persist.waydroid.touch_scrolling", true)) {
         char property[PROPERTY_VALUE_MAX];
         int width = floor(display->width * display->scale);
         int height = floor(display->height * display->scale);
 
         if (property_get("persist.waydroid.width_padding", property, nullptr) > 0)
             width -= atoi(property);
-        std::string width_str = std::to_string(width);
-        property_set("waydroid.display_width", width_str.c_str());
-
         if (property_get("persist.waydroid.height_padding", property, nullptr) > 0)
             height -= atoi(property);
-        std::string height_str = std::to_string(height);
-        property_set("waydroid.display_height", height_str.c_str());
 
-        display->input_fd[INPUT_TOUCH] = -1;
-        remove(INPUT_PIPE_NAME[INPUT_TOUCH]);
-        mkfifo(INPUT_PIPE_NAME[INPUT_TOUCH], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
-        chown(INPUT_PIPE_NAME[INPUT_TOUCH], 1000, 1000);
+        /* Keep the existing pipe (and the Android-side input device) when
+         * the size is unchanged: every recreation opens a short window
+         * where injected touch events are dropped. */
+        static int lastPipeWidth = -1, lastPipeHeight = -1;
+        if (width != lastPipeWidth || height != lastPipeHeight ||
+                access(INPUT_PIPE_NAME[INPUT_TOUCH], F_OK) != 0) {
+            std::string width_str = std::to_string(width);
+            property_set("waydroid.display_width", width_str.c_str());
+            std::string height_str = std::to_string(height);
+            property_set("waydroid.display_height", height_str.c_str());
+
+            /* property_set is asynchronous; EventHub sizes the touch device
+             * from these properties the moment the pipe appears, so make
+             * sure they are visible before creating it. */
+            for (int i = 0; i < 100; i++) {
+                if (property_get_int32("waydroid.display_width", -1) == width &&
+                        property_get_int32("waydroid.display_height", -1) == height)
+                    break;
+                usleep(500);
+            }
+
+            display->input_fd[INPUT_TOUCH] = -1;
+            remove(INPUT_PIPE_NAME[INPUT_TOUCH]);
+            mkfifo(INPUT_PIPE_NAME[INPUT_TOUCH], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+            chown(INPUT_PIPE_NAME[INPUT_TOUCH], 1000, 1000);
+            lastPipeWidth = width;
+            lastPipeHeight = height;
+
+            /* Recreating the pipe drops any in-flight synthetic scroll gesture */
+            if (display->scrollGestureActive) {
+                display->scrollGestureActive = false;
+                flush_touch_id(display, SCROLL_SYNTH_TOUCH_ID);
+            }
+            display->pendingScrollDeltas = false;
+            display->pendingScrollStop = false;
+            display->pendingScrollDX = 0;
+            display->pendingScrollDY = 0;
+        }
     }
     if (display->procs && display->procs->invalidate) {
         display->needHotplug = true;
@@ -877,6 +939,7 @@ pointer_handle_leave(void *data, struct wl_pointer *,
                      uint32_t, struct wl_surface *)
 {
     struct display *display = (struct display *)data;
+    scroll_gesture_end(display, true);
     display->pointer_surface = NULL;
 }
 
@@ -895,6 +958,11 @@ pointer_handle_motion(void *data, struct wl_pointer *,
 
     if (!display->pointer_surface)
         return;
+
+    /* The pointer does not move during a two-finger scroll; motion means
+     * the scroll ended without an axis_stop, so recover the stuck drag. */
+    if (display->scrollGestureActive)
+        scroll_gesture_end(display, true);
 
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
         ALOGE("%s:%d error in touch clock_gettime: %s",
@@ -976,6 +1044,9 @@ pointer_handle_button(void *data, struct wl_pointer *,
     if (!display->pointer_surface)
         return;
 
+    /* A click during a synthetic scroll drag aborts the drag */
+    scroll_gesture_end(display, true);
+
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
         ALOGE("%s:%d error in touch clock_gettime: %s",
               __FILE__, __LINE__, strerror(errno));
@@ -989,6 +1060,269 @@ pointer_handle_button(void *data, struct wl_pointer *,
 }
 
 static void
+scroll_gesture_read_props(struct display *display)
+{
+    char prop[PROPERTY_VALUE_MAX];
+
+    display->touchScrolling =
+        property_get_bool("persist.waydroid.touch_scrolling", true);
+    display->touchScrollScale = 1.0;
+    if (property_get("persist.waydroid.touch_scrolling_speed", prop, nullptr) > 0) {
+        double speed = atof(prop);
+        if (speed > 0)
+            display->touchScrollScale = speed;
+    }
+}
+
+static void
+scroll_gesture_emit_touch(struct display *display, int touch_id)
+{
+    struct input_event event[6];
+    struct timespec rt;
+    unsigned int res, n = 0;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+        ALOGE("%s:%d error in touch clock_gettime: %s",
+              __FILE__, __LINE__, strerror(errno));
+    }
+    ADD_EVENT(EV_ABS, ABS_MT_SLOT, touch_id);
+    ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, touch_id);
+    ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, (int)display->scrollFingerX);
+    ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, (int)display->scrollFingerY);
+    ADD_EVENT(EV_ABS, ABS_MT_PRESSURE, 50);
+    ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+
+    res = write(display->input_fd[INPUT_TOUCH], &event, sizeof(event));
+    if (res < sizeof(event))
+        ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+}
+
+static void
+scroll_gesture_end(struct display *display, bool cancel)
+{
+    struct input_event event[6];
+    struct timespec rt;
+    unsigned int res, n = 0;
+
+    display->pendingScrollDeltas = false;
+    display->pendingScrollDX = 0;
+    display->pendingScrollDY = 0;
+    if (!display->scrollGestureActive)
+        return;
+    display->scrollGestureActive = false;
+
+    /* A lift may start a fling; remember when, so fingers resting on the
+     * trackpad shortly after can catch it. */
+    if (!cancel)
+        clock_gettime(CLOCK_MONOTONIC, &display->lastScrollLiftTime);
+
+    int touch_id = flush_touch_id(display, SCROLL_SYNTH_TOUCH_ID);
+    if (touch_id == -1)
+        return;
+    if (ensure_pipe(display, INPUT_TOUCH))
+        return;
+
+    ALOGI("touch scroll: %s slot %d", cancel ? "cancel" : "end", touch_id);
+
+    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+        ALOGE("%s:%d error in touch clock_gettime: %s",
+              __FILE__, __LINE__, strerror(errno));
+    }
+    if (cancel) {
+        /* Turn finger into palm before lifting so InputFlinger delivers
+         * ACTION_CANCEL and no fling is started from the drag velocity. */
+        ADD_EVENT(EV_ABS, ABS_MT_SLOT, touch_id);
+        ADD_EVENT(EV_ABS, ABS_MT_TOOL_TYPE, MT_TOOL_PALM);
+        ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+        ADD_EVENT(EV_ABS, ABS_MT_TOOL_TYPE, MT_TOOL_FINGER);
+        ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, -1);
+        ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+    } else {
+        ADD_EVENT(EV_ABS, ABS_MT_SLOT, touch_id);
+        ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, -1);
+        ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+    }
+
+    res = write(display->input_fd[INPUT_TOUCH], &event, n * sizeof(event[0]));
+    if (res < n * sizeof(event[0]))
+        ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+}
+
+static void
+scroll_gesture_anchor(struct display *display, double dx, double dy,
+                      double maxX, double maxY)
+{
+    /* Anchor the synthetic finger at the cursor so the drag lands on the
+     * view being pointed at, but inset the axes being scrolled so there is
+     * runway before the finger has to clutch at a screen edge. */
+    double insetX = dx != 0 ?
+        std::max((maxX + SCROLL_EDGE_MARGIN) * SCROLL_ANCHOR_INSET_FRAC,
+                 (double)SCROLL_EDGE_MARGIN) : SCROLL_EDGE_MARGIN;
+    double insetY = dy != 0 ?
+        std::max((maxY + SCROLL_EDGE_MARGIN) * SCROLL_ANCHOR_INSET_FRAC,
+                 (double)SCROLL_EDGE_MARGIN) : SCROLL_EDGE_MARGIN;
+
+    display->scrollFingerX = std::clamp((double)display->ptrPrvX,
+                                        insetX, std::max(insetX, maxX - insetX + SCROLL_EDGE_MARGIN));
+    display->scrollFingerY = std::clamp((double)display->ptrPrvY,
+                                        insetY, std::max(insetY, maxY - insetY + SCROLL_EDGE_MARGIN));
+}
+
+static void
+scroll_gesture_flush(struct display *display)
+{
+    struct input_event event[6];
+    struct timespec rt;
+    unsigned int res, n = 0;
+    int touch_id;
+
+    double dx = display->pendingScrollDX;
+    double dy = display->pendingScrollDY;
+    display->pendingScrollDX = 0;
+    display->pendingScrollDY = 0;
+    display->pendingScrollDeltas = false;
+
+    if (ensure_pipe(display, INPUT_TOUCH))
+        return;
+
+    double maxX = floor(display->width * display->scale) - 1 - SCROLL_EDGE_MARGIN;
+    double maxY = floor(display->height * display->scale) - 1 - SCROLL_EDGE_MARGIN;
+
+    if (!display->scrollGestureActive) {
+        touch_id = create_touch_id(display, SCROLL_SYNTH_TOUCH_ID);
+        if (touch_id == -1)
+            return;
+        display->scrollGestureActive = true;
+        scroll_gesture_anchor(display, dx, dy, maxX, maxY);
+        ALOGI("touch scroll: begin slot %d at (%d,%d)", touch_id,
+              (int)display->scrollFingerX, (int)display->scrollFingerY);
+        scroll_gesture_emit_touch(display, touch_id);
+    }
+
+    display->scrollFingerX += dx;
+    display->scrollFingerY += dy;
+
+    if (display->scrollFingerX < SCROLL_EDGE_MARGIN || display->scrollFingerX > maxX ||
+        display->scrollFingerY < SCROLL_EDGE_MARGIN || display->scrollFingerY > maxY) {
+        /* Clutch: the synthetic finger ran off the screen mid-gesture.
+         * Cancel it (no fling) and press down again re-anchored; this
+         * frame's residual delta is dropped, the gesture continues with
+         * the next one. */
+        scroll_gesture_end(display, true);
+        touch_id = create_touch_id(display, SCROLL_SYNTH_TOUCH_ID);
+        if (touch_id == -1)
+            return;
+        display->scrollGestureActive = true;
+        scroll_gesture_anchor(display, dx, dy, maxX, maxY);
+        ALOGI("touch scroll: clutch slot %d at (%d,%d)", touch_id,
+              (int)display->scrollFingerX, (int)display->scrollFingerY);
+        scroll_gesture_emit_touch(display, touch_id);
+        return;
+    }
+
+    touch_id = get_touch_id(display, SCROLL_SYNTH_TOUCH_ID);
+    if (touch_id == -1)
+        return;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+        ALOGE("%s:%d error in touch clock_gettime: %s",
+              __FILE__, __LINE__, strerror(errno));
+    }
+    ADD_EVENT(EV_ABS, ABS_MT_SLOT, touch_id);
+    ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, touch_id);
+    ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, (int)display->scrollFingerX);
+    ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, (int)display->scrollFingerY);
+    ADD_EVENT(EV_ABS, ABS_MT_PRESSURE, 50);
+    ADD_EVENT(EV_SYN, SYN_REPORT, 0);
+
+    res = write(display->input_fd[INPUT_TOUCH], &event, sizeof(event));
+    if (res < sizeof(event))
+        ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+}
+
+static void
+gesture_hold_begin(void *data, struct zwp_pointer_gesture_hold_v1 *,
+                   uint32_t, uint32_t, struct wl_surface *surface,
+                   uint32_t fingers)
+{
+    struct display *display = (struct display *)data;
+    struct timespec now;
+
+    if (fingers != 2 || !surface || !display->pointer_surface)
+        return;
+    if (display->scrollGestureActive)
+        return;
+
+    /* Only catch a recent fling (see SCROLL_HOLD_CATCH_WINDOW_MS) */
+    if (display->lastScrollLiftTime.tv_sec == 0 &&
+            display->lastScrollLiftTime.tv_nsec == 0)
+        return;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) == -1)
+        return;
+    int64_t since_ms =
+        (int64_t)(now.tv_sec - display->lastScrollLiftTime.tv_sec) * 1000 +
+        (now.tv_nsec - display->lastScrollLiftTime.tv_nsec) / 1000000;
+    if (since_ms > SCROLL_HOLD_CATCH_WINDOW_MS)
+        return;
+
+    scroll_gesture_read_props(display);
+    if (!display->touchScrolling)
+        return;
+    if (ensure_pipe(display, INPUT_TOUCH))
+        return;
+
+    int touch_id = create_touch_id(display, SCROLL_SYNTH_TOUCH_ID);
+    if (touch_id == -1)
+        return;
+
+    double maxX = floor(display->width * display->scale) - 1 - SCROLL_EDGE_MARGIN;
+    double maxY = floor(display->height * display->scale) - 1 - SCROLL_EDGE_MARGIN;
+
+    display->scrollGestureActive = true;
+    display->holdGestureActive = true;
+    /* Inset both axes: if this hold turns into a scroll, its direction is
+     * not known yet. */
+    scroll_gesture_anchor(display, 1, 1, maxX, maxY);
+    ALOGI("touch scroll: hold catch slot %d at (%d,%d)", touch_id,
+          (int)display->scrollFingerX, (int)display->scrollFingerY);
+    scroll_gesture_emit_touch(display, touch_id);
+}
+
+static void
+gesture_hold_end(void *data, struct zwp_pointer_gesture_hold_v1 *,
+                 uint32_t, uint32_t, int32_t cancelled)
+{
+    struct display *display = (struct display *)data;
+
+    if (!display->holdGestureActive)
+        return;
+    display->holdGestureActive = false;
+
+    /* cancelled means the hold turned into another gesture (a two-finger
+     * scroll): keep the synthetic finger down, the axis events continue
+     * the drag seamlessly. A clean end means the fingers lifted without
+     * scrolling: release the caught touch without a tap or a fling. */
+    if (!cancelled && display->scrollGestureActive)
+        scroll_gesture_end(display, true);
+}
+
+static const struct zwp_pointer_gesture_hold_v1_listener gesture_hold_listener = {
+    gesture_hold_begin,
+    gesture_hold_end,
+};
+
+static void
+ensure_hold_gesture(struct display *display)
+{
+    if (display->pointer_gestures && display->pointer && !display->hold_gesture) {
+        display->hold_gesture = zwp_pointer_gestures_v1_get_hold_gesture(
+                display->pointer_gestures, display->pointer);
+        zwp_pointer_gesture_hold_v1_add_listener(display->hold_gesture,
+                                                 &gesture_hold_listener, display);
+    }
+}
+
+static void
 pointer_handle_axis(void *data, struct wl_pointer *,
                     uint32_t, uint32_t axis, wl_fixed_t value)
 {
@@ -998,6 +1332,33 @@ pointer_handle_axis(void *data, struct wl_pointer *,
     unsigned int res, move, n = 0;
     double fVal = wl_fixed_to_double(value) / 10.0f;
     double step = 1.0f;
+
+    if (display->lastAxisSource == WL_POINTER_AXIS_SOURCE_FINGER &&
+            (display->pointer_surface || display->scrollGestureActive)) {
+        if (!display->scrollGestureActive && !display->pendingScrollDeltas) {
+            /* Re-read at gesture start so it can be toggled on the fly */
+            scroll_gesture_read_props(display);
+        }
+        if (display->touchScrolling) {
+            if (ensure_pipe(display, INPUT_TOUCH)) {
+                /* No touch pipe reader: fall back to wheel scrolling
+                 * rather than dropping the events */
+                ALOGE("touch scroll: touch pipe unavailable, using wheel");
+            } else {
+                /* A touch drag moves opposite to the scroll direction,
+                 * hence the negation; this yields natural direction on
+                 * both axes. */
+                double delta = -wl_fixed_to_double(value) * display->scale *
+                               display->touchScrollScale;
+                if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
+                    display->pendingScrollDY += delta;
+                else
+                    display->pendingScrollDX += delta;
+                display->pendingScrollDeltas = true;
+                return;
+            }
+        }
+    }
 
     if (ensure_pipe(display, INPUT_POINTER))
         return;
@@ -1043,12 +1404,19 @@ static void
 pointer_handle_axis_source(void *data, struct wl_pointer *, uint32_t source)
 {
     struct display* display = (struct display*)data;
+    display->lastAxisSource = source;
     display->wheelEvtIsDiscrete = (source == WL_POINTER_AXIS_SOURCE_WHEEL);
 }
 
 static void
-pointer_handle_axis_stop(void *, struct wl_pointer *, uint32_t, uint32_t)
+pointer_handle_axis_stop(void *data, struct wl_pointer *, uint32_t, uint32_t)
 {
+    struct display* display = (struct display*)data;
+
+    /* Fingers lifted off the trackpad: finish the synthetic drag with a
+     * touch up, letting Android compute the fling from the drag velocity. */
+    if (display->scrollGestureActive || display->pendingScrollDeltas)
+        display->pendingScrollStop = true;
 }
 
 static void
@@ -1057,8 +1425,16 @@ pointer_handle_axis_discrete(void *, struct wl_pointer *, uint32_t, int32_t)
 }
 
 static void
-pointer_handle_frame(void *, struct wl_pointer *)
+pointer_handle_frame(void *data, struct wl_pointer *)
 {
+    struct display* display = (struct display*)data;
+
+    if (display->pendingScrollDeltas)
+        scroll_gesture_flush(display);
+    if (display->pendingScrollStop) {
+        display->pendingScrollStop = false;
+        scroll_gesture_end(display, false);
+    }
 }
 
 static const struct wl_pointer_listener pointer_listener = {
@@ -1349,8 +1725,13 @@ seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t wl_caps)
         mkfifo(INPUT_PIPE_NAME[INPUT_POINTER], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
         chown(INPUT_PIPE_NAME[INPUT_POINTER], 1000, 1000);
         wl_pointer_add_listener(d->pointer, &pointer_listener, d);
+        ensure_hold_gesture(d);
     } else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && d->pointer) {
         remove(INPUT_PIPE_NAME[INPUT_POINTER]);
+        if (d->hold_gesture) {
+            zwp_pointer_gesture_hold_v1_destroy(d->hold_gesture);
+            d->hold_gesture = NULL;
+        }
         wl_pointer_destroy(d->pointer);
         d->pointer = NULL;
     }
@@ -1936,6 +2317,14 @@ registry_handle_global(void *data, struct wl_registry *registry,
                 &zwp_tablet_manager_v2_interface, 1);
         if (d->tablet_manager && d->seat)
             add_tablet_seat(d);
+    } else if (strcmp(interface, "zwp_pointer_gestures_v1") == 0) {
+        /* Hold gestures (fingers resting on the trackpad) need v3 */
+        if (version >= ZWP_POINTER_GESTURES_V1_GET_HOLD_GESTURE_SINCE_VERSION) {
+            d->pointer_gestures = (struct zwp_pointer_gestures_v1 *)wl_registry_bind(
+                    registry, id, &zwp_pointer_gestures_v1_interface,
+                    ZWP_POINTER_GESTURES_V1_GET_HOLD_GESTURE_SINCE_VERSION);
+            ensure_hold_gesture(d);
+        }
     } else if (strcmp(interface, "zwp_pointer_constraints_v1") == 0) {
         d->pointer_constraints = (struct zwp_pointer_constraints_v1 *)wl_registry_bind(
                 registry, id, &zwp_pointer_constraints_v1_interface, 1);
@@ -2067,6 +2456,11 @@ create_display(const char *gralloc)
     display->isMaximized = true;
     display->supports_cursor_viewport = true;
     display->supports_cursor_hw_buffer = property_get_bool("persist.waydroid.cursor_force_shm", false);
+    display->touchScrollScale = 1.0;
+    for (int i = 0; i < MAX_TOUCHPOINTS; i++)
+        display->touch_id[i] = -1;
+    for (int i = 0; i < INPUT_TOTAL; i++)
+        display->input_fd[i] = -1;
     display->display = wl_display_connect(NULL);
     ALOGI("WAYLAND_DISPLAY: %s", getenv("WAYLAND_DISPLAY"));
     ALOGI("XDG_RUNTIME_DIR: %s", getenv("XDG_RUNTIME_DIR"));

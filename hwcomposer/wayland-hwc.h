@@ -320,6 +320,8 @@ struct display {
     struct xdg_wm_base *wm_base;
     struct zwp_tablet_manager_v2* tablet_manager;
     struct zwp_tablet_seat_v2 *tablet_seat;
+    struct zwp_pointer_gestures_v1 *pointer_gestures;
+    struct zwp_pointer_gesture_hold_v1 *hold_gesture;
     struct zwp_pointer_constraints_v1 *pointer_constraints;
     struct zwp_relative_pointer_manager_v1 *relative_pointer_manager;
     struct zwp_relative_pointer_v1 *relative_pointer;
@@ -339,6 +341,18 @@ struct display {
     double wheelAccumulatorY;
     bool wheelEvtIsDiscrete;
     bool reverseScroll;
+    uint32_t lastAxisSource;
+    bool touchScrolling;
+    double touchScrollScale;
+    bool scrollGestureActive;
+    double scrollFingerX;
+    double scrollFingerY;
+    double pendingScrollDX;
+    double pendingScrollDY;
+    bool pendingScrollDeltas;
+    bool pendingScrollStop;
+    bool holdGestureActive;
+    struct timespec lastScrollLiftTime;
     int touch_id[MAX_TOUCHPOINTS];
     std::map<struct wl_surface *, struct layerFrame> layers;
 
