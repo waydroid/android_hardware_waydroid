@@ -57,7 +57,8 @@ window *multi_window_mode::get_window(waydroid_hwc_composer_device_1 *pdev, laye
 }
 
 bool multi_window_mode::can_handle_layer(const hwc_layer_1& layer) {
-    return layer.compositionType == HWC_OVERLAY && !(layer.flags & HWC_SKIP_LAYER);
+    return layer.compositionType == HWC_OVERLAY && !(layer.flags & HWC_SKIP_LAYER)
+           && layer.handle;
 }
 
 int multi_window_mode::prepare(hwc_layer_1* hwc_layer, size_t) {
@@ -101,6 +102,7 @@ int multi_window_mode::handle_layer(waydroid_hwc_composer_device_1* pdev, hwc_la
         }
         if (hwc_layer->acquireFenceFd != -1) {
             close(hwc_layer->acquireFenceFd);
+            hwc_layer->acquireFenceFd = -1;
         }
         return 0;
     }
@@ -113,6 +115,7 @@ int multi_window_mode::handle_layer(waydroid_hwc_composer_device_1* pdev, hwc_la
     } else {
         if (hwc_layer->acquireFenceFd != -1) {
             close(hwc_layer->acquireFenceFd);
+            hwc_layer->acquireFenceFd = -1;
         }
         return 0;
     }

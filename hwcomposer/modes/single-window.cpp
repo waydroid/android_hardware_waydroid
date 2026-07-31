@@ -111,6 +111,7 @@ int non_compositing_single_window_mode::handle_layer(waydroid_hwc_composer_devic
     if (!should_show()) {
         if (hwc_layer->acquireFenceFd != -1) {
             close(hwc_layer->acquireFenceFd);
+            hwc_layer->acquireFenceFd = -1;
         }
         return 0;
     }
@@ -130,6 +131,7 @@ int compositing_single_window_mode::handle_layer(waydroid_hwc_composer_device_1*
     if (!should_show()) {
         if (hwc_layer->acquireFenceFd != -1) {
             close(hwc_layer->acquireFenceFd);
+            hwc_layer->acquireFenceFd = -1;
         }
         return 0;
     }

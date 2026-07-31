@@ -375,6 +375,7 @@ static int apply_hwc_layer_to_surface_context(waydroid_hwc_composer_device_1 *pd
 out:
     if (hwc_layer->acquireFenceFd != -1) {
         close(hwc_layer->acquireFenceFd);
+        hwc_layer->acquireFenceFd = -1;
     }
     return res;
 }
@@ -385,6 +386,7 @@ int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 
         ALOGE("Failed to get wayland buffer");
         if (hwc_layer->acquireFenceFd != -1) {
             close(hwc_layer->acquireFenceFd);
+            hwc_layer->acquireFenceFd = -1;
         }
         return -1;
     }
@@ -460,8 +462,11 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             found_cursor = true;
             pdev->display->cursor_handler->apply_cursor(pdev, layer, l);
         } else {
-            if (layer->handle)
-                mode->handle_layer(pdev, layer, l);
+            /* No handle check here: modes must see every layer, both to
+             * close its acquire fence and because the framebuffer target
+             * is drawn at the position of a skipped layer, which usually
+             * has no buffer handle of its own. */
+            mode->handle_layer(pdev, layer, l);
         }
     }
     if (!found_cursor) {
@@ -469,6 +474,36 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     }
 
     mode->post_processing(pdev, contents);
+
+    /* Every close path above resets acquireFenceFd to -1, so any fence
+     * still open here was missed by all of them: close it so it cannot
+     * exhaust the fd table, and log which layer leaked it. */
+    for (size_t l = 0; l < contents->numHwLayers; l++) {
+        auto *layer = &contents->hwLayers[l];
+        if (layer->acquireFenceFd != -1) {
+            /* Rate-limited: a leak here fires every frame */
+            static unsigned leaks = 0;
+            if (leaks++ % 1024 == 0) {
+                char apps[PROPERTY_VALUE_MAX];
+                property_get("waydroid.active_apps", apps, "none");
+                ALOGE("hwc_set: unclosed acquire fence %d on layer %zu "
+                      "(compositionType %d flags %#x handle %p, %u total, "
+                      "numHwLayers %zu, should_compose %d multi %d apps '%s')",
+                      layer->acquireFenceFd, l, layer->compositionType,
+                      layer->flags, layer->handle, leaks,
+                      contents->numHwLayers, pdev->should_compose,
+                      pdev->multi_windows, apps);
+            }
+            close(layer->acquireFenceFd);
+            layer->acquireFenceFd = -1;
+        }
+    }
+    if (contents->outbufAcquireFenceFd != -1) {
+        ALOGE("hwc_set: unclosed outbuf acquire fence %d",
+              contents->outbufAcquireFenceFd);
+        close(contents->outbufAcquireFenceFd);
+        contents->outbufAcquireFenceFd = -1;
+    }
 
     for (auto& [key, window] : pdev->display->windows) {
         if (window->input_region) {
@@ -848,6 +883,7 @@ int subsurface_cursor_handler::apply_cursor(waydroid_hwc_composer_device_1* pdev
     if (!pdev->display->pointer_surface) {
         if (hwc_layer->acquireFenceFd != -1) {
             close(hwc_layer->acquireFenceFd);
+            hwc_layer->acquireFenceFd = -1;
         }
         clear_previous_subsurface_if_needed(pdev);
         return 0;
@@ -863,6 +899,7 @@ int subsurface_cursor_handler::apply_cursor(waydroid_hwc_composer_device_1* pdev
     if (window_it == pdev->display->windows.end()) {
         if (hwc_layer->acquireFenceFd != -1) {
             close(hwc_layer->acquireFenceFd);
+            hwc_layer->acquireFenceFd = -1;
         }
         clear_previous_subsurface_if_needed(pdev);
         return 0;
@@ -924,6 +961,10 @@ int wl_cursor_cursor_handler::apply_cursor(waydroid_hwc_composer_device_1* pdev,
             return -1;
         }
         set_cursor(pdev->display);
+    } else if (hwc_layer->acquireFenceFd != -1) {
+        /* Not rendering the cursor still leaves us owning its fence */
+        close(hwc_layer->acquireFenceFd);
+        hwc_layer->acquireFenceFd = -1;
     }
     return 0;
 }

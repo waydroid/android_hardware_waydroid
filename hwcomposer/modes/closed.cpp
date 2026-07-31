@@ -34,6 +34,7 @@ int closed_mode::cleanup_stale_windows(waydroid_hwc_composer_device_1* pdev,
 int closed_mode::handle_layer(waydroid_hwc_composer_device_1 *, hwc_layer_1* hwc_layer, size_t) {
     if (hwc_layer->acquireFenceFd != -1) {
         close(hwc_layer->acquireFenceFd);
+        hwc_layer->acquireFenceFd = -1;
     }
     return 0;
 }
