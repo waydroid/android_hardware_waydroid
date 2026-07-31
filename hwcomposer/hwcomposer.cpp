@@ -583,7 +583,12 @@ static int32_t hwc_attribute(struct waydroid_hwc_composer_device_1* pdev,
         }
         case HWC_DISPLAY_DPI_X:
         case HWC_DISPLAY_DPI_Y:
-            if (property_get("ro.sf.lcd_density", property, nullptr) > 0)
+            // Prefer the live value: ro.sf.lcd_density is read-only and keeps
+            // whatever was published at boot, so it cannot follow a warm output
+            // scale change. display->density is kept in step with the scale.
+            if (pdev->display->density > 0)
+                density = pdev->display->density;
+            else if (property_get("ro.sf.lcd_density", property, nullptr) > 0)
                 density = atoi(property);
             return density * 1000;
         case HWC_DISPLAY_COLOR_TRANSFORM:
