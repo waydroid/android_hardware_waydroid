@@ -40,7 +40,7 @@ void neutralize_remaining_subsurfaces(waydroid_hwc_composer_device_1 *pdev) {
             continue;
         // Neutralize unused surfaces
         for (size_t l = window->lastLayer; l < window->layers.size(); ++l) {
-            wl_surface_attach(window->layers[l].surface, nullptr, 0, 0);
+            window->layers[l].attach_buffer(nullptr);
             wl_surface_commit(window->layers[l].surface);
         }
     }

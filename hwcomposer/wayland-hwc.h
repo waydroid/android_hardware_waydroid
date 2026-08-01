@@ -162,7 +162,11 @@ struct surface_context {
     surface_context(surface_context &&other);
     surface_context &operator=(surface_context &&rhs);
 
-    void attach_buffer(buffer& buf);
+    /* Keeps the currently attached wl_buffer alive: destroying a wl_buffer
+     * that is still a surface's committed content blanks the surface. */
+    std::shared_ptr<buffer> attached_buffer;
+
+    void attach_buffer(std::shared_ptr<buffer> buf);
     void damage_surface(int32_t x, int32_t y, int32_t width, int32_t height);
     void set_buffer_transform(BufferTransform transform);
     void set_buffer_scale(double scale);
@@ -205,6 +209,9 @@ struct window {
     std::vector<layer> layers;
 
     std::unique_ptr<buffer> snapshot_buffer;
+    /* Snapshot was attempted and is not possible for this window; don't
+     * requeue it every frame. */
+    bool snapshot_unavailable = false;
 
     std::string appID;
     std::string taskID;
@@ -236,7 +243,7 @@ struct window {
     // Reset every hwc_set cycle
     struct wl_region* input_region;
     int lastLayer;
-    struct buffer *last_layer_buffer;
+    std::shared_ptr<buffer> last_layer_buffer;
 
     ~window();
 
@@ -424,7 +431,7 @@ struct display {
     std::map<uint32_t, std::string> layer_names;
     std::map<uint32_t, struct handleExt> layer_handles_ext;
     struct handleExt target_layer_handle_ext;
-    std::unordered_map<buffer_handle_t, std::unique_ptr<buffer>> buffer_map;
+    std::unordered_map<buffer_handle_t, std::shared_ptr<buffer>> buffer_map;
     std::array<uint8_t, 239> keysDown;
 
     std::unique_ptr<cursor_handler> cursor_handler;

@@ -103,7 +103,7 @@ void snapshot_inactive_app_window(struct display *display, struct window *window
 
     ALOGI("Making inactive window snapshot for %s", window->taskID.c_str());
 
-    struct buffer *old_buf = window->last_layer_buffer;
+    auto old_buf = window->last_layer_buffer;
 
     window->snapshot_buffer = create_shm_wl_buffer(display, old_buf->metadata, old_buf->handle);
     if (!window->snapshot_buffer) {
@@ -114,7 +114,18 @@ void snapshot_inactive_app_window(struct display *display, struct window *window
     // FIXME won't work as expected if there are multiple surfaces
     struct wl_surface *surface = window->layers[0].surface;
 
-    egl_render_to_pixels(display, window->snapshot_buffer.get());
+    if (display->gtype == GrallocType::GRALLOC_ANDROID) {
+        /* The EGL readback imports the gralloc handle in-container, and the
+         * pixel/arm AIDL mapper aborts (bad_optional_access in get_crop_rect)
+         * there. A plain lock+memcpy avoids that path. */
+        if (!cpu_render_to_pixels(window->snapshot_buffer.get())) {
+            window->snapshot_buffer = nullptr;
+            window->snapshot_unavailable = true;
+            return;
+        }
+    } else {
+        egl_render_to_pixels(display, window->snapshot_buffer.get());
+    }
 
     wl_surface_attach(surface, window->snapshot_buffer->wl_buffer, 0, 0);
     wl_surface_damage(surface, 0, 0, INT32_MAX, INT32_MAX);
@@ -316,6 +327,9 @@ xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
     struct window *window = (struct window *)data;
     struct display *display = window->display;
 
+    ALOGI("compositor closed toplevel task=%s app=%s",
+          window->taskID.c_str(), window->appID.c_str());
+
     // simulate user input to restart idle timeout (TODO: find a better way)
     send_key_event(window->display, 0, WL_KEYBOARD_KEY_STATE_PRESSED);
     send_key_event(window->display, 0, WL_KEYBOARD_KEY_STATE_RELEASED);
@@ -418,8 +432,9 @@ BufferTransform hwc_transform_to_buffer_transform(uint32_t hwc_transform) {
     }
 }
 
-void surface_context::attach_buffer(buffer& buf) {
-    wl_surface_attach(surface, buf.wl_buffer, 0, 0);
+void surface_context::attach_buffer(std::shared_ptr<buffer> buf) {
+    attached_buffer = std::move(buf);
+    wl_surface_attach(surface, attached_buffer ? attached_buffer->wl_buffer : nullptr, 0, 0);
 }
 
 void surface_context::damage_surface(int32_t x, int32_t y, int32_t width, int32_t height) {
@@ -606,6 +621,7 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
         return nullptr;
 
     window->display = display;
+    ALOGI("creating toplevel task=%s app=%s", taskID.c_str(), appID.c_str());
     window->surface = wl_compositor_create_surface(display->compositor);
     wl_surface_set_user_data(window->surface, window.get());
     wl_surface_add_listener(window->surface, &surface_listener, window.get());
@@ -769,7 +785,8 @@ surface_context::~surface_context() {
     if (surface)
         wl_surface_destroy(surface);
 }
-surface_context::surface_context(surface_context&& other) : surface(other.surface), viewport(other.viewport) {
+surface_context::surface_context(surface_context&& other) : surface(other.surface), viewport(other.viewport),
+        attached_buffer(std::move(other.attached_buffer)) {
     other.surface = nullptr;
     other.viewport = nullptr;
 }
@@ -781,6 +798,7 @@ surface_context& surface_context::operator=(surface_context&& rhs) {
 
     surface = rhs.surface;
     viewport = rhs.viewport;
+    attached_buffer = std::move(rhs.attached_buffer);
 
     rhs.surface = nullptr;
     rhs.viewport = nullptr;

@@ -62,7 +62,7 @@ int single_window_mode_base::cleanup_stale_windows(waydroid_hwc_composer_device_
             pdev->display->windows.erase("Waydroid");
             for (auto const& [layer_tid, window] : pdev->display->windows) {
                 (void)layer_tid;
-                if (!window->snapshot_buffer) {
+                if (!window->snapshot_buffer && !window->snapshot_unavailable) {
                     pdev->display->egl_work_queue.push_back(std::bind(snapshot_inactive_app_window, pdev->display, window.get()));
                 }
             }
@@ -84,7 +84,7 @@ int single_window_mode_base::cleanup_stale_windows(waydroid_hwc_composer_device_
     if (should_show()) {
         for (auto const& [layer_tid, window] : pdev->display->windows) {
             // Replace inactive app window buffer with snapshot
-            if (layer_tid != target_layer_tid && !window->snapshot_buffer) {
+            if (layer_tid != target_layer_tid && !window->snapshot_buffer && !window->snapshot_unavailable) {
                 pdev->display->egl_work_queue.push_back(std::bind(snapshot_inactive_app_window, pdev->display, window.get()));
             }
         }

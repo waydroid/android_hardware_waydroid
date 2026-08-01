@@ -28,6 +28,10 @@
 #include <cstdint>
 #include <memory>
 
+#include <errno.h>
+#include <fcntl.h>
+#include <string.h>
+
 #include <linux/memfd.h>
 #include <sys/syscall.h>
 #include <drm_fourcc.h>
@@ -213,6 +217,14 @@ std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_
     }
 
     for (int i = 0; i < handle->numFds; i++) {
+        /* libwayland dups the fd at marshal time; a dead fd latches EBADF on
+         * the whole display, killing the connection. Catch the culprit here. */
+        if (fcntl(handle->data[i], F_GETFD) == -1) {
+            ALOGE("create_android_wl_buffer: handle %p fd[%d]=%d invalid (%s), refusing buffer",
+                  handle, i, handle->data[i], strerror(errno));
+            android_wlegl_handle_destroy(wlegl_handle);
+            return nullptr;
+        }
         android_wlegl_handle_add_fd(wlegl_handle, handle->data[i]);
     }
 
@@ -302,6 +314,82 @@ std::unique_ptr<buffer> create_buffer_missing_android_wlegl(display *display __u
     return nullptr;
 }
 
+} // namespace
+
+/* CPU readback into an SHM snapshot buffer, for grallocs where the EGL import
+ * path aborts (mapper.pixel get_crop_rect). Output layout is the BGRA bytes
+ * WL_SHM_FORMAT_ARGB8888 expects. */
+bool cpu_render_to_pixels(buffer *buffer) {
+    const auto &metadata = buffer->metadata;
+
+    switch (metadata.format) {
+        case HAL_PIXEL_FORMAT_RGBA_8888:
+        case HAL_PIXEL_FORMAT_RGBX_8888:
+        case HAL_PIXEL_FORMAT_BGRA_8888:
+            break;
+        default:
+            ALOGE("cpu_render_to_pixels: unsupported format %u", metadata.format);
+            return false;
+    }
+    if (metadata.pixel_stride < metadata.width) {
+        ALOGE("cpu_render_to_pixels: bad stride %u for width %u",
+              metadata.pixel_stride, metadata.width);
+        return false;
+    }
+
+    // Same trap as create_android_wl_buffer: a dead fd means the source
+    // buffer was already freed on the other side.
+    for (int i = 0; i < buffer->handle->numFds; i++) {
+        if (fcntl(buffer->handle->data[i], F_GETFD) == -1) {
+            ALOGE("cpu_render_to_pixels: handle %p fd[%d]=%d invalid (%s)",
+                  buffer->handle, i, buffer->handle->data[i], strerror(errno));
+            return false;
+        }
+    }
+
+    auto &mapper = android::GraphicBufferMapper::get();
+    buffer_handle_t imported = nullptr;
+    if (mapper.importBufferNoValidate(buffer->handle, &imported) != android::OK || !imported) {
+        ALOGE("cpu_render_to_pixels: import failed for %p", buffer->handle);
+        return false;
+    }
+
+    bool ok = false;
+    void *data = nullptr;
+    android::Rect bounds(metadata.width, metadata.height);
+    android::status_t err = android::BAD_VALUE;
+    for (uint32_t usage : {(uint32_t)GRALLOC_USAGE_SW_READ_OFTEN,
+                           (uint32_t)GRALLOC_USAGE_SW_READ_RARELY,
+                           (uint32_t)(GRALLOC_USAGE_SW_READ_OFTEN | GRALLOC_USAGE_HW_TEXTURE)}) {
+        err = mapper.lock(imported, usage, bounds, &data);
+        if (err == android::OK)
+            break;
+        ALOGW("cpu_render_to_pixels: lock usage=0x%x failed (%d)", usage, err);
+    }
+    if (err == android::OK && data) {
+        bool swizzle = metadata.format != HAL_PIXEL_FORMAT_BGRA_8888;
+        for (uint32_t y = 0; y < metadata.height; y++) {
+            const uint32_t *src = (const uint32_t *)data + (size_t)y * metadata.pixel_stride;
+            uint32_t *dst = (uint32_t *)buffer->shm_data + (size_t)y * metadata.width;
+            if (swizzle) {
+                for (uint32_t x = 0; x < metadata.width; x++) {
+                    uint32_t c = src[x];
+                    dst[x] = (c & 0xFF00FF00) | ((c & 0xFF0000) >> 16) | ((c & 0xFF) << 16);
+                }
+            } else {
+                memcpy(dst, src, (size_t)metadata.width * 4);
+            }
+        }
+        mapper.unlock(imported);
+        ok = true;
+    } else {
+        ALOGE("cpu_render_to_pixels: lock failed for %p (%d)", buffer->handle, err);
+    }
+    mapper.freeBuffer(imported);
+    return ok;
+}
+
+namespace {
 void update_shm_buffer_generic(display *display, buffer *buffer) {
     display->egl_work_queue.emplace_back(std::bind(egl_render_to_pixels, display, buffer));
     sem_post(&display->egl_go);

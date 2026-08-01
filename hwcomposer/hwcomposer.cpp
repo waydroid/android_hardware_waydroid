@@ -85,7 +85,7 @@ namespace {
         return src;
     }
 
-    buffer *find_cached_buffer(waydroid_hwc_composer_device_1 *pdev, const buffer_metadata &metadata, buffer_handle_t handle) {
+    std::shared_ptr<buffer> find_cached_buffer(waydroid_hwc_composer_device_1 *pdev, const buffer_metadata &metadata, buffer_handle_t handle) {
         auto it = pdev->display->buffer_map.find(handle);
         if (it != pdev->display->buffer_map.end()) {
             /* FIXME We can't be sure that our cached buffer actually refers to the buffer corresponding to the given handle
@@ -94,13 +94,13 @@ namespace {
             if (it->second->metadata != metadata) {
                 pdev->display->buffer_map.erase(it);
             } else {
-                return it->second.get();
+                return it->second;
             }
         }
         return nullptr;
     }
 
-    buffer *get_wl_buffer(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, size_t pos) {
+    std::shared_ptr<buffer> get_wl_buffer(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1_t *layer, size_t pos) {
         const auto& gralloc_handler = pdev->gralloc_handler;
         if (!layer->handle) {
             // FRAMEBUFFER_TARGET metadata comes from the HIDL side,
@@ -115,7 +115,7 @@ namespace {
                   pos, pdev->display->layer_handles_ext.size());
             return nullptr;
         }
-        buffer *buf = find_cached_buffer(pdev, metadata, layer->handle);
+        std::shared_ptr<buffer> buf = find_cached_buffer(pdev, metadata, layer->handle);
 
         if (!buf) {
             std::unique_ptr<buffer> result;
@@ -127,13 +127,18 @@ namespace {
                 ALOGE("failed to create a wayland buffer");
                 return nullptr;
             }
-            auto emplace_result = pdev->display->buffer_map.emplace(layer->handle, std::move(result));
+            auto emplace_result = pdev->display->buffer_map.emplace(layer->handle, std::shared_ptr<buffer>(std::move(result)));
             assert(emplace_result.second);
-            buf = emplace_result.first->second.get();
+            buf = emplace_result.first->second;
+
+            static uint32_t creates = 0;
+            if (++creates % 300 == 0)
+                ALOGI("get_wl_buffer: %u wl_buffers created so far (map=%zu)",
+                      creates, pdev->display->buffer_map.size());
         }
 
         if (buf->isShm)
-            gralloc_handler.update_shm_buffer(pdev->display, buf);
+            gralloc_handler.update_shm_buffer(pdev->display, buf.get());
         return buf;
     }
 
@@ -344,7 +349,7 @@ static void apply_surface_damage(hwc_layer_1 *hwc_layer, surface_context &surfac
     });
 }
 
-static int apply_hwc_layer_to_surface_context(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index, surface_context &surface_context, buffer *buf = nullptr) {
+static int apply_hwc_layer_to_surface_context(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index, surface_context &surface_context, std::shared_ptr<buffer> buf = nullptr) {
     constexpr int acquireWarningMS = 100;
     int res = -1;
 
@@ -359,7 +364,7 @@ static int apply_hwc_layer_to_surface_context(waydroid_hwc_composer_device_1 *pd
     // TODO: Implement per-hwc_layer explicit synchronization
     hwc_layer->releaseFenceFd = -1;
 
-    surface_context.attach_buffer(*buf);
+    surface_context.attach_buffer(buf);
     apply_surface_damage(hwc_layer, surface_context);
     surface_context.set_buffer_transform(hwc_transform_to_buffer_transform(hwc_layer->transform));
     // Scaling can only be supported correctly with wp_viewport
@@ -391,7 +396,7 @@ out:
 }
 
 int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index, window *window) {
-    buffer *buf = get_wl_buffer(pdev, hwc_layer, hwc_layer_index);
+    std::shared_ptr<buffer> buf = get_wl_buffer(pdev, hwc_layer, hwc_layer_index);
     if (!buf) {
         ALOGE("Failed to get wayland buffer");
         if (hwc_layer->acquireFenceFd != -1) {
@@ -432,6 +437,7 @@ int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 
 
     // Snapshot buffer should be detached by now, clean up
     window->snapshot_buffer = nullptr;
+    window->snapshot_unavailable = false;
 
     return 0;
 }
@@ -515,6 +521,28 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     }
 
     if (pdev->should_compose && contents->flags & HWC_GEOMETRY_CHANGED) {
+        /* Diagnostics: A16 SF seems to set GEOMETRY_CHANGED much more often
+         * than A13 did. Log what the layer list looks like when it fires. */
+        static uint32_t geom_count = 0;
+        static std::string last_names;
+        std::string names;
+        for (size_t l = 0; l < contents->numHwLayers; l++) {
+            auto *layer = &contents->hwLayers[l];
+            names += l < pdev->display->layer_names.size() ? pdev->display->layer_names[l] : "?";
+            if (layer->flags & HWC_SKIP_LAYER)
+                names += "[skip]";
+            if (layer->compositionType == HWC_FRAMEBUFFER_TARGET)
+                names += "[fbt]";
+            names += '|';
+        }
+        geom_count++;
+        if (names != last_names) {
+            ALOGI("geometry changed #%u, layer set changed: %s", geom_count, names.c_str());
+            last_names = names;
+        } else if (geom_count % 120 == 0) {
+            ALOGI("geometry changed #%u with same layer set: %s (map=%zu)",
+                  geom_count, names.c_str(), pdev->display->buffer_map.size());
+        }
         pdev->display->buffer_map.clear();
     }
 
@@ -907,7 +935,7 @@ void subsurface_cursor_handler::clear_previous_subsurface_if_needed(waydroid_hwc
 
         assert(window_it->second->layers.size() == 2);
         auto &last_layer = window_it->second->layers[window_it->second->layers.size() - 1];
-        wl_surface_attach(last_layer.surface, nullptr, 0, 0);
+        last_layer.attach_buffer(nullptr);
         wl_surface_commit(last_layer.surface);
     }
     window_key = {};

@@ -37,6 +37,11 @@ window *multi_window_mode::get_window(waydroid_hwc_composer_device_1 *pdev, laye
         if (is_blacklisted(pdev, layer_info.aid, layer_info.component))
             return nullptr;
 
+        /* Swipe-closed tasks keep drawing for a few frames while they tear
+         * down; recreating their window here would flash the card back. */
+        if (pdev->display->ignored_apps.count(layer_info.tid))
+            return nullptr;
+
         auto it = windows.find(layer_info.tid);
         if (it != windows.end()) {
             return it->second.get();
@@ -75,20 +80,49 @@ int multi_window_mode::setup_set(waydroid_hwc_composer_device_1* pdev, hwc_displ
 
 int multi_window_mode::cleanup_stale_windows(waydroid_hwc_composer_device_1* pdev,
                                              hwc_display_contents_1_t* contents) {
-    pdev->display->windows.erase_if([&](const auto& it){
-        const auto& key = it.first;
+    /* A skipped layer still names its task: animation frames mark app layers
+     * HWC_SKIP_LAYER, so requiring can_handle_layer() here destroyed and
+     * recreated the toplevel across every animation. */
+    auto named_in_frame = [&](const std::string &key) {
         for (size_t i = 0; i < contents->numHwLayers; ++i) {
             const auto &layer_info = layer_infos[i];
-            const auto &layer = contents->hwLayers[i];
-            if (can_handle_layer(layer)
-                && layer_info.type != LayerSplitType::Empty && layer_info.key() == key) {
-                return false;
-            }
+            if (layer_info.type != LayerSplitType::Empty && layer_info.key() == key)
+                return true;
         }
-        return true;
+        return false;
+    };
+
+    /* Keep app cards for backgrounded tasks alive as snapshots; closing them
+     * closed the host card, and dropping to zero windows forces a wayland
+     * reconnect (splash flicker, qtmir session churn). Helper windows
+     * (InputMethod, full-ui leftovers) still close with their layers. */
+    pdev->display->windows.erase_if([&](const auto& it){
+        if (named_in_frame(it.first))
+            return false;
+        const auto& taskID = it.second->taskID;
+        return taskID == "none" || taskID == "0";
     });
 
-    pdev->display->ignored_apps.clear();
+    for (auto const& [key, window] : pdev->display->windows) {
+        if (!named_in_frame(key) && !window->snapshot_buffer && !window->snapshot_unavailable) {
+            pdev->display->egl_work_queue.push_back(std::bind(snapshot_inactive_app_window, pdev->display, window.get()));
+        }
+    }
+    if (!pdev->display->egl_work_queue.empty()) {
+        sem_post(&pdev->display->egl_go);
+        sem_wait(&pdev->display->egl_done);
+    }
+
+    /* Drop swipe-closed tasks from the ignore list only once their layers are
+     * gone; clearing it every frame recreated the card mid-teardown, and with
+     * snapshot windows the recreated card would then linger forever. */
+    auto &ignored_apps = pdev->display->ignored_apps;
+    for (auto it = ignored_apps.begin(); it != ignored_apps.end(); ) {
+        if (named_in_frame(*it))
+            ++it;
+        else
+            it = ignored_apps.erase(it);
+    }
 
     return 0;
 }

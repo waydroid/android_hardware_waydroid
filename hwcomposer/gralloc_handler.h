@@ -35,6 +35,7 @@ std::unique_ptr<buffer> create_dmabuf_wl_buffer(display *display, const buffer_m
                                                                 int prime_fd, int format, int byte_stride,
                                                                 int offset, uint64_t modifier, buffer_handle_t handle);
 std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_metadata& metadata, buffer_handle_t target);
+bool cpu_render_to_pixels(buffer *buffer);
 
 
 class gralloc_handler {
