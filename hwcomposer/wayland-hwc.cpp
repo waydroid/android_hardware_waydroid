@@ -93,6 +93,43 @@ buffer::~buffer() {
         munmap(shm_data, size);
 }
 
+/* The platform service (WayDroidService) saves each task's WMS snapshot as
+ * raw RGBA when the task leaves the foreground -- content captured by
+ * Android's SnapshotController at transition start, i.e. before the next app
+ * painted over it. Blit it into the SHM card buffer (nearest-neighbour if
+ * sizes differ, RGBA -> wl ARGB8888 swizzle). */
+static bool load_task_snapshot_file(struct window *window, struct buffer *buf) {
+    std::string path = std::string("/data/waydroid_snapshots/") + window->taskID + ".raw";
+    int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        return false;
+
+    struct { uint32_t magic, width, height, row_bytes; } hdr;
+    bool ok = read(fd, &hdr, sizeof(hdr)) == (ssize_t)sizeof(hdr)
+              && hdr.magic == 0x57444150
+              && hdr.width > 0 && hdr.height > 0
+              && hdr.width < 16384 && hdr.height < 16384
+              && hdr.row_bytes >= hdr.width * 4;
+    if (ok) {
+        size_t src_size = (size_t)hdr.row_bytes * hdr.height;
+        std::vector<uint8_t> src(src_size);
+        ok = read(fd, src.data(), src_size) == (ssize_t)src_size;
+        if (ok) {
+            uint32_t dw = buf->metadata.width, dh = buf->metadata.height;
+            for (uint32_t y = 0; y < dh; y++) {
+                const uint8_t *srow = src.data() + (size_t)((uint64_t)y * hdr.height / dh) * hdr.row_bytes;
+                uint32_t *drow = (uint32_t *)buf->shm_data + (size_t)y * dw;
+                for (uint32_t x = 0; x < dw; x++) {
+                    uint32_t c = ((const uint32_t *)srow)[(uint64_t)x * hdr.width / dw];
+                    drow[x] = (c & 0xFF00FF00) | ((c & 0xFF0000) >> 16) | ((c & 0xFF) << 16);
+                }
+            }
+        }
+    }
+    close(fd);
+    return ok;
+}
+
 // Call me from egl_worker_thread only!
 void snapshot_inactive_app_window(struct display *display, struct window *window) {
     if (!window->layers[0].surface || !window->last_layer_buffer
@@ -115,14 +152,24 @@ void snapshot_inactive_app_window(struct display *display, struct window *window
     struct wl_surface *surface = window->layers[0].surface;
 
     if (display->gtype == GrallocType::GRALLOC_ANDROID) {
-        /* The EGL readback imports the gralloc handle in-container, and the
-         * pixel/arm AIDL mapper aborts (bad_optional_access in get_crop_rect)
-         * there. A plain lock+memcpy avoids that path. */
-        if (!cpu_render_to_pixels(window->snapshot_buffer.get())) {
+        /* The EGL readback aborts in mapper.pixel here, so prefer the WMS
+         * snapshot file: correct pre-switch content, no gralloc access. The
+         * platform service writes it moments after the task defocuses, so
+         * wait a bounded number of frames for it before falling back to the
+         * CPU readback (refused on grallocs with GPU-only buffers, then the
+         * card keeps its last live buffer as before). */
+        bool from_file = load_task_snapshot_file(window, window->snapshot_buffer.get());
+        if (!from_file && ++window->snapshot_file_attempts < 180) {
+            window->snapshot_buffer = nullptr;
+            return;
+        }
+        if (!from_file && !cpu_render_to_pixels(window->snapshot_buffer.get())) {
             window->snapshot_buffer = nullptr;
             window->snapshot_unavailable = true;
             return;
         }
+        ALOGI("Frozen card %s#%s from %s", window->appID.c_str(), window->taskID.c_str(),
+              from_file ? "WMS snapshot" : "CPU readback");
     } else {
         egl_render_to_pixels(display, window->snapshot_buffer.get());
     }
@@ -272,8 +319,18 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
      * sending its layers again (it currently shows a snapshot). setFocusedTask()
      * moves the task to top and resumes it. taskID "0"/"none" is the launcher /
      * full-ui surface, which has no app task to focus. */
+    /* The screen_on belief can go stale (Android dozing on its own, a key
+     * injection lost while the input pipe was down); then set_screen_state
+     * becomes a no-op and Android never wakes again. KEY_WAKEUP is not a
+     * toggle, so on real engagement force one regardless of belief — and do
+     * it BEFORE setFocusedTask so the resume isn't swallowed by sleep. */
+    if (is_activated && !window->activated)
+        force_screen_wakeup(display);
+
     if (is_activated && !window->activated && display->task != nullptr
         && window->taskID != "none" && window->taskID != "0") {
+        ALOGI("ACTIVATED edge for %s#%s -> setFocusedTask",
+              window->appID.c_str(), window->taskID.c_str());
         display->task->setFocusedTask(stoi(window->taskID));
     }
 
@@ -952,6 +1009,21 @@ static void set_screen_state(struct display *display, bool on) {
     send_key_event(display, key, WL_KEYBOARD_KEY_STATE_RELEASED);
 }
 
+/* Belief-independent wake: KEY_WAKEUP is idempotent, so when the user
+ * demonstrably engages a window we can always send one, curing any
+ * screen_on-vs-reality desync (observed: Android asleep under an awake,
+ * card-showing host shell, which no edge could ever fix). */
+void force_screen_wakeup(struct display *display) {
+    std::scoped_lock lock(display->windowsMutex);
+    if (!display->screen_on)
+        ALOGI("waydroid: engagement while believed asleep, waking normally");
+    else
+        ALOGI("waydroid: engagement wake (belief=on), sending KEY_WAKEUP anyway");
+    display->screen_on = true;
+    send_key_event(display, KEY_WAKEUP, WL_KEYBOARD_KEY_STATE_PRESSED);
+    send_key_event(display, KEY_WAKEUP, WL_KEYBOARD_KEY_STATE_RELEASED);
+}
+
 /* Whether any window justifies keeping Android resumed: the host has one
  * focused (ACTIVATED), one is too fresh to have been focused yet (mirrors the
  * any_window_visible grace), or Android itself asked to stay awake through
@@ -1074,8 +1146,15 @@ keyboard_handle_enter(void *data, struct wl_keyboard *,
     if (!window)
         return; // Window was destroyed in hwc_set
 
+    /* Keyboard focus is engagement too; cure a stale screen_on belief here
+     * as well (greeter unlock re-enters without any ACTIVATED edge). Wake
+     * before focusing so the resume isn't swallowed by sleep. */
+    force_screen_wakeup(display);
+
     if (display->task != nullptr) {
         if (window->taskID != "none" && window->taskID != "0") {
+            ALOGI("keyboard enter on %s#%s -> setFocusedTask",
+                  window->appID.c_str(), window->taskID.c_str());
             window->display->task->setFocusedTask(stoi(window->taskID));
         }
     }

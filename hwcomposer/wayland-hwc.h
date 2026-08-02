@@ -212,6 +212,9 @@ struct window {
     /* Snapshot was attempted and is not possible for this window; don't
      * requeue it every frame. */
     bool snapshot_unavailable = false;
+    /* Frames spent waiting for the platform service to write this task's
+     * snapshot file before falling back (see snapshot_inactive_app_window). */
+    int snapshot_file_attempts = 0;
 
     std::string appID;
     std::string taskID;
@@ -265,6 +268,7 @@ struct window {
 /* Recompute host-side visibility and flip Android screen power to match.
  * Defined in wayland-hwc.cpp. */
 void update_screen_power(struct display *display);
+void force_screen_wakeup(struct display *display);
 
 class open_windows {
     using Collection = std::map<std::string, std::unique_ptr<window>>;
