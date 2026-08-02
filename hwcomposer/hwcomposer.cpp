@@ -456,6 +456,43 @@ static void init_cursor_handler(waydroid_hwc_composer_device_1 *pdev) {
     }
 }
 
+/* Observability hook: `setprop waydroid.dump_hal 1` makes the next hwc_set
+ * log what the HAL believes (mode, windows, buffers) without a rebuild. */
+static void maybe_dump_hal_state(waydroid_hwc_composer_device_1 *pdev, hwc_display_contents_1_t *contents) {
+    if (!property_get_bool("waydroid.dump_hal", false))
+        return;
+    property_set("waydroid.dump_hal", "0");
+
+    ALOGI("=== HAL STATE DUMP ===");
+    ALOGI("active_apps=%s multi_windows=%d should_compose=%d wl_alive=%d",
+          property_get_string("waydroid.active_apps", "none").c_str(),
+          pdev->multi_windows, pdev->should_compose, pdev->display->wl_alive.load());
+    ALOGI("buffer_map=%zu layers=%zu", pdev->display->buffer_map.size(), contents->numHwLayers);
+
+    for (size_t l = 0; l < contents->numHwLayers; l++) {
+        auto *layer = &contents->hwLayers[l];
+        ALOGI("  layer[%zu] name=%s%s%s", l,
+              pdev->display->layer_names.count(l) ? pdev->display->layer_names[l].c_str() : "?",
+              layer->flags & HWC_SKIP_LAYER ? " [skip]" : "",
+              layer->compositionType == HWC_FRAMEBUFFER_TARGET ? " [fbt]" : "");
+    }
+
+    std::string ignored;
+    for (const auto &tid : pdev->display->ignored_apps)
+        ignored += tid + " ";
+    ALOGI("ignored_apps: %s", ignored.empty() ? "(none)" : ignored.c_str());
+
+    for (const auto &[id, window] : pdev->display->windows) {
+        ALOGI("  window[%s] app=%s task=%s activated=%d outputs=%d suspended=%d shown=%d snapshot=%s live_buf=%d",
+              id.c_str(), window->appID.c_str(), window->taskID.c_str(),
+              window->activated, window->outputs_entered, window->suspended,
+              window->ever_shown,
+              window->snapshot_buffer ? "yes" : (window->snapshot_unavailable ? "unavailable" : "no"),
+              !!window->last_layer_buffer);
+    }
+    ALOGI("=== END HAL STATE DUMP ===");
+}
+
 /* Whether this frame contains anything we would map a window for. */
 static bool frame_has_content(waydroid_hwc_composer_device_1 *pdev, hwc_display_contents_1_t *contents) {
     std::string active_apps = property_get_string("waydroid.active_apps", "none");
@@ -487,6 +524,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
     hwc_display_contents_1_t* contents = displays[HWC_DISPLAY_PRIMARY];
     assert(contents);
+
+    maybe_dump_hal_state(pdev, contents);
 
     /* If the wayland thread saw the connection drop, reconnect here (we own
      * pdev, hence the cursor handler) before touching any wayland proxy.
