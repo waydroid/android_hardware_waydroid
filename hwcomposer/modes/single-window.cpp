@@ -40,6 +40,7 @@ window *single_window_mode_base::get_window(waydroid_hwc_composer_device_1 *pdev
     if (it != windows.end()) {
         return it->second.get();
     } else {
+        pdev->display->note_task_from_layer(target_layer_tid, target_layer_aid);
         return windows.add(pdev, target_layer_tid, target_layer_aid, target_layer_tid);
     }
 }
@@ -51,6 +52,8 @@ int single_window_mode_base::setup_set(waydroid_hwc_composer_device_1* pdev, hwc
 
 int single_window_mode_base::cleanup_stale_windows(waydroid_hwc_composer_device_1* pdev,
                                                    hwc_display_contents_1_t*) {
+    close_windows_for_dead_tasks(pdev);
+
     auto first_tid_layer = std::find_if(layer_infos.container().cbegin(), layer_infos.container().cend(), [&](const auto& layer_info){
         return layer_info.type == LayerSplitType::TID;
     });
@@ -71,7 +74,7 @@ int single_window_mode_base::cleanup_stale_windows(waydroid_hwc_composer_device_
                 sem_wait(&pdev->display->egl_done);
             }
             return 0;
-        } else if (pdev->display->ignored_apps.count(first_tid_layer->tid) == 0) {
+        } else if (!pdev->display->task_closing(first_tid_layer->tid)) {
             target_layer_tid = first_tid_layer->tid;
             target_layer_aid = first_tid_layer->aid;
         }
@@ -94,18 +97,17 @@ int single_window_mode_base::cleanup_stale_windows(waydroid_hwc_composer_device_
         }
     }
 
-    // Clear ignored apps that are closed now
-    auto &ignored_apps = pdev->display->ignored_apps;
-    auto it = ignored_apps.begin();
-    while (it != ignored_apps.end()) {
-        bool still_shown = std::any_of(layer_infos.container().begin(), layer_infos.container().end(), [&it](const auto &layer_info){
-            return layer_info.type == LayerSplitType::TID && layer_info.tid == *it;
-        });
-
-        if (still_shown) {
-            ++it;
-        } else {
-            it = pdev->display->ignored_apps.erase(it);
+    /* Without WMS events, drop close-pending marks once the task's layers are
+     * gone; with events, taskRemoved is the authoritative clear. */
+    if (!pdev->display->task_events_seen) {
+        for (auto &[tid, task] : pdev->display->tasks) {
+            if (!task.closing)
+                continue;
+            bool still_shown = std::any_of(layer_infos.container().begin(), layer_infos.container().end(), [&](const auto &layer_info){
+                return layer_info.type == LayerSplitType::TID && layer_info.tid == tid;
+            });
+            if (!still_shown)
+                task.closing = false;
         }
     }
 

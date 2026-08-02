@@ -151,4 +151,65 @@ Return<void> WaydroidWindow::setIdleInhibit(const hidl_string& task, bool enable
     return Void();
 }
 
+// Methods from ::vendor::waydroid::window::V1_3::IWaydroidWindow follow.
+Return<void> WaydroidWindow::taskCreated(uint32_t taskID, const hidl_string& packageName,
+                                         const hidl_string& componentName) {
+    std::string tid = std::to_string(taskID);
+    std::scoped_lock lock(mDisplay->windowsMutex);
+    mDisplay->task_events_seen = true;
+
+    auto it = mDisplay->tasks.find(tid);
+    if (it != mDisplay->tasks.end() && it->second.closing) {
+        /* Android reuses task IDs; a new task with the ID of a close-pending
+         * card must not resurrect it. */
+        ALOGI("taskCreated %s (%s): ignored, close pending", tid.c_str(), packageName.c_str());
+        return Void();
+    }
+    auto &task = mDisplay->tasks[tid];
+    task.appID = packageName;
+    task.component = componentName;
+    task.from_layer = false;
+    ALOGI("taskCreated %s %s/%s", tid.c_str(), packageName.c_str(), componentName.c_str());
+    return Void();
+}
+
+Return<void> WaydroidWindow::taskRemoved(uint32_t taskID) {
+    std::string tid = std::to_string(taskID);
+    std::scoped_lock lock(mDisplay->windowsMutex);
+    mDisplay->task_events_seen = true;
+
+    mDisplay->tasks.erase(tid);
+    bool had_window = mDisplay->windows.find(tid) != mDisplay->windows.end();
+    if (had_window)
+        mDisplay->windows.erase(tid);
+    ALOGI("taskRemoved %s%s", tid.c_str(), had_window ? ": closed its card" : "");
+    /* hwc_set flushes each frame, but with the display asleep SF posts no
+     * frames and the surface destruction would sit in the send buffer. */
+    if (had_window && mDisplay->wl_alive.load())
+        wl_display_flush(mDisplay->display);
+    return Void();
+}
+
+Return<void> WaydroidWindow::taskFocusChanged(uint32_t taskID, bool focused) {
+    std::string tid = std::to_string(taskID);
+    std::scoped_lock lock(mDisplay->windowsMutex);
+    mDisplay->task_events_seen = true;
+
+    auto it = mDisplay->tasks.find(tid);
+    if (it == mDisplay->tasks.end()) {
+        if (!focused)
+            return Void();
+        ALOGW("taskFocusChanged %s: unknown task, self-healing an entry", tid.c_str());
+        it = mDisplay->tasks.emplace(tid, task_info{}).first;
+    }
+    if (focused) {
+        for (auto &[other_tid, task] : mDisplay->tasks)
+            task.focused = (other_tid == tid);
+    } else {
+        it->second.focused = false;
+    }
+    ALOGI("taskFocusChanged %s focused=%d", tid.c_str(), focused);
+    return Void();
+}
+
 }  // namespace vendor::waydroid::window::implementation

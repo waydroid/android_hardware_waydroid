@@ -61,7 +61,7 @@ using ::android::hardware::joinRpcThreadpool;
 
 using ::vendor::waydroid::display::V1_2::IWaydroidDisplay;
 using ::vendor::waydroid::display::V1_2::implementation::WaydroidDisplay;
-using ::vendor::waydroid::window::V1_1::IWaydroidWindow;
+using ::vendor::waydroid::window::V1_3::IWaydroidWindow;
 using ::vendor::waydroid::window::implementation::WaydroidWindow;
 using ::vendor::waydroid::clipboard::V1_0::IWaydroidClipboard;
 using ::vendor::waydroid::clipboard::implementation::WaydroidClipboard;
@@ -323,6 +323,66 @@ static const struct wp_presentation_feedback_listener feedback_listener = {
     feedback_discarded
 };
 
+/* Close cards whose Android task no longer exists. With the @1.3 control
+ * plane live this is only a safety net — taskRemoved closes the card
+ * directly — plus the expiry of stale close-pending marks. Without it, fall
+ * back to the waydroid.task_list prop published by WayDroidService. A dead
+ * task's card otherwise lingers forever with stale content, and its
+ * open.<pkg> prop makes the host launcher treat the app as running — icon
+ * clicks then focus the zombie instead of launching. Fresh windows are
+ * spared: their task may not have reached the table/prop yet. */
+void close_windows_for_dead_tasks(struct waydroid_hwc_composer_device_1 *pdev) {
+    auto *display = pdev->display;
+    auto now = std::chrono::steady_clock::now();
+
+    if (display->task_events_seen) {
+        /* A close-pending task whose taskRemoved never arrived (lost oneway
+         * call, removeTask failure) must not suppress its card forever. */
+        for (auto &[tid, task] : display->tasks) {
+            if (task.closing && now - task.closing_since > std::chrono::seconds(10)) {
+                ALOGW("task %s: no taskRemoved within 10s of close, dropping close-pending mark", tid.c_str());
+                task.closing = false;
+            }
+        }
+
+        std::vector<std::string> dead;
+        for (auto const& [id, window] : display->windows) {
+            const std::string &tid = window->taskID;
+            if (tid == "0" || tid == "none")
+                continue;
+            if (now - window->created_at < std::chrono::seconds(5))
+                continue;
+            if (!display->tasks.count(tid))
+                dead.push_back(id);
+        }
+        for (auto const& id : dead) {
+            ALOGI("closing card %s: its Android task is gone", id.c_str());
+            display->windows.erase(id);
+        }
+        return;
+    }
+
+    char property[PROPERTY_VALUE_MAX];
+    if (property_get("waydroid.task_list", property, nullptr) <= 0)
+        return;
+    std::string list = std::string(",") + property + ",";
+
+    std::vector<std::string> dead;
+    for (auto const& [id, window] : display->windows) {
+        const std::string &tid = window->taskID;
+        if (tid == "0" || tid == "none")
+            continue;
+        if (now - window->created_at < std::chrono::seconds(5))
+            continue;
+        if (list.find("," + tid + ",") == std::string::npos)
+            dead.push_back(id);
+    }
+    for (auto const& id : dead) {
+        ALOGI("closing card %s: its Android task is gone", id.c_str());
+        display->windows.erase(id);
+    }
+}
+
 bool is_blacklisted(struct waydroid_hwc_composer_device_1* pdev, const std::string &app_id, const std::string &component) {
     auto match = pdev->blacklisted_apps.find(app_id);
     if (match == pdev->blacklisted_apps.end())
@@ -438,6 +498,7 @@ int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 
     // Snapshot buffer should be detached by now, clean up
     window->snapshot_buffer = nullptr;
     window->snapshot_unavailable = false;
+    window->snapshot_file_attempts = 0;
 
     return 0;
 }
@@ -463,6 +524,7 @@ static void maybe_dump_hal_state(waydroid_hwc_composer_device_1 *pdev, hwc_displ
         return;
     property_set("waydroid.dump_hal", "0");
 
+    std::scoped_lock lock(pdev->display->windowsMutex);
     ALOGI("=== HAL STATE DUMP ===");
     ALOGI("active_apps=%s multi_windows=%d should_compose=%d wl_alive=%d",
           property_get_string("waydroid.active_apps", "none").c_str(),
@@ -477,10 +539,12 @@ static void maybe_dump_hal_state(waydroid_hwc_composer_device_1 *pdev, hwc_displ
               layer->compositionType == HWC_FRAMEBUFFER_TARGET ? " [fbt]" : "");
     }
 
-    std::string ignored;
-    for (const auto &tid : pdev->display->ignored_apps)
-        ignored += tid + " ";
-    ALOGI("ignored_apps: %s", ignored.empty() ? "(none)" : ignored.c_str());
+    ALOGI("task table (%zu entries, wms_events=%d):",
+          pdev->display->tasks.size(), pdev->display->task_events_seen);
+    for (const auto &[tid, task] : pdev->display->tasks)
+        ALOGI("  task[%s] app=%s comp=%s focused=%d closing=%d from_layer=%d",
+              tid.c_str(), task.appID.c_str(), task.component.c_str(),
+              task.focused, task.closing, task.from_layer);
 
     for (const auto &[id, window] : pdev->display->windows) {
         ALOGI("  window[%s] app=%s task=%s activated=%d outputs=%d suspended=%d shown=%d snapshot=%s live_buf=%d",
@@ -506,7 +570,7 @@ static bool frame_has_content(waydroid_hwc_composer_device_1 *pdev, hwc_display_
     for (const auto &layer_info : layer_infos.container()) {
         if (layer_info.type != LayerSplitType::TID)
             continue;
-        if (pdev->display->ignored_apps.count(layer_info.tid))
+        if (pdev->display->task_closing(layer_info.tid))
             continue;
         if (is_blacklisted(pdev, layer_info.aid, layer_info.component))
             continue;
@@ -535,14 +599,19 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         std::scoped_lock lock(pdev->display->windowsMutex);
         if (!pdev->display->wl_alive.load()) {
             if (!frame_has_content(pdev, contents)) {
-                /* Parked with nothing to map. cleanup_stale_windows (which
-                 * clears ignored_apps) never runs while parked, so a task
-                 * swipe-closed as the last window would stay ignored forever
-                 * and its relaunch (Android reuses the task ID) would never
-                 * present. When Android reports no foreground app the ignores
-                 * are provably stale, so drop them here to break that loop. */
-                if (property_get_string("waydroid.active_apps", "none") == "none")
-                    pdev->display->ignored_apps.clear();
+                /* Parked with nothing to map. Without WMS events the
+                 * close-pending marks are only cleared by
+                 * cleanup_stale_windows, which never runs while parked, so a
+                 * task swipe-closed as the last window would stay suppressed
+                 * forever and its relaunch (Android reuses the task ID) would
+                 * never present. When Android reports no foreground app the
+                 * marks are provably stale, so drop them here. With events,
+                 * taskRemoved clears them even while parked. */
+                if (!pdev->display->task_events_seen &&
+                        property_get_string("waydroid.active_apps", "none") == "none") {
+                    for (auto &[tid, task] : pdev->display->tasks)
+                        task.closing = false;
+                }
                 /* Consume the frame without touching wayland. */
                 for (size_t l = 0; l < contents->numHwLayers; l++) {
                     if (contents->hwLayers[l].acquireFenceFd != -1)

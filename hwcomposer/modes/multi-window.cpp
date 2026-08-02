@@ -39,13 +39,14 @@ window *multi_window_mode::get_window(waydroid_hwc_composer_device_1 *pdev, laye
 
         /* Swipe-closed tasks keep drawing for a few frames while they tear
          * down; recreating their window here would flash the card back. */
-        if (pdev->display->ignored_apps.count(layer_info.tid))
+        if (pdev->display->task_closing(layer_info.tid))
             return nullptr;
 
         auto it = windows.find(layer_info.tid);
         if (it != windows.end()) {
             return it->second.get();
         } else {
+            pdev->display->note_task_from_layer(layer_info.tid, layer_info.aid);
             return windows.add(pdev, layer_info.tid, layer_info.aid, layer_info.tid, color_transparent);
         }
     } else if (layer_info.type == LayerSplitType::RawName) {
@@ -80,6 +81,8 @@ int multi_window_mode::setup_set(waydroid_hwc_composer_device_1* pdev, hwc_displ
 
 int multi_window_mode::cleanup_stale_windows(waydroid_hwc_composer_device_1* pdev,
                                              hwc_display_contents_1_t* contents) {
+    close_windows_for_dead_tasks(pdev);
+
     /* A skipped layer still names its task: animation frames mark app layers
      * HWC_SKIP_LAYER, so requiring can_handle_layer() here destroyed and
      * recreated the toplevel across every animation. */
@@ -113,15 +116,14 @@ int multi_window_mode::cleanup_stale_windows(waydroid_hwc_composer_device_1* pde
         sem_wait(&pdev->display->egl_done);
     }
 
-    /* Drop swipe-closed tasks from the ignore list only once their layers are
-     * gone; clearing it every frame recreated the card mid-teardown, and with
-     * snapshot windows the recreated card would then linger forever. */
-    auto &ignored_apps = pdev->display->ignored_apps;
-    for (auto it = ignored_apps.begin(); it != ignored_apps.end(); ) {
-        if (named_in_frame(*it))
-            ++it;
-        else
-            it = ignored_apps.erase(it);
+    /* Without WMS events, drop close-pending marks only once the task's
+     * layers are gone (clearing every frame recreated the card mid-teardown).
+     * With events, taskRemoved is the authoritative clear. */
+    if (!pdev->display->task_events_seen) {
+        for (auto &[tid, task] : pdev->display->tasks) {
+            if (task.closing && !named_in_frame(tid))
+                task.closing = false;
+        }
     }
 
     return 0;

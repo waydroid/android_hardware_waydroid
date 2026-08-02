@@ -349,6 +349,21 @@ struct cursor_handler {
     virtual int on_cursor_enter(display *display) = 0;
 };
 
+/* One Android task as the HAL knows it. Entries are pushed by WayDroidService
+ * over IWaydroidWindow@1.3 (authoritative) or self-healed from TID layer
+ * names when no event arrived (from_layer). Guarded by windowsMutex. */
+struct task_info {
+    std::string appID;
+    std::string component;
+    bool focused = false;
+    /* Two-phase close: the host closed the card, Android was asked to remove
+     * the task, and until the authoritative taskRemoved arrives this task's
+     * layers must not recreate a window (teardown frames, task-ID reuse). */
+    bool closing = false;
+    bool from_layer = false;
+    std::chrono::steady_clock::time_point closing_since {};
+};
+
 struct display {
     pthread_t wayland_thread; // constant after init
 
@@ -402,7 +417,15 @@ struct display {
     std::map<struct wl_surface *, struct layerFrame> layers;
 
     open_windows windows;
-    std::set<std::string> ignored_apps;
+
+    /* Task table (see task_info). task_events_seen flips once the framework
+     * pushes any @1.3 task event; until then consumers fall back to the old
+     * prop/layer heuristics so an unpatched platform jar keeps working. */
+    std::map<std::string, task_info> tasks;
+    bool task_events_seen = false;
+    bool task_closing(const std::string &tid);
+    void note_task_from_layer(const std::string &tid, const std::string &aid);
+
     std::recursive_mutex windowsMutex;
 
     std::map<int, struct wl_surface *> touch_surfaces;

@@ -37,6 +37,7 @@ cc_library_shared {
         "vendor.waydroid.window@1.0",
         "vendor.waydroid.window@1.1",
         "vendor.waydroid.window@1.2",
+        "vendor.waydroid.window@1.3",
     ],
     static_libs: [
         "libwayland_client_static",

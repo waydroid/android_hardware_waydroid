@@ -406,10 +406,17 @@ xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
     std::string key;
     if (window->taskID != "0" && window->taskID != "none") {
         key = window->taskID;
+        /* Two-phase close: the card is gone host-side, but the task entry
+         * stays marked closing until WMS confirms with taskRemoved, so
+         * teardown frames (or a reused task ID) can't recreate it. */
+        auto &task = display->tasks[key];
+        if (task.appID.empty())
+            task.appID = window->appID;
+        task.closing = true;
+        task.closing_since = std::chrono::steady_clock::now();
     } else {
         key = window->appID;
     }
-    display->ignored_apps.insert(key);
     display->windows.erase(key);
 
     /* The shell may have dropped the app entry backing this connection
@@ -2597,6 +2604,28 @@ static void
 wayland_log_handler (const char *format, va_list args)
 {
     LOG_PRI_VA (ANDROID_LOG_ERROR, "wayland-hwc", format, args);
+}
+
+bool display::task_closing(const std::string &tid) {
+    std::scoped_lock lock(windowsMutex);
+    auto it = tasks.find(tid);
+    return it != tasks.end() && it->second.closing;
+}
+
+/* A TID layer named a task the table doesn't know: repair it. Covers tasks
+ * that predate a composer restart and any missed oneway event. */
+void display::note_task_from_layer(const std::string &tid, const std::string &aid) {
+    std::scoped_lock lock(windowsMutex);
+    auto it = tasks.find(tid);
+    if (it == tasks.end()) {
+        if (task_events_seen)
+            ALOGW("task %s (%s) seen in layers but never pushed by WMS; self-healed", tid.c_str(), aid.c_str());
+        auto &task = tasks[tid];
+        task.appID = aid;
+        task.from_layer = true;
+    } else if (it->second.appID.empty()) {
+        it->second.appID = aid;
+    }
 }
 
 window *open_windows::add(waydroid_hwc_composer_device_1 *pdev, const std::string& key, const std::string& aid, const std::string& tid, hwc_color_t color) {

@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include <vendor/waydroid/window/1.2/IWaydroidWindow.h>
+#include <vendor/waydroid/window/1.3/IWaydroidWindow.h>
 #include <hidl/MQDescriptor.h>
 #include <hidl/Status.h>
 
@@ -32,7 +32,7 @@ using ::android::hardware::Return;
 using ::android::hardware::Void;
 using ::android::sp;
 
-struct WaydroidWindow : public V1_2::IWaydroidWindow {
+struct WaydroidWindow : public V1_3::IWaydroidWindow {
   public:
     WaydroidWindow(struct display *display);
     // Methods from ::vendor::waydroid::window::V1_0::IWaydroidWindow follow.
@@ -43,6 +43,12 @@ struct WaydroidWindow : public V1_2::IWaydroidWindow {
 
     // Methods from ::vendor::waydroid::window::V1_2::IWaydroidWindow follow.
     Return<void> setIdleInhibit(const hidl_string& packageName, bool enabled) override;
+
+    // Methods from ::vendor::waydroid::window::V1_3::IWaydroidWindow follow.
+    Return<void> taskCreated(uint32_t taskID, const hidl_string& packageName,
+                             const hidl_string& componentName) override;
+    Return<void> taskRemoved(uint32_t taskID) override;
+    Return<void> taskFocusChanged(uint32_t taskID, bool focused) override;
   private:
     struct display *mDisplay;
 };

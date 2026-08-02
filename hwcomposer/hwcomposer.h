@@ -83,3 +83,4 @@ struct waydroid_hwc_composer_device_1 : hwc_composer_device_1_t {
 
 int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index, window *window);
 bool is_blacklisted(struct waydroid_hwc_composer_device_1* pdev, const std::string &app_id, const std::string &component);
+void close_windows_for_dead_tasks(struct waydroid_hwc_composer_device_1* pdev);

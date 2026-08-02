@@ -29,7 +29,6 @@
 
 void clear_open_windows(waydroid_hwc_composer_device_1 *pdev) {
     pdev->display->windows.clear();
-    pdev->display->ignored_apps.clear();
 }
 
 void neutralize_remaining_subsurfaces(waydroid_hwc_composer_device_1 *pdev) {
