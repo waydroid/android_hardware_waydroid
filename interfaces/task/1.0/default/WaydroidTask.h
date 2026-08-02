@@ -50,6 +50,9 @@ struct WaydroidTask : public IWaydroidTask {
     Return<void> removeAllVisibleRecentTasks() override;
     Return<void> getAppName(const hidl_string& packageName, getAppName_cb _hidl_cb) override;
   private:
+    sp<IActivityTaskManager> getActivityTaskManager();
+    sp<IPlatform> getPlatform();
+
     sp<IActivityTaskManager> mActivityTaskManager;
     sp<IPlatform> mPlatform;
 };
