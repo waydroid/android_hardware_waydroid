@@ -152,8 +152,12 @@ namespace {
      * (display@1.3); the hwc layer walk drives nothing. Window teardown is
      * handled by taskRemoved and close_windows_for_dead_tasks. */
     struct task_streams_mode : waydroid_mode {
-        int cleanup_stale_windows(waydroid_hwc_composer_device_1 *,
+        int cleanup_stale_windows(waydroid_hwc_composer_device_1 *pdev,
                                   hwc_display_contents_1_t *) override {
+            /* Still needed here: the close-pending expiry and the dead-task
+             * sweep. Without it a lost taskRemoved left closing=1 forever
+             * and the task's relaunch never got a card. */
+            close_windows_for_dead_tasks(pdev);
             return 0;
         }
         int handle_layer(waydroid_hwc_composer_device_1 *, hwc_layer_1 *, size_t) override {
@@ -364,14 +368,7 @@ void close_windows_for_dead_tasks(struct waydroid_hwc_composer_device_1 *pdev) {
     auto now = std::chrono::steady_clock::now();
 
     if (display->task_events_seen) {
-        /* A close-pending task whose taskRemoved never arrived (lost oneway
-         * call, removeTask failure) must not suppress its card forever. */
-        for (auto &[tid, task] : display->tasks) {
-            if (task.closing && now - task.closing_since > std::chrono::seconds(10)) {
-                ALOGW("task %s: no taskRemoved within 10s of close, dropping close-pending mark", tid.c_str());
-                task.closing = false;
-            }
-        }
+        display->expire_closing_marks();
 
         std::vector<std::string> dead;
         for (auto const& [id, window] : display->windows) {
@@ -626,6 +623,9 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     if (!pdev->display->wl_alive.load()) {
         std::scoped_lock lock(pdev->display->windowsMutex);
         if (!pdev->display->wl_alive.load()) {
+            /* frame_has_content skips close-pending tasks, so a stale mark
+             * on the only visible task would also block reconnecting. */
+            pdev->display->expire_closing_marks();
             if (!frame_has_content(pdev, contents)) {
                 /* Parked with nothing to map. Without WMS events the
                  * close-pending marks are only cleared by
@@ -941,6 +941,8 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
         ALOGE("%s called with bad name %s", __FUNCTION__, name);
         return -EINVAL;
     }
+
+    open_windows::clear_stale_props();
 
     waydroid_hwc_composer_device_1 *pdev = new waydroid_hwc_composer_device_1();
     if (!pdev) {

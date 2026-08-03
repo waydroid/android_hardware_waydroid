@@ -204,6 +204,13 @@ Return<void> WaydroidWindow::taskFocusChanged(uint32_t taskID, bool focused) {
         it = mDisplay->tasks.emplace(tid, task_info{}).first;
     }
     if (focused) {
+        /* WMS brought the task to front, so it is not going away: a stale
+         * close-pending mark (lost taskRemoved) would refuse its posts and
+         * the relaunched app would never get a card. */
+        if (it->second.closing) {
+            ALOGW("taskFocusChanged %s: focused while close pending, dropping the mark", tid.c_str());
+            it->second.closing = false;
+        }
         for (auto &[other_tid, task] : mDisplay->tasks)
             task.focused = (other_tid == tid);
     } else {

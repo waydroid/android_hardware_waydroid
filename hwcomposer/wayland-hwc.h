@@ -231,6 +231,11 @@ struct window {
      * toplevel brings the matching Android task to the front exactly once. */
     bool activated = false;
 
+    /* Last time engagement on this window re-asserted its Android task focus
+     * (see reassert_task_focus); bounds how often a stream of touches can
+     * repeat the call. Guarded by windowsMutex. */
+    std::chrono::steady_clock::time_point last_focus_assert {};
+
     /* Host-side visibility tracking, used to drive Android screen power.
      * outputs_entered: number of wl_outputs this toplevel is currently shown
      * on (wl_surface.enter/leave); 0 means off-screen/minimized on compositors
@@ -341,6 +346,10 @@ class open_windows {
         property_set("waydroid.open_windows", windows_size_str.c_str());
         publish_open_apps();
     }
+
+    /* Zero window-state props orphaned by a previous composer instance.
+     * Call before the first window is created. */
+    static void clear_stale_props();
 
     window *add(waydroid_hwc_composer_device_1 *pdev, const std::string& key, const std::string& aid, const std::string& tid, hwc_color_t color = {0, 0, 0, 255});
     void add(const std::string& key, std::unique_ptr<window> window);
@@ -469,6 +478,7 @@ struct display {
     std::map<std::string, task_info> tasks;
     bool task_events_seen = false;
     bool task_closing(const std::string &tid);
+    void expire_closing_marks();
     void note_task_from_layer(const std::string &tid, const std::string &aid);
 
     std::map<uint32_t, task_stream> task_streams;

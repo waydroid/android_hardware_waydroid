@@ -63,6 +63,7 @@
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
 #include <cutils/trace.h>
 #include <cutils/properties.h>
+#include <sys/system_properties.h>
 
 #include <xkbcommon/xkbcommon.h>
 #include <cinttypes>
@@ -302,6 +303,91 @@ unfocused_doze_grace()
         "persist.waydroid.unfocused_doze_ms", kUnfocusedDozeDefaultMs));
 }
 
+/* Repeat asserts from a stream of touches are pointless; one per gesture is
+ * plenty and setFocusedTask is a binder round trip. */
+static constexpr auto kFocusAssertDebounce = std::chrono::milliseconds(500);
+
+/* Input lands on whichever surface the compositor picked: a toplevel (which
+ * carries its window as user data) or one of its layer subsurfaces, which
+ * carry none. Caller must hold windowsMutex. */
+static struct window *
+window_for_surface(struct display *display, struct wl_surface *surface)
+{
+    if (auto *w = reinterpret_cast<struct window *>(wl_surface_get_user_data(surface)))
+        return w;
+
+    for (auto const &[key, window] : display->windows) {
+        (void)key;
+        if (window->surface == surface)
+            return window.get();
+        for (auto const &layer : window->layers) {
+            if (layer.surface == surface)
+                return window.get();
+        }
+    }
+    return nullptr;
+}
+
+/* Android can background a task by itself -- back on the root activity, an
+ * in-app exit -- while the host keeps showing and focusing its card. Focus
+ * edges say nothing then: the host focus never changed, so no ACTIVATED edge
+ * arrives and the card stays frozen with no way back. Reconcile on real
+ * engagement instead, comparing against the focus the @1.3 control plane
+ * reports and acting only when the two disagree. Engagement is the guard that
+ * keeps this from fighting an intentional back press, which arrives with no
+ * host input at all. */
+static void
+reassert_task_focus(struct display *display, struct wl_surface *surface, const char *reason)
+{
+    if (display->task == nullptr || !surface)
+        return;
+
+    /* Only from the wayland thread. window::create pumps configure events from
+     * hwc_set with windowsMutex held, and a binder call under that lock
+     * deadlocks against the adapter mutex. */
+    if (!pthread_equal(pthread_self(), display->wayland_thread))
+        return;
+
+    int task_id;
+    std::string appID;
+    {
+        /* Resolve and read under one lock: hwc_set destroys windows on another
+         * thread, so a window pointer must not outlive the lock. */
+        std::scoped_lock lock(display->windowsMutex);
+        struct window *window = window_for_surface(display, surface);
+        if (!window)
+            return;
+
+        const std::string &tid = window->taskID;
+        if (tid == "none" || tid == "0")
+            return;
+
+        auto it = display->tasks.find(tid);
+        if (it != display->tasks.end()) {
+            if (it->second.focused || it->second.closing)
+                return;
+        } else if (display->task_events_seen) {
+            // The control plane is live and knows no such task: nothing to raise.
+            return;
+        }
+
+        auto now = std::chrono::steady_clock::now();
+        if (now - window->last_focus_assert < kFocusAssertDebounce)
+            return;
+        window->last_focus_assert = now;
+
+        task_id = stoi(tid);
+        appID = window->appID;
+    }
+
+    /* Off the mutex: setFocusedTask is a binder call, and hwc_set waits for
+     * windowsMutex while holding the adapter lock. */
+    ALOGI("%s on %s#%d while Android focus is elsewhere -> setFocusedTask",
+          reason, appID.c_str(), task_id);
+    force_screen_wakeup(display);
+    display->task->setFocusedTask(task_id);
+}
+
 /* (Re)start the grace timer; deactivate_worker re-checks state once it
  * expires. Safe to call repeatedly -- each call just pushes the deadline. */
 static void
@@ -360,6 +446,10 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
         ALOGI("ACTIVATED edge for %s#%s -> setFocusedTask",
               window->appID.c_str(), window->taskID.c_str());
         display->task->setFocusedTask(stoi(window->taskID));
+    } else if (is_activated) {
+        /* Already activated, so no edge: the host re-configured a card it
+         * still considers focused. Android may have moved on since. */
+        reassert_task_focus(display, window->surface, "activated configure");
     }
 
     /* Any activation edge re-evaluates screen power: a rising edge wakes
@@ -1574,6 +1664,9 @@ pointer_handle_button(void *data, struct wl_pointer *,
     if (!display->pointer_surface)
         return;
 
+    if (state == WL_POINTER_BUTTON_STATE_PRESSED)
+        reassert_task_focus(display, display->pointer_surface, "click");
+
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
         ALOGE("%s:%d error in touch clock_gettime: %s",
               __FILE__, __LINE__, strerror(errno));
@@ -1751,6 +1844,11 @@ touch_handle_down(void *data, struct wl_touch *,
 
     if (ensure_pipe(display, INPUT_TOUCH))
         return;
+
+    /* Before the event, not after: a tap on a card whose task Android has
+     * backgrounded must raise that task first, or the touch is delivered to
+     * whatever is in front instead. */
+    reassert_task_focus(display, surface, "touch");
 
     int touch_id = create_touch_id(display, id);
     display->touch_surfaces[id] = surface;
@@ -2851,6 +2949,19 @@ bool display::task_closing(const std::string &tid) {
     return it != tasks.end() && it->second.closing;
 }
 
+/* A close-pending task whose taskRemoved never arrived (lost oneway call,
+ * removeTask failure) must not suppress its card forever. */
+void display::expire_closing_marks() {
+    std::scoped_lock lock(windowsMutex);
+    auto now = std::chrono::steady_clock::now();
+    for (auto &[tid, task] : tasks) {
+        if (task.closing && now - task.closing_since > std::chrono::seconds(10)) {
+            ALOGW("task %s: no taskRemoved within 10s of close, dropping close-pending mark", tid.c_str());
+            task.closing = false;
+        }
+    }
+}
+
 /* A TID layer named a task the table doesn't know: repair it. Covers tasks
  * that predate a composer restart and any missed oneway event. */
 void display::note_task_from_layer(const std::string &tid, const std::string &aid) {
@@ -2897,6 +3008,32 @@ void open_windows::clear() {
     windows.clear();
     property_set("waydroid.open_windows", "0");
     publish_open_apps();
+}
+
+/* Props outlive the composer but published_apps does not, so a card that was
+ * open when the HAL died leaves waydroid.open.<appID>=1 with nothing left to
+ * clear it: "waydroid app launch --wait" blocks forever, and the host launcher
+ * therefore keeps treating the app as running, so its icon only re-focuses a
+ * window that no longer exists. Call this before any window is created — every
+ * such prop is stale by definition then, and publish_open_apps() re-sets the
+ * ones that come back. */
+void open_windows::clear_stale_props() {
+    static const char kPrefix[] = "waydroid.open.";
+    std::vector<std::string> stale;
+
+    __system_property_foreach([](const prop_info *pi, void *cookie) {
+        __system_property_read_callback(pi, [](void *cookie, const char *name,
+                                               const char *value, uint32_t) {
+            if (!strncmp(name, kPrefix, sizeof(kPrefix) - 1) && strcmp(value, "0"))
+                static_cast<std::vector<std::string> *>(cookie)->emplace_back(name);
+        }, cookie);
+    }, &stale);
+
+    for (auto const& name : stale) {
+        ALOGI("clearing stale %s left by a previous composer instance", name.c_str());
+        property_set(name.c_str(), "0");
+    }
+    property_set("waydroid.open_windows", "0");
 }
 
 /* Maintain waydroid.open.<appID> for "waydroid app launch --wait". */

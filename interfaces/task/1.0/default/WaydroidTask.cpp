@@ -72,12 +72,16 @@ Return<void> WaydroidTask::setFocusedTask(uint32_t taskID) {
 }
 
 Return<void> WaydroidTask::removeTask(uint32_t taskID) {
-    bool ret;
+    bool ret = false;
     sp<IActivityTaskManager> atm = getActivityTaskManager();
     if (atm != nullptr) {
         auto status = atm->removeTask(taskID, &ret);
         if (!status.isOk())
             ALOGE("removeTask(%u) failed: %s", taskID, status.toString8().c_str());
+        else if (!ret)
+            ALOGW("removeTask(%u): refused by ActivityTaskManager", taskID);
+    } else {
+        ALOGE("removeTask(%u): activity_task service unavailable", taskID);
     }
     return Void();
 }

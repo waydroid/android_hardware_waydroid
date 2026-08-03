@@ -78,14 +78,19 @@ static void read_selection(struct display *display, struct wl_data_offer *offer,
     wl_display_roundtrip(display->display);
 
     // Read the clipboard contents
-    display->clipboard.clear();
+    std::string contents;
     while (true) {
         char buf[1024];
         ssize_t n = read(fds[0], buf, sizeof(buf));
         if (n <= 0)
             break;
-        display->clipboard.append(buf, n);
+        contents.append(buf, n);
     }
+
+    // Keep what we have if the host handed us nothing, so a failed handshake
+    // doesn't wipe a clip an Android app just set.
+    if (!contents.empty())
+        display->clipboard = contents;
 
     close(fds[0]);
     wl_data_offer_destroy(offer);
@@ -95,7 +100,6 @@ static void data_device_handle_selection(void *data, struct wl_data_device *, st
     // An application has set the clipboard contents
     struct display *display = (struct display *)data;
     if (offer == NULL) {
-        display->clipboard.clear();
         display->clipboard_offer_mime_types.clear();
         return;
     }
@@ -111,7 +115,6 @@ static void data_device_handle_selection(void *data, struct wl_data_device *, st
 
     if (mime_type.empty()) {
         // No supported mime-type
-        display->clipboard.clear();
         wl_data_offer_destroy(offer);
         return;
     }
