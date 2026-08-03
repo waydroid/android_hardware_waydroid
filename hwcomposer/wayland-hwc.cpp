@@ -186,14 +186,34 @@ finished_calibrating(struct display *d)
  * working pull-to-refresh and pager snap-back. Gated by the
  * persist.waydroid.touch_scrolling property (default enabled), with
  * persist.waydroid.touch_scrolling_speed as a scroll-distance multiplier.
+ *
+ * Because the synthetic finger is a real touch as far as Android is
+ * concerned, a press that goes nowhere is a tap or a long press on
+ * whatever is under the cursor. Fingers resting on the trackpad do emit
+ * small axis events, so a press only happens once a drag genuinely exceeds
+ * the touch slop, and a press that never does is released as a cancel.
  */
 #define SCROLL_SYNTH_TOUCH_ID 0x77645343
 #define SCROLL_EDGE_MARGIN 4
 #define SCROLL_ANCHOR_INSET_FRAC 0.15
-/* Two fingers resting on the trackpad this soon after a scroll lift are
- * treated as catching the fling (synthetic touch down); any later, resting
- * fingers must not touch the screen or idle holds would press UI elements. */
-#define SCROLL_HOLD_CATCH_WINDOW_MS 4000
+/* A drag shorter than Android's touch slop (8dp) scrolls nothing, but a
+ * touch down/up pair inside it is a tap and a touch held inside it is a
+ * long press. Two fingers merely resting on the trackpad do emit a few
+ * tiny axis events as they settle or tilt, so the synthetic finger is not
+ * pressed until the accumulated drag passes the slop, and a drag that
+ * never passes it is cancelled rather than lifted. */
+#define SCROLL_TOUCH_SLOP_DP 8
+/* Two fingers resting on the trackpad this soon after a lift that could
+ * have started a fling are treated as catching it (synthetic touch down).
+ * The window covers how long a fling can plausibly still be coasting;
+ * outside it resting fingers must not touch the screen at all. */
+#define SCROLL_HOLD_CATCH_WINDOW_MS 2000
+/* Below Android's minimum fling velocity (50dp/s) a lift starts no fling,
+ * so there is nothing for resting fingers to catch. */
+#define SCROLL_FLING_MIN_DP_PER_S 50
+/* ...and neither does a lift that follows a pause this long, however fast
+ * the drag was before it: the fingers had come to rest. */
+#define SCROLL_FLING_IDLE_MS 100
 
 static int get_touch_id(struct display *display, int id);
 static int create_touch_id(struct display *display, int id);
@@ -252,6 +272,9 @@ do_hotplug(struct display *display) {
             display->pendingScrollStop = false;
             display->pendingScrollDX = 0;
             display->pendingScrollDY = 0;
+            /* The Android-side touch device went with it, so no fling of
+             * ours can still be running for resting fingers to catch. */
+            display->lastScrollLiftTime = {};
         }
     }
     if (display->procs && display->procs->invalidate) {
@@ -1059,6 +1082,13 @@ pointer_handle_button(void *data, struct wl_pointer *,
         ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
 }
 
+static double
+scroll_ms_since(const struct timespec *then, const struct timespec *now)
+{
+    return (double)(now->tv_sec - then->tv_sec) * 1000.0 +
+           (double)(now->tv_nsec - then->tv_nsec) / 1000000.0;
+}
+
 static void
 scroll_gesture_read_props(struct display *display)
 {
@@ -1072,6 +1102,14 @@ scroll_gesture_read_props(struct display *display)
         if (speed > 0)
             display->touchScrollScale = speed;
     }
+
+    /* The synthetic finger moves in display pixels, so the dp thresholds
+     * convert through the same density Android's own ViewConfiguration
+     * uses (already scaled by display->scale, see finished_calibrating). */
+    int density = property_get_int32("ro.sf.lcd_density", 0);
+    double px_per_dp = (density > 0 ? density : 160 * display->scale) / 160.0;
+    display->scrollTouchSlop = SCROLL_TOUCH_SLOP_DP * px_per_dp;
+    display->scrollFlingMinSpeed = SCROLL_FLING_MIN_DP_PER_S * px_per_dp / 1000.0;
 }
 
 static void
@@ -1111,10 +1149,27 @@ scroll_gesture_end(struct display *display, bool cancel)
         return;
     display->scrollGestureActive = false;
 
-    /* A lift may start a fling; remember when, so fingers resting on the
-     * trackpad shortly after can catch it. */
-    if (!cancel)
-        clock_gettime(CLOCK_MONOTONIC, &display->lastScrollLiftTime);
+    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
+        ALOGE("%s:%d error in touch clock_gettime: %s",
+              __FILE__, __LINE__, strerror(errno));
+    }
+
+    /* A drag that never passed the touch slop must not be lifted as a
+     * normal touch up: Android would report a tap on whatever is under the
+     * cursor (a long press, if the fingers rested there a while first). */
+    if (!cancel && !display->scrollGestureMoved) {
+        ALOGI("touch scroll: drag stayed within the touch slop, cancelling");
+        cancel = true;
+    }
+
+    /* A lift only starts a fling if the finger was still travelling fast
+     * enough at the moment it left; only then may fingers coming to rest
+     * shortly after press the screen to catch that fling. */
+    if (!cancel && display->scrollSpeed >= display->scrollFlingMinSpeed &&
+            scroll_ms_since(&display->scrollLastMoveTime, &rt) <= SCROLL_FLING_IDLE_MS)
+        display->lastScrollLiftTime = rt;
+    else
+        display->lastScrollLiftTime = {};
 
     int touch_id = flush_touch_id(display, SCROLL_SYNTH_TOUCH_ID);
     if (touch_id == -1)
@@ -1124,10 +1179,6 @@ scroll_gesture_end(struct display *display, bool cancel)
 
     ALOGI("touch scroll: %s slot %d", cancel ? "cancel" : "end", touch_id);
 
-    if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
-        ALOGE("%s:%d error in touch clock_gettime: %s",
-              __FILE__, __LINE__, strerror(errno));
-    }
     if (cancel) {
         /* Turn finger into palm before lifting so InputFlinger delivers
          * ACTION_CANCEL and no fling is started from the drag velocity. */
@@ -1166,6 +1217,15 @@ scroll_gesture_anchor(struct display *display, double dx, double dy,
                                         insetX, std::max(insetX, maxX - insetX + SCROLL_EDGE_MARGIN));
     display->scrollFingerY = std::clamp((double)display->ptrPrvY,
                                         insetY, std::max(insetY, maxY - insetY + SCROLL_EDGE_MARGIN));
+
+    /* Where the touch goes down, so displacement from it can be compared
+     * against the touch slop the way Android compares a real touch's. Every
+     * press (gesture start, clutch, fling catch) anchors here, and each one
+     * has to earn its own release: until this press has travelled past the
+     * slop, lifting it is a cancel rather than a tap. */
+    display->scrollAnchorX = display->scrollFingerX;
+    display->scrollAnchorY = display->scrollFingerY;
+    display->scrollGestureMoved = false;
 }
 
 static void
@@ -1178,12 +1238,25 @@ scroll_gesture_flush(struct display *display)
 
     double dx = display->pendingScrollDX;
     double dy = display->pendingScrollDY;
+
+    if (ensure_pipe(display, INPUT_TOUCH)) {
+        display->pendingScrollDX = 0;
+        display->pendingScrollDY = 0;
+        display->pendingScrollDeltas = false;
+        return;
+    }
+
+    /* Nothing is pressed until the drag would carry the finger past the
+     * touch slop: a shorter drag scrolls nothing in Android, and pressing
+     * for it turns fingers settling on the trackpad into a tap or a long
+     * press. Keep accumulating (the deltas are not consumed) instead. */
+    if (!display->scrollGestureActive &&
+            std::hypot(dx, dy) <= display->scrollTouchSlop)
+        return;
+
     display->pendingScrollDX = 0;
     display->pendingScrollDY = 0;
     display->pendingScrollDeltas = false;
-
-    if (ensure_pipe(display, INPUT_TOUCH))
-        return;
 
     double maxX = floor(display->width * display->scale) - 1 - SCROLL_EDGE_MARGIN;
     double maxY = floor(display->height * display->scale) - 1 - SCROLL_EDGE_MARGIN;
@@ -1193,6 +1266,8 @@ scroll_gesture_flush(struct display *display)
         if (touch_id == -1)
             return;
         display->scrollGestureActive = true;
+        display->scrollSpeed = 0;
+        display->scrollLastMoveTime = {};
         scroll_gesture_anchor(display, dx, dy, maxX, maxY);
         ALOGI("touch scroll: begin slot %d at (%d,%d)", touch_id,
               (int)display->scrollFingerX, (int)display->scrollFingerY);
@@ -1228,6 +1303,27 @@ scroll_gesture_flush(struct display *display)
         ALOGE("%s:%d error in touch clock_gettime: %s",
               __FILE__, __LINE__, strerror(errno));
     }
+
+    /* Displacement from the press point decides whether the eventual lift
+     * is a scroll release or a tap, exactly as it does for a real touch. */
+    if (!display->scrollGestureMoved &&
+            std::hypot(display->scrollFingerX - display->scrollAnchorX,
+                       display->scrollFingerY - display->scrollAnchorY) >
+                display->scrollTouchSlop)
+        display->scrollGestureMoved = true;
+
+    /* Track how fast the finger is travelling, lightly smoothed, to tell a
+     * lift that starts a fling from one where the fingers had settled. */
+    double elapsed = (display->scrollLastMoveTime.tv_sec ||
+                      display->scrollLastMoveTime.tv_nsec) ?
+        scroll_ms_since(&display->scrollLastMoveTime, &rt) : 0;
+    if (elapsed > 0) {
+        double speed = std::hypot(dx, dy) / elapsed;
+        display->scrollSpeed = display->scrollSpeed > 0 ?
+            (display->scrollSpeed + speed) / 2 : speed;
+    }
+    display->scrollLastMoveTime = rt;
+
     ADD_EVENT(EV_ABS, ABS_MT_SLOT, touch_id);
     ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, touch_id);
     ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, (int)display->scrollFingerX);
@@ -1250,19 +1346,20 @@ gesture_hold_begin(void *data, struct zwp_pointer_gesture_hold_v1 *,
 
     if (fingers != 2 || !surface || !display->pointer_surface)
         return;
-    if (display->scrollGestureActive)
+    if (display->scrollGestureActive || display->pendingScrollDeltas)
         return;
 
-    /* Only catch a recent fling (see SCROLL_HOLD_CATCH_WINDOW_MS) */
+    /* Only catch a fling that a recent lift actually started: lastScrollLift
+     * is left unset by lifts too slow, too short or too long after the last
+     * movement to fling (see scroll_gesture_end), and resting fingers must
+     * not press the screen for anything else. */
     if (display->lastScrollLiftTime.tv_sec == 0 &&
             display->lastScrollLiftTime.tv_nsec == 0)
         return;
     if (clock_gettime(CLOCK_MONOTONIC, &now) == -1)
         return;
-    int64_t since_ms =
-        (int64_t)(now.tv_sec - display->lastScrollLiftTime.tv_sec) * 1000 +
-        (now.tv_nsec - display->lastScrollLiftTime.tv_nsec) / 1000000;
-    if (since_ms > SCROLL_HOLD_CATCH_WINDOW_MS)
+    if (scroll_ms_since(&display->lastScrollLiftTime, &now) >
+            SCROLL_HOLD_CATCH_WINDOW_MS)
         return;
 
     scroll_gesture_read_props(display);
@@ -1280,6 +1377,8 @@ gesture_hold_begin(void *data, struct zwp_pointer_gesture_hold_v1 *,
 
     display->scrollGestureActive = true;
     display->holdGestureActive = true;
+    display->scrollSpeed = 0;
+    display->scrollLastMoveTime = {};
     /* Inset both axes: if this hold turns into a scroll, its direction is
      * not known yet. */
     scroll_gesture_anchor(display, 1, 1, maxX, maxY);
@@ -2457,6 +2556,10 @@ create_display(const char *gralloc)
     display->supports_cursor_viewport = true;
     display->supports_cursor_hw_buffer = property_get_bool("persist.waydroid.cursor_force_shm", false);
     display->touchScrollScale = 1.0;
+    /* Real values are derived from the density at the first gesture; until
+     * then be conservative rather than pressing for any tiny movement. */
+    display->scrollTouchSlop = SCROLL_TOUCH_SLOP_DP;
+    display->scrollFlingMinSpeed = SCROLL_FLING_MIN_DP_PER_S / 1000.0;
     for (int i = 0; i < MAX_TOUCHPOINTS; i++)
         display->touch_id[i] = -1;
     for (int i = 0; i < INPUT_TOTAL; i++)
