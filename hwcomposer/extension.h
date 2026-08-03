@@ -60,6 +60,8 @@ class WaydroidDisplay : public IWaydroidDisplay {
                                 uint32_t width, uint32_t height, uint32_t stride,
                                 int32_t format, const hidl_handle &acquireFence,
                                 postTaskBuffer_cb _hidl_cb) override;
+    Return<void> updateTaskList(const hidl_vec<uint32_t> &tasks,
+                                updateTaskList_cb _hidl_cb) override;
 
   private:
     struct waydroid_hwc_composer_device_1 *mPdev;

@@ -62,6 +62,20 @@ struct IWaydroidDisplay : public ::vendor::waydroid::display::V1_2::IWaydroidDis
     virtual ::android::hardware::Return<void> postTaskBuffer(uint32_t taskId, uint32_t slot, const ::android::hardware::hidl_handle& buffer, uint32_t width, uint32_t height, uint32_t stride, int32_t format, const ::android::hardware::hidl_handle& acquireFence, postTaskBuffer_cb _hidl_cb) = 0;
 
     /**
+     * Return callback for updateTaskList
+     */
+    using updateTaskList_cb = std::function<void(::android::hardware::graphics::composer::V2_1::Error error, const ::android::hardware::hidl_vec<uint32_t>& wantedTasks)>;
+    /**
+     * Offer the tasks the caller could stream this frame and learn which of
+     * them the HAL wants content for. Tasks left out of wantedTasks need not
+     * be rendered: unknown, closing or blacklisted tasks never get a card,
+     * and a card that is deactivated or unfocused keeps its last frame (a
+     * post would only be stashed). Returns BAD_DISPLAY while task streams
+     * are inactive; the caller should then render nothing.
+     */
+    virtual ::android::hardware::Return<void> updateTaskList(const ::android::hardware::hidl_vec<uint32_t>& tasks, updateTaskList_cb _hidl_cb) = 0;
+
+    /**
      * Return callback for interfaceChain
      */
     using interfaceChain_cb = std::function<void(const ::android::hardware::hidl_vec<::android::hardware::hidl_string>& descriptors)>;

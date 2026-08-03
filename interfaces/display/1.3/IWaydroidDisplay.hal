@@ -33,4 +33,15 @@ interface IWaydroidDisplay extends @1.2::IWaydroidDisplay {
                    uint32_t width, uint32_t height, uint32_t stride,
                    int32_t format, handle acquireFence)
         generates (Error error, vec<uint32_t> releasedSlots);
+
+    /**
+     * Offer the tasks the caller could stream this frame and learn which of
+     * them the HAL wants content for. Tasks left out of wantedTasks need not
+     * be rendered: unknown, closing or blacklisted tasks never get a card,
+     * and a card that is deactivated or unfocused keeps its last frame (a
+     * post would only be stashed). Returns BAD_DISPLAY while task streams
+     * are inactive; the caller should then render nothing.
+     */
+    updateTaskList(vec<uint32_t> tasks)
+        generates (Error error, vec<uint32_t> wantedTasks);
 };

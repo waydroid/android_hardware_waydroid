@@ -30,6 +30,7 @@ struct BpHwWaydroidDisplay : public ::android::hardware::BpInterface<IWaydroidDi
 
     // Methods from ::vendor::waydroid::display::V1_3::IWaydroidDisplay follow.
     static ::android::hardware::Return<void>  _hidl_postTaskBuffer(::android::hardware::IInterface* _hidl_this, ::android::hardware::details::HidlInstrumentor *_hidl_this_instrumentor, uint32_t taskId, uint32_t slot, const ::android::hardware::hidl_handle& buffer, uint32_t width, uint32_t height, uint32_t stride, int32_t format, const ::android::hardware::hidl_handle& acquireFence, postTaskBuffer_cb _hidl_cb);
+    static ::android::hardware::Return<void>  _hidl_updateTaskList(::android::hardware::IInterface* _hidl_this, ::android::hardware::details::HidlInstrumentor *_hidl_this_instrumentor, const ::android::hardware::hidl_vec<uint32_t>& tasks, updateTaskList_cb _hidl_cb);
 
     // Methods from ::vendor::waydroid::display::V1_0::IWaydroidDisplay follow.
     ::android::hardware::Return<::android::hardware::graphics::composer::V2_1::Error> setLayerName(uint32_t layer, const ::android::hardware::hidl_string& name) override;
@@ -45,6 +46,7 @@ struct BpHwWaydroidDisplay : public ::android::hardware::BpInterface<IWaydroidDi
 
     // Methods from ::vendor::waydroid::display::V1_3::IWaydroidDisplay follow.
     ::android::hardware::Return<void> postTaskBuffer(uint32_t taskId, uint32_t slot, const ::android::hardware::hidl_handle& buffer, uint32_t width, uint32_t height, uint32_t stride, int32_t format, const ::android::hardware::hidl_handle& acquireFence, postTaskBuffer_cb _hidl_cb) override;
+    ::android::hardware::Return<void> updateTaskList(const ::android::hardware::hidl_vec<uint32_t>& tasks, updateTaskList_cb _hidl_cb) override;
 
     // Methods from ::android::hidl::base::V1_0::IBase follow.
     ::android::hardware::Return<void> interfaceChain(interfaceChain_cb _hidl_cb) override;

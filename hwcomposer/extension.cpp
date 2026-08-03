@@ -97,6 +97,15 @@ Return<void> WaydroidDisplay::postTaskBuffer(uint32_t taskId, uint32_t slot,
     return Void();
 }
 
+Return<void> WaydroidDisplay::updateTaskList(const hidl_vec<uint32_t> &tasks,
+        updateTaskList_cb _hidl_cb) {
+    std::vector<uint32_t> wanted;
+    int ret = update_task_list(mPdev, std::vector<uint32_t>(tasks.begin(), tasks.end()),
+                               &wanted);
+    _hidl_cb(ret == 0 ? Error::NONE : Error::BAD_DISPLAY, hidl_vec<uint32_t>(wanted));
+    return Void();
+}
+
 }  // namespace implementation
 }  // namespace V1_3
 }  // namespace display

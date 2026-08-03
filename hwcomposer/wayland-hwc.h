@@ -289,6 +289,12 @@ int post_task_buffer(struct waydroid_hwc_composer_device_1 *pdev, uint32_t taskI
                      uint32_t height, uint32_t stride, int32_t format, int fenceFd,
                      std::vector<uint32_t> *releasedSlots);
 
+/* Filter the caller's streamable tasks down to those the HAL wants content
+ * for (IWaydroidDisplay@1.3 updateTaskList). Returns -EAGAIN when task
+ * streams are inactive. */
+int update_task_list(struct waydroid_hwc_composer_device_1 *pdev,
+                     const std::vector<uint32_t> &tasks, std::vector<uint32_t> *wanted);
+
 class open_windows {
     using Collection = std::map<std::string, std::unique_ptr<window>>;
     Collection windows;

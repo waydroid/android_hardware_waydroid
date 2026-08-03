@@ -41,6 +41,13 @@ struct BnHwWaydroidDisplay : public ::android::hidl::base::V1_0::BnHwBase {
             TransactCallback _hidl_cb);
 
 
+    static ::android::status_t _hidl_updateTaskList(
+            ::android::hidl::base::V1_0::BnHwBase* _hidl_this,
+            const ::android::hardware::Parcel &_hidl_data,
+            ::android::hardware::Parcel *_hidl_reply,
+            TransactCallback _hidl_cb);
+
+
 
 private:
     // Methods from ::vendor::waydroid::display::V1_0::IWaydroidDisplay follow.

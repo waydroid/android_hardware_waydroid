@@ -161,6 +161,16 @@ namespace {
         }
     };
 
+    /* SF reads this prop each frame and skips physical-display composition
+     * while it is set: in task-streams mode the fb target is shown nowhere. */
+    void set_task_streams_mode_active(waydroid_hwc_composer_device_1 *pdev, bool active) {
+        if (pdev->task_streams_mode_active == active)
+            return;
+        pdev->task_streams_mode_active = active;
+        property_set("waydroid.task_streams_active", active ? "1" : "0");
+        ALOGI("task streams mode %s", active ? "active" : "inactive");
+    }
+
     std::unique_ptr<waydroid_mode> select_mode(waydroid_hwc_composer_device_1 *pdev, hwc_display_contents_1_t *contents) {
         std::string active_apps = property_get_string("waydroid.active_apps", "none");
         if (active_apps != "Waydroid" && !property_get_bool("waydroid.background_start", true)) {
@@ -204,13 +214,13 @@ namespace {
             }
         } else if (pdev->task_streams) {
             mode = new task_streams_mode();
-            pdev->task_streams_mode_active = true;
+            set_task_streams_mode_active(pdev, true);
             return std::unique_ptr<waydroid_mode>(mode);
         } else {
             assert(pdev->should_compose);
             mode = new multi_window_mode();
         }
-        pdev->task_streams_mode_active = false;
+        set_task_streams_mode_active(pdev, false);
         return std::unique_ptr<waydroid_mode>(mode);
     }
 }
@@ -992,6 +1002,9 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     pdev->gralloc_handler = gralloc_handler(pdev->display);
     pdev->multi_windows = property_get_bool("persist.waydroid.multi_windows", false);
     pdev->task_streams = property_get_bool("persist.waydroid.task_streams", false);
+    /* A HAL restart must not leave SF trusting a stale value; select_mode
+     * only publishes on transitions. */
+    property_set("waydroid.task_streams_active", "0");
     if (pdev->multi_windows && !pdev->display->subcompositor) {
         ALOGW("multi window mode requested but wl_subcompositor is not supported. Disabling it.");
         pdev->multi_windows = false;

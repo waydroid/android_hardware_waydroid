@@ -1314,6 +1314,39 @@ int post_task_buffer(struct waydroid_hwc_composer_device_1 *pdev, uint32_t taskI
     return 0;
 }
 
+int update_task_list(struct waydroid_hwc_composer_device_1 *pdev,
+                     const std::vector<uint32_t> &tasks, std::vector<uint32_t> *wanted)
+{
+    struct display *display = pdev->display;
+    std::scoped_lock lock(display->windowsMutex);
+
+    if (!pdev->task_streams_mode_active || !display->wl_alive)
+        return -EAGAIN;
+
+    for (uint32_t taskId : tasks) {
+        const std::string tid = std::to_string(taskId);
+        auto task = display->tasks.find(tid);
+        if (task == display->tasks.end() || task->second.closing)
+            continue;
+        if (task->second.appID.empty() ||
+            is_blacklisted(pdev, task->second.appID, task->second.component))
+            continue;
+        /* Same condition post_task_buffer stashes on: a card that already
+         * has content and is deactivated or unfocused keeps its last frame,
+         * so its posts would be withheld anyway. */
+        auto stream = display->task_streams.find(taskId);
+        if (stream != display->task_streams.end() &&
+            stream->second.attached_slot != UINT32_MAX) {
+            auto it = display->windows.find(tid);
+            if (it != display->windows.end() &&
+                (!it->second->activated || !task->second.focused))
+                continue;
+        }
+        wanted->push_back(taskId);
+    }
+    return 0;
+}
+
 static void
 keyboard_handle_keymap(void *, struct wl_keyboard *,
                uint32_t format, int fd, uint32_t size)
