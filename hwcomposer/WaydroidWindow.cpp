@@ -179,6 +179,7 @@ Return<void> WaydroidWindow::taskRemoved(uint32_t taskID) {
     mDisplay->task_events_seen = true;
 
     mDisplay->tasks.erase(tid);
+    mDisplay->task_streams.erase(taskID);
     bool had_window = mDisplay->windows.find(tid) != mDisplay->windows.end();
     if (had_window)
         mDisplay->windows.erase(tid);

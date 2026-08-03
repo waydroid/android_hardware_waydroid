@@ -221,6 +221,11 @@ struct window {
 
     std::atomic<bool> configured;
 
+    /* First task-stream buffer posted before the initial xdg configure was
+     * acked; attached from the configure handler (xdg-shell forbids attaching
+     * earlier). Guarded by windowsMutex. */
+    std::shared_ptr<buffer> pending_stream_buffer;
+
     /* Last XDG_TOPLEVEL_STATE_ACTIVATED state seen from the host compositor.
      * Used to detect the rising edge so a Lomiri-driven focus/raise of this
      * toplevel brings the matching Android task to the front exactly once. */
@@ -250,7 +255,11 @@ struct window {
 
     ~window();
 
-    static std::unique_ptr<window> create(struct display *display, bool use_subsurfaces, std::string appID, std::string taskID, hwc_color_t color);
+    /* sync_configure: wait for the initial xdg configure before returning.
+     * Must be false when called off the wayland thread with windowsMutex held
+     * (post_task_buffer): the roundtrip can deadlock against the configure
+     * handler (do_hotplug -> adapter mutex -> hwc_set -> windowsMutex). */
+    static std::unique_ptr<window> create(struct display *display, bool use_subsurfaces, std::string appID, std::string taskID, hwc_color_t color, bool sync_configure = true);
 
     window::layer &get_next_layer();
     window::layer &create_new_layer();
@@ -269,6 +278,16 @@ struct window {
  * Defined in wayland-hwc.cpp. */
 void update_screen_power(struct display *display);
 void force_screen_wakeup(struct display *display);
+
+/* Post an SF-rendered task frame (IWaydroidDisplay@1.3). Returns 0 on
+ * success, -EAGAIN when task streams are inactive, -ENOENT for an unknown or
+ * closing task, -EBUSY for a busy slot, -EINVAL on import failure. The
+ * buffer handle is only borrowed (fds are dup'ed by libwayland at marshal
+ * time); fenceFd is borrowed too. */
+int post_task_buffer(struct waydroid_hwc_composer_device_1 *pdev, uint32_t taskId,
+                     uint32_t slot, const native_handle_t *handle, uint32_t width,
+                     uint32_t height, uint32_t stride, int32_t format, int fenceFd,
+                     std::vector<uint32_t> *releasedSlots);
 
 class open_windows {
     using Collection = std::map<std::string, std::unique_ptr<window>>;
@@ -364,6 +383,26 @@ struct task_info {
     std::chrono::steady_clock::time_point closing_since {};
 };
 
+/* Per-task content stream (SF-rendered frames posted over
+ * IWaydroidDisplay@1.3). One imported wl_buffer per slot; busy tracks
+ * wl_buffer.release, released accumulates for the next post reply.
+ * Guarded by windowsMutex. */
+struct task_stream_slot {
+    std::shared_ptr<buffer> buf;
+    /* dmabuf inode of the posted handle: metadata alone cannot tell a
+     * reallocated same-size buffer from the old one. */
+    ino_t ino = 0;
+    bool busy = false;
+};
+struct task_stream {
+    std::map<uint32_t, task_stream_slot> slots;
+    std::vector<uint32_t> released;
+    /* Slot currently attached to the window; Mir (on this stack) never sends
+     * wl_buffer.release, so the release of the previous slot is synthesized
+     * when a new one is attached. */
+    uint32_t attached_slot = UINT32_MAX;
+};
+
 struct display {
     pthread_t wayland_thread; // constant after init
 
@@ -425,6 +464,8 @@ struct display {
     bool task_events_seen = false;
     bool task_closing(const std::string &tid);
     void note_task_from_layer(const std::string &tid, const std::string &aid);
+
+    std::map<uint32_t, task_stream> task_streams;
 
     std::recursive_mutex windowsMutex;
 

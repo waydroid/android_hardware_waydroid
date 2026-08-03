@@ -34,7 +34,8 @@ std::unique_ptr<buffer> create_shm_wl_buffer(display *display, const buffer_meta
 std::unique_ptr<buffer> create_dmabuf_wl_buffer(display *display, const buffer_metadata& metadata,
                                                                 int prime_fd, int format, int byte_stride,
                                                                 int offset, uint64_t modifier, buffer_handle_t handle);
-std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_metadata& metadata, buffer_handle_t target);
+std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_metadata& metadata, buffer_handle_t target,
+                                                 const wl_buffer_listener *listener = nullptr, void *listener_data = nullptr);
 bool cpu_render_to_pixels(buffer *buffer);
 
 

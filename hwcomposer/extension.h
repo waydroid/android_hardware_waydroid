@@ -13,11 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef VENDOR_WAYDROID_DISPLAY_V1_2_WAYDROIDDISPLAY_H
-#define VENDOR_WAYDROID_DISPLAY_V1_2_WAYDROIDDISPLAY_H
+#ifndef VENDOR_WAYDROID_DISPLAY_V1_3_WAYDROIDDISPLAY_H
+#define VENDOR_WAYDROID_DISPLAY_V1_3_WAYDROIDDISPLAY_H
 
 #include <android/hardware/graphics/composer/2.1/IComposer.h>
-#include <vendor/waydroid/display/1.2/IWaydroidDisplay.h>
+#include <vendor/waydroid/display/1.3/IWaydroidDisplay.h>
 #include <hidl/HidlTransportSupport.h>
 #include <hidl/MQDescriptor.h>
 #include <hidl/Status.h>
@@ -27,18 +27,21 @@
 namespace vendor {
 namespace waydroid {
 namespace display {
-namespace V1_2 {
+namespace V1_3 {
 namespace implementation {
 
+using ::android::hardware::hidl_handle;
 using ::android::hardware::hidl_string;
+using ::android::hardware::hidl_vec;
 using ::android::hardware::Return;
+using ::android::hardware::Void;
 using ::android::hardware::graphics::composer::V2_1::Error;
 using ::android::sp;
-using ::vendor::waydroid::display::V1_2::IWaydroidDisplay;
+using ::vendor::waydroid::display::V1_3::IWaydroidDisplay;
 
 class WaydroidDisplay : public IWaydroidDisplay {
   public:
-    WaydroidDisplay(struct display *display);
+    WaydroidDisplay(struct waydroid_hwc_composer_device_1 *pdev);
 
     // Methods from ::vendor::waydroid::display::V1_0::IWaydroidDisplay follow.
     Return<Error> setLayerName(uint32_t layer, const hidl_string &name) override;
@@ -51,14 +54,22 @@ class WaydroidDisplay : public IWaydroidDisplay {
 
     // Methods from ::vendor::waydroid::display::V1_2::IWaydroidDisplay follow.
     Return<Error> setMouseMetadata(uint32_t layer, int32_t style, float hotspotX, float hotspotY) override;
+
+    // Methods from ::vendor::waydroid::display::V1_3::IWaydroidDisplay follow.
+    Return<void> postTaskBuffer(uint32_t taskId, uint32_t slot, const hidl_handle &buffer,
+                                uint32_t width, uint32_t height, uint32_t stride,
+                                int32_t format, const hidl_handle &acquireFence,
+                                postTaskBuffer_cb _hidl_cb) override;
+
   private:
+    struct waydroid_hwc_composer_device_1 *mPdev;
     struct display *mDisplay;
 };
 
 }  // namespace implementation
-}  // namespace V1_2
+}  // namespace V1_3
 }  // namespace display
 }  // namespace waydroid
 }  // namespace vendor
 
-#endif  // VENDOR_WAYDROID_DISPLAY_V1_2_WAYDROIDDISPLAY_H
+#endif  // VENDOR_WAYDROID_DISPLAY_V1_3_WAYDROIDDISPLAY_H

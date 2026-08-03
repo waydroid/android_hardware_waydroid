@@ -193,7 +193,8 @@ std::unique_ptr<buffer> create_dmabuf_wl_buffer(display *display, const buffer_m
     return buf;
 }
 
-std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_metadata& metadata, buffer_handle_t handle)
+std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_metadata& metadata, buffer_handle_t handle,
+                                                 const wl_buffer_listener *listener, void *listener_data)
 {
     if (!display->android_wlegl) {
         ALOGE("create_android_wl_buffer called without android_wlegl");
@@ -236,7 +237,10 @@ std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_
         return nullptr;
     }
 
-    wl_buffer_add_listener(buf->wl_buffer, &buffer_listener, nullptr);
+    if (listener)
+        wl_buffer_add_listener(buf->wl_buffer, listener, listener_data);
+    else
+        wl_buffer_add_listener(buf->wl_buffer, &buffer_listener, nullptr);
 
     return buf;
 }

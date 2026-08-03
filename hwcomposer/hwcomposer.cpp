@@ -59,8 +59,8 @@
 
 using ::android::hardware::joinRpcThreadpool;
 
-using ::vendor::waydroid::display::V1_2::IWaydroidDisplay;
-using ::vendor::waydroid::display::V1_2::implementation::WaydroidDisplay;
+using ::vendor::waydroid::display::V1_3::IWaydroidDisplay;
+using ::vendor::waydroid::display::V1_3::implementation::WaydroidDisplay;
 using ::vendor::waydroid::window::V1_3::IWaydroidWindow;
 using ::vendor::waydroid::window::implementation::WaydroidWindow;
 using ::vendor::waydroid::clipboard::V1_0::IWaydroidClipboard;
@@ -148,6 +148,19 @@ namespace {
         return std::string(property, size);
     }
 
+    /* Windows are created and fed exclusively by post_task_buffer
+     * (display@1.3); the hwc layer walk drives nothing. Window teardown is
+     * handled by taskRemoved and close_windows_for_dead_tasks. */
+    struct task_streams_mode : waydroid_mode {
+        int cleanup_stale_windows(waydroid_hwc_composer_device_1 *,
+                                  hwc_display_contents_1_t *) override {
+            return 0;
+        }
+        int handle_layer(waydroid_hwc_composer_device_1 *, hwc_layer_1 *, size_t) override {
+            return 0;
+        }
+    };
+
     std::unique_ptr<waydroid_mode> select_mode(waydroid_hwc_composer_device_1 *pdev, hwc_display_contents_1_t *contents) {
         std::string active_apps = property_get_string("waydroid.active_apps", "none");
         if (active_apps != "Waydroid" && !property_get_bool("waydroid.background_start", true)) {
@@ -189,10 +202,15 @@ namespace {
             } else {
                 mode = new non_compositing_single_window_mode();
             }
+        } else if (pdev->task_streams) {
+            mode = new task_streams_mode();
+            pdev->task_streams_mode_active = true;
+            return std::unique_ptr<waydroid_mode>(mode);
         } else {
             assert(pdev->should_compose);
             mode = new multi_window_mode();
         }
+        pdev->task_streams_mode_active = false;
         return std::unique_ptr<waydroid_mode>(mode);
     }
 }
@@ -861,7 +879,7 @@ static void* hwc_binder_thread(void* data) {
     // Don't configure the threadpool here: composer@2.1-service main() already
     // set it to 4 threads, and shrinking it to 1 aborts the process.
 
-    waydroidDisplay = new WaydroidDisplay(pdev->display);
+    waydroidDisplay = new WaydroidDisplay(pdev);
     if (waydroidDisplay == nullptr) {
         ALOGE("Can not create an instance of Waydroid Display HAL, exiting.");
         goto shutdown;
@@ -973,6 +991,7 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
 
     pdev->gralloc_handler = gralloc_handler(pdev->display);
     pdev->multi_windows = property_get_bool("persist.waydroid.multi_windows", false);
+    pdev->task_streams = property_get_bool("persist.waydroid.task_streams", false);
     if (pdev->multi_windows && !pdev->display->subcompositor) {
         ALOGW("multi window mode requested but wl_subcompositor is not supported. Disabling it.");
         pdev->multi_windows = false;

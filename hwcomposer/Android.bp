@@ -33,6 +33,7 @@ cc_library_shared {
         "vendor.waydroid.display@1.0",
         "vendor.waydroid.display@1.1",
         "vendor.waydroid.display@1.2",
+        "vendor.waydroid.display@1.3",
         "vendor.waydroid.task@1.0",
         "vendor.waydroid.window@1.0",
         "vendor.waydroid.window@1.1",

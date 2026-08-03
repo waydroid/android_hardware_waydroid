@@ -15,15 +15,18 @@
  */
 
 #include "extension.h"
+#include "hwcomposer.h"
+
+#include <errno.h>
 
 namespace vendor {
 namespace waydroid {
 namespace display {
-namespace V1_2 {
+namespace V1_3 {
 namespace implementation {
 
-WaydroidDisplay::WaydroidDisplay(struct display *display)
-    : mDisplay(display)
+WaydroidDisplay::WaydroidDisplay(struct waydroid_hwc_composer_device_1 *pdev)
+    : mPdev(pdev), mDisplay(pdev->display)
 {
 }
 
@@ -71,8 +74,31 @@ Return<Error> WaydroidDisplay::setMouseMetadata(uint32_t layer, int32_t style, f
     return Error::NONE;
 }
 
+// Methods from ::vendor::waydroid::display::V1_3::IWaydroidDisplay follow.
+Return<void> WaydroidDisplay::postTaskBuffer(uint32_t taskId, uint32_t slot,
+        const hidl_handle &buffer, uint32_t width, uint32_t height, uint32_t stride,
+        int32_t format, const hidl_handle &acquireFence, postTaskBuffer_cb _hidl_cb) {
+    std::vector<uint32_t> released;
+    int fenceFd = -1;
+    if (acquireFence.getNativeHandle() && acquireFence->numFds > 0)
+        fenceFd = acquireFence->data[0];
+
+    int ret = post_task_buffer(mPdev, taskId, slot, buffer.getNativeHandle(), width,
+                               height, stride, format, fenceFd, &released);
+    Error error;
+    switch (ret) {
+        case 0:       error = Error::NONE; break;
+        case -EAGAIN: error = Error::BAD_DISPLAY; break;
+        case -ENOENT: error = Error::BAD_LAYER; break;
+        default:      error = Error::NO_RESOURCES; break;
+    }
+    hidl_vec<uint32_t> releasedSlots(released);
+    _hidl_cb(error, releasedSlots);
+    return Void();
+}
+
 }  // namespace implementation
-}  // namespace V1_2
+}  // namespace V1_3
 }  // namespace display
 }  // namespace waydroid
 }  // namespace vendor

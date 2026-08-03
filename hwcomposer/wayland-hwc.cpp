@@ -181,6 +181,30 @@ void snapshot_inactive_app_window(struct display *display, struct window *window
     window->last_layer_buffer = nullptr;
 }
 
+/* Attach a task-stream buffer that was stashed while the window could not
+ * take it (initial configure not acked yet, or card deactivated). Runs on the
+ * wayland thread. */
+static void
+attach_pending_stream_buffer(struct window *window)
+{
+    struct display *display = window->display;
+    std::shared_ptr<buffer> pending;
+    {
+        std::scoped_lock lock(display->windowsMutex);
+        pending = std::move(window->pending_stream_buffer);
+        window->pending_stream_buffer = nullptr;
+    }
+    if (pending && !window->layers.empty()) {
+        auto &layer = window->layers[0];
+        layer.attach_buffer(pending);
+        layer.damage_surface(0, 0, INT32_MAX, INT32_MAX);
+        if (layer.viewport)
+            wp_viewport_set_destination(layer.viewport, display->width, display->height);
+        wl_surface_commit(layer.surface);
+        wl_display_flush(display->display);
+    }
+}
+
 static void
 xdg_surface_handle_configure(void *data, struct xdg_surface *surface,
                  uint32_t serial)
@@ -190,6 +214,10 @@ xdg_surface_handle_configure(void *data, struct xdg_surface *surface,
     xdg_surface_ack_configure(surface, serial);
 
     window->configured = true;
+
+    /* First task-stream buffer posted before this configure: attach it now
+     * (post_task_buffer must not wait for the configure, see there). */
+    attach_pending_stream_buffer(window);
 }
 
 static const struct xdg_surface_listener xdg_surface_listener = {
@@ -347,6 +375,13 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
     if (activation_edge)
         update_screen_power(display);
 
+    /* Reactivated card: show the freshest frame that was withheld while it
+     * was deactivated (post_task_buffer stashes instead of attaching then).
+     * Not before the initial configure is acked — the surface handler covers
+     * that case. */
+    if (is_activated && activation_edge && window->configured)
+        attach_pending_stream_buffer(window);
+
 #ifdef XDG_TOPLEVEL_STATE_SUSPENDED
     /* suspended (xdg-shell v6+) is the explicit "content not visible" signal,
      * which covers minimize. Feed it into the screen-power decision. Compiled
@@ -368,10 +403,18 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
     display->req_height = height;
 
     if (display->height && display->width) {
+        const int32_t old_width = display->width, old_height = display->height;
         choose_width_height(display, width, height);
         if (display->wm_base)
             xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width, display->height);
-        do_hotplug(display);
+        /* Only a real size change warrants a hotplug. Every window creation
+         * lands here with the unchanged display size, and hotplugging then is
+         * not just wasted work: hwc1Invalidate takes the adapter mutex, which
+         * a presenting hwc_set thread holds while waiting for windowsMutex —
+         * deadlock if this handler runs on the wayland thread while
+         * post_task_buffer (windowsMutex held) waits for wayland events. */
+        if (display->width != old_width || display->height != old_height)
+            do_hotplug(display);
     }
 }
 
@@ -678,7 +721,7 @@ static const struct wl_surface_listener surface_listener = {
 };
 
 std::unique_ptr<window>
-window::create(struct display *display, bool use_subsurfaces, std::string appID, std::string taskID, hwc_color_t color)
+window::create(struct display *display, bool use_subsurfaces, std::string appID, std::string taskID, hwc_color_t color, bool sync_configure)
 {
     std::unique_ptr<window> window { new struct window() };
     if (!window)
@@ -751,10 +794,14 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
     }
 
     wl_surface_commit(window->surface);
-    // Wait for first configure event
-    do {
-        wl_display_roundtrip(display->display);
-    } while (!window->configured);
+    if (sync_configure) {
+        // Wait for first configure event
+        do {
+            wl_display_roundtrip(display->display);
+        } while (!window->configured);
+    } else {
+        wl_display_flush(display->display);
+    }
 
     if (calibrating) {
         wp_fractional_scale_v1* fs = nullptr;
@@ -1106,6 +1153,165 @@ deactivate_worker(struct display *display)
         deactivate_settled_check(display);
         lock.lock();
     }
+}
+
+/* wl_buffer.release for a task-stream slot. Userdata is the display, not the
+ * slot: a slot (and its window) can be destroyed while the compositor still
+ * holds the buffer, so we look the slot up by wl_buffer instead. */
+static void
+task_stream_buffer_release(void *data, struct wl_buffer *wl_buf)
+{
+    struct display *display = static_cast<struct display *>(data);
+    std::scoped_lock lock(display->windowsMutex);
+    for (auto &[taskId, stream] : display->task_streams) {
+        for (auto &[slot, sb] : stream.slots) {
+            if (sb.buf && sb.buf->wl_buffer == wl_buf) {
+                sb.busy = false;
+                stream.released.push_back(slot);
+                return;
+            }
+        }
+    }
+}
+
+static const struct wl_buffer_listener task_stream_buffer_listener {
+    task_stream_buffer_release
+};
+
+int post_task_buffer(struct waydroid_hwc_composer_device_1 *pdev, uint32_t taskId,
+                     uint32_t slot, const native_handle_t *handle, uint32_t width,
+                     uint32_t height, uint32_t stride, int32_t format, int fenceFd,
+                     std::vector<uint32_t> *releasedSlots)
+{
+    struct display *display = pdev->display;
+    std::scoped_lock lock(display->windowsMutex);
+
+    if (!pdev->task_streams_mode_active || !display->wl_alive)
+        return -EAGAIN;
+
+    const std::string tid = std::to_string(taskId);
+    auto task = display->tasks.find(tid);
+    if (task == display->tasks.end() || task->second.closing)
+        return -ENOENT;
+    /* The launcher (waydroid.blacklist_apps) never gets a card, and neither
+     * do identity-less system tasks (the resync path inserts a few). */
+    if (task->second.appID.empty() ||
+        is_blacklisted(pdev, task->second.appID, task->second.component))
+        return -ENOENT;
+
+    auto &stream = display->task_streams[taskId];
+    *releasedSlots = std::move(stream.released);
+    stream.released.clear();
+
+    /* A display that has no size yet is still calibrating; window::create
+     * would roundtrip, which is forbidden on this thread (see below). */
+    if (!display->width || !display->height)
+        return -EAGAIN;
+
+
+    window *w;
+    auto it = display->windows.find(tid);
+    if (it == display->windows.end()) {
+        /* Lazy window creation: a task's toplevel appears with its first
+         * content frame. No subsurfaces: layers[0] is the single desync
+         * content surface, scaled to the window by its viewport.
+         * sync_configure=false: waiting for the configure here (binder
+         * thread, windowsMutex held) deadlocks against the configure
+         * handler's do_hotplug (adapter mutex, held by hwc_set's thread,
+         * which itself waits on windowsMutex). */
+        auto win = window::create(display, false, task->second.appID, tid, {0, 0, 0, 255},
+                                  false /*sync_configure*/);
+        if (!win)
+            return -ENOENT;
+        w = win.get();
+        display->windows.add(tid, std::move(win));
+        update_screen_power(display);
+    } else {
+        w = it->second.get();
+    }
+    if (w->layers.empty())
+        return -EINVAL;
+
+    auto &sb = stream.slots[slot];
+    buffer_metadata md {};
+    md.width = width;
+    md.height = height;
+    md.pixel_stride = stride;
+    md.format = static_cast<uint32_t>(format);
+    ino_t ino = 0;
+    if (handle->numFds > 0) {
+        struct stat st;
+        if (fstat(handle->data[0], &st) == 0)
+            ino = st.st_ino;
+    }
+    if (sb.buf && (sb.buf->metadata != md || sb.ino != ino)) {
+        /* The caller reallocated this slot (SF restart, stream re-creation).
+         * attached_buffer keeps the old content alive if it is still
+         * committed; a stale busy flag must not survive the old buffer. */
+        sb.buf = nullptr;
+        sb.busy = false;
+    }
+    if (sb.busy)
+        return -EBUSY;
+    if (!sb.buf) {
+        auto buf = create_android_wl_buffer(display, md, handle,
+                                            &task_stream_buffer_listener, display);
+        if (!buf)
+            return -EINVAL;
+        /* The handle belongs to the transport; libwayland already dup'ed the
+         * fds at marshal time. */
+        buf->handle = nullptr;
+        sb.buf = std::move(buf);
+        sb.ino = ino;
+    }
+
+    if (fenceFd >= 0)
+        sync_wait(fenceFd, 3000);
+
+    /* A deactivated card (spread open, another card focused) or an unfocused
+     * task (guest-side switch) is showing exit/minimize animation frames:
+     * freezing one into the card is what produced zoomed/half-drawn cards.
+     * Keep the last activated-state frame on screen, but stash this one — the
+     * ACTIVATED edge attaches the freshest withheld frame, so reactivation
+     * snaps to current content. Only once the card has content: a fresh
+     * launch posts before the activation/focus signals land. */
+    if (stream.attached_slot != UINT32_MAX &&
+        (!w->activated || !task->second.focused)) {
+        w->pending_stream_buffer = sb.buf;
+        stream.released.push_back(slot);
+        return 0;
+    }
+
+    if (!w->configured) {
+        /* xdg-shell forbids attaching before the initial configure is acked;
+         * the configure handler (wayland thread) attaches this buffer. */
+        w->pending_stream_buffer = sb.buf;
+        wl_display_flush(display->display);
+    } else {
+        /* A live attach supersedes any frame stashed while deactivated. */
+        w->pending_stream_buffer = nullptr;
+        auto &layer = w->layers[0];
+        layer.attach_buffer(sb.buf);
+        layer.damage_surface(0, 0, INT32_MAX, INT32_MAX);
+        if (layer.viewport)
+            wp_viewport_set_destination(layer.viewport, display->width, display->height);
+        wl_surface_commit(layer.surface);
+        wl_display_flush(display->display);
+    }
+
+    sb.busy = true;
+    /* This commit supersedes the previously attached slot. Mir never sends
+     * wl_buffer.release here, so synthesize it (reported on the next post;
+     * with 3 slots the caller always has a free one). */
+    if (stream.attached_slot != UINT32_MAX && stream.attached_slot != slot) {
+        auto &prev = stream.slots[stream.attached_slot];
+        if (prev.busy) {
+            prev.busy = false;
+            stream.released.push_back(stream.attached_slot);
+        }
+    }
+    stream.attached_slot = slot;
+    return 0;
 }
 
 static void
@@ -2758,6 +2964,7 @@ void reconnect_display(struct display *display) {
     /* Cached wl_buffers are keyed by gralloc handle, which Android reuses
      * across the reconnect: a stale hit would attach a freed proxy. */
     display->buffer_map.clear();
+    display->task_streams.clear();
     display->formats.clear();
     display->modifiers.clear();
     /* The cursor handler holds wl_surfaces; drop it now and let the caller
