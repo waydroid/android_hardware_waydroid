@@ -477,9 +477,12 @@ struct display {
      * prop/layer heuristics so an unpatched platform jar keeps working. */
     std::map<std::string, task_info> tasks;
     bool task_events_seen = false;
+    /* Sequence number of the last taskListSnapshot; for the dump only. */
+    uint32_t task_generation = 0;
     bool task_closing(const std::string &tid);
     void expire_closing_marks();
     void note_task_from_layer(const std::string &tid, const std::string &aid);
+    bool forget_task(const std::string &tid);
 
     std::map<uint32_t, task_stream> task_streams;
 

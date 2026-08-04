@@ -22,6 +22,10 @@ import vendor.waydroid.window@1.2;
  * authoritative task events so the HAL no longer infers task lifecycle
  * from per-frame layer names. All methods are oneway so WindowManager
  * never blocks on the composer.
+ *
+ * Only ever append methods here. HIDL numbers transactions in declaration
+ * order, and the guest jar and the HAL .so reach a device separately, so a
+ * reorder makes a mismatched pair call the wrong method silently.
  */
 interface IWaydroidWindow extends @1.2::IWaydroidWindow {
     /* Fired once per task creation (never on move-to-front). */
@@ -30,4 +34,16 @@ interface IWaydroidWindow extends @1.2::IWaydroidWindow {
     oneway taskRemoved(uint32_t taskID);
     /* Task focus changed; the only raise/lower signal. */
     oneway taskFocusChanged(uint32_t taskID, bool focused);
+
+    struct TaskInfo {
+        uint32_t taskID;
+        string packageName;
+        string componentName;
+        bool focused;
+    };
+    /* The whole live task table, sent when either side (re)starts. It is
+     * authoritative: a task it omits no longer exists, which is how the HAL
+     * drops entries whose taskRemoved never arrived. generation counts
+     * snapshots and only labels the log. */
+    oneway taskListSnapshot(uint32_t generation, vec<TaskInfo> tasks);
 };

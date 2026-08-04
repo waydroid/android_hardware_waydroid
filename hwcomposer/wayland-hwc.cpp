@@ -2962,6 +2962,24 @@ void display::expire_closing_marks() {
     }
 }
 
+/* Drop every trace of a task Android says is gone. Caller holds windowsMutex.
+ * Returns whether a card was closed, so the caller can flush wayland once. */
+bool display::forget_task(const std::string &tid) {
+    tasks.erase(tid);
+
+    /* task_streams is keyed by the numeric ID; entries self-healed from a
+     * layer name are decimal too, but parse defensively. */
+    char *end = nullptr;
+    unsigned long id = strtoul(tid.c_str(), &end, 10);
+    if (end != tid.c_str() && *end == '\0')
+        task_streams.erase(static_cast<uint32_t>(id));
+
+    bool had_window = windows.find(tid) != windows.end();
+    if (had_window)
+        windows.erase(tid);
+    return had_window;
+}
+
 /* A TID layer named a task the table doesn't know: repair it. Covers tasks
  * that predate a composer restart and any missed oneway event. */
 void display::note_task_from_layer(const std::string &tid, const std::string &aid) {

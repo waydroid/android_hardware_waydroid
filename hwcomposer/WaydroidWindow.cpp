@@ -160,10 +160,14 @@ Return<void> WaydroidWindow::taskCreated(uint32_t taskID, const hidl_string& pac
 
     auto it = mDisplay->tasks.find(tid);
     if (it != mDisplay->tasks.end() && it->second.closing) {
-        /* Android reuses task IDs; a new task with the ID of a close-pending
-         * card must not resurrect it. */
-        ALOGI("taskCreated %s (%s): ignored, close pending", tid.c_str(), packageName.c_str());
-        return Void();
+        /* Android only hands out a task ID once the old task is gone, so this
+         * is the taskRemoved we never got: retire the old card rather than
+         * refuse the new task's. Snapshots resync the table now, so this can
+         * no longer be a resync replaying taskCreated mid-close. */
+        ALOGI("taskCreated %s (%s): ID reused while close pending, retiring the old card",
+              tid.c_str(), packageName.c_str());
+        if (mDisplay->forget_task(tid) && mDisplay->wl_alive.load())
+            wl_display_flush(mDisplay->display);
     }
     auto &task = mDisplay->tasks[tid];
     task.appID = packageName;
@@ -178,11 +182,7 @@ Return<void> WaydroidWindow::taskRemoved(uint32_t taskID) {
     std::scoped_lock lock(mDisplay->windowsMutex);
     mDisplay->task_events_seen = true;
 
-    mDisplay->tasks.erase(tid);
-    mDisplay->task_streams.erase(taskID);
-    bool had_window = mDisplay->windows.find(tid) != mDisplay->windows.end();
-    if (had_window)
-        mDisplay->windows.erase(tid);
+    bool had_window = mDisplay->forget_task(tid);
     ALOGI("taskRemoved %s%s", tid.c_str(), had_window ? ": closed its card" : "");
     /* hwc_set flushes each frame, but with the display asleep SF posts no
      * frames and the surface destruction would sit in the send buffer. */
@@ -217,6 +217,61 @@ Return<void> WaydroidWindow::taskFocusChanged(uint32_t taskID, bool focused) {
         it->second.focused = false;
     }
     ALOGI("taskFocusChanged %s focused=%d", tid.c_str(), focused);
+    return Void();
+}
+
+Return<void> WaydroidWindow::taskListSnapshot(
+        uint32_t generation,
+        const hidl_vec<V1_3::IWaydroidWindow::TaskInfo>& tasks) {
+    std::scoped_lock lock(mDisplay->windowsMutex);
+    mDisplay->task_events_seen = true;
+    mDisplay->task_generation = generation;
+
+    std::set<std::string> live;
+    for (const auto &t : tasks)
+        live.insert(std::to_string(t.taskID));
+
+    /* The snapshot is the whole truth, so anything missing from it is gone.
+     * This earns its keep on a framework restart under a surviving composer:
+     * every entry left by the old system_server is stale, and their frozen
+     * cards are invisible to close_windows_for_dead_tasks, which only closes
+     * windows whose task is absent from the table. */
+    std::vector<std::string> dead;
+    for (const auto &[tid, task] : mDisplay->tasks)
+        if (!live.count(tid))
+            dead.push_back(tid);
+
+    size_t closed = 0;
+    for (const auto &tid : dead)
+        closed += mDisplay->forget_task(tid);
+
+    /* Only let the snapshot move focus if it actually reports some: clearing
+     * every flag on a snapshot that simply carries no focus would leave the
+     * task gate refusing content for every card. */
+    bool carries_focus = false;
+    for (const auto &t : tasks)
+        carries_focus |= t.focused;
+
+    for (const auto &t : tasks) {
+        auto &task = mDisplay->tasks[std::to_string(t.taskID)];
+        /* WMS reports no component for identity-less system tasks; don't let
+         * that erase an identity a layer name already gave us. */
+        if (!t.packageName.empty()) {
+            task.appID = t.packageName;
+            task.component = t.componentName;
+            task.from_layer = false;
+        }
+        if (carries_focus)
+            task.focused = t.focused;
+        /* closing is deliberately kept: the task still being listed means
+         * Android has not finished removing it yet. */
+    }
+
+    ALOGI("taskListSnapshot #%u: %zu tasks, retired %zu (%zu cards closed)",
+          generation, (size_t)tasks.size(), dead.size(), closed);
+    /* See taskRemoved: a sleeping display posts no frames to flush behind. */
+    if (closed && mDisplay->wl_alive.load())
+        wl_display_flush(mDisplay->display);
     return Void();
 }
 

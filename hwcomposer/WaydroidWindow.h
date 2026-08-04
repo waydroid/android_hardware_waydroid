@@ -49,6 +49,9 @@ struct WaydroidWindow : public V1_3::IWaydroidWindow {
                              const hidl_string& componentName) override;
     Return<void> taskRemoved(uint32_t taskID) override;
     Return<void> taskFocusChanged(uint32_t taskID, bool focused) override;
+    Return<void> taskListSnapshot(
+            uint32_t generation,
+            const hidl_vec<V1_3::IWaydroidWindow::TaskInfo>& tasks) override;
   private:
     struct display *mDisplay;
 };

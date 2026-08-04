@@ -564,8 +564,9 @@ static void maybe_dump_hal_state(waydroid_hwc_composer_device_1 *pdev, hwc_displ
               layer->compositionType == HWC_FRAMEBUFFER_TARGET ? " [fbt]" : "");
     }
 
-    ALOGI("task table (%zu entries, wms_events=%d):",
-          pdev->display->tasks.size(), pdev->display->task_events_seen);
+    ALOGI("task table (%zu entries, wms_events=%d, snapshot=#%u):",
+          pdev->display->tasks.size(), pdev->display->task_events_seen,
+          pdev->display->task_generation);
     for (const auto &[tid, task] : pdev->display->tasks)
         ALOGI("  task[%s] app=%s comp=%s focused=%d closing=%d from_layer=%d",
               tid.c_str(), task.appID.c_str(), task.component.c_str(),
