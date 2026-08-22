@@ -158,9 +158,20 @@ namespace {
              * sweep. Without it a lost taskRemoved left closing=1 forever
              * and the task's relaunch never got a card. */
             close_windows_for_dead_tasks(pdev);
+            /* That sweep skips taskID "0", so the full-ui window would stay
+             * as a fullscreen card nothing feeds. Other modes evict it too. */
+            pdev->display->windows.erase("Waydroid");
             return 0;
         }
-        int handle_layer(waydroid_hwc_composer_device_1 *, hwc_layer_1 *, size_t) override {
+        int handle_layer(waydroid_hwc_composer_device_1 *, hwc_layer_1 *hwc_layer, size_t) override {
+            /* We present nothing, but set() still hands us the acquire fence
+             * of every layer and we own it. Leaking one fd per layer per
+             * frame fills the fd table in under an hour, after which binder
+             * cannot install fds for incoming transactions and every call
+             * into this process fails with FAILED_TRANSACTION. */
+            if (hwc_layer->acquireFenceFd != -1) {
+                close(hwc_layer->acquireFenceFd);
+            }
             return 0;
         }
     };
@@ -201,10 +212,16 @@ namespace {
          * "Waydroid": Shows android screen in a single window
          * "AppID": Shows apps in related windows as explained above
          */
+        pdev->should_compose = pdev->use_subsurface || pdev->multi_windows;
+
         waydroid_mode *mode;
         if (active_apps == "none") {
             mode = new closed_mode();
         } else if (active_apps == "Waydroid") {
+            /* The window already holds SF's composite; re-splitting it into
+             * subsurfaces only rebuilds every buffer on each geometry change
+             * (frequent on A16) and flashes the black background. */
+            pdev->should_compose = pdev->use_subsurface;
             if (pdev->should_compose) {
                 mode = new compositing_full_ui_mode();
             } else {
@@ -262,6 +279,18 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
     return 0;
 }
 
+/* select_mode only runs when SF composites, and task-streams mode stops SF
+ * composing once the streamed tasks idle -- so leaving the mode can latch both
+ * the prop and the composition skip with no frame left to clear them. Ask for
+ * one frame rather than duplicating the mode policy; select_mode does the rest. */
+static void nudge_stale_task_streams_mode(waydroid_hwc_composer_device_1 *pdev) {
+    if (!pdev->task_streams_mode_active || !pdev->procs || !pdev->procs->invalidate)
+        return;
+    const std::string active_apps = property_get_string("waydroid.active_apps", "none");
+    if (active_apps == "Waydroid" || active_apps == "none")
+        pdev->procs->invalidate(pdev->procs);
+}
+
 static long time_to_sleep_to_next_vsync(struct timespec *rt, uint64_t last_vsync_ns, unsigned vsync_period_ns)
 {
     uint64_t now = (uint64_t)rt->tv_sec * 1e9 + rt->tv_nsec;
@@ -297,6 +326,11 @@ static void* hwc_vsync_thread(void* data) {
             ALOGE("error in vsync thread: %s", strerror(errno));
             continue;
         }
+
+        // ~1 Hz; the vsync tick outlives SF's compose loop.
+        static unsigned tick = 0;
+        if (++tick % 60 == 0)
+            nudge_stale_task_streams_mode(pdev);
 
         vsync_enabled = pdev->vsync_callback_enabled;
 
@@ -1012,15 +1046,18 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
         ALOGW("multi window mode requested but wl_subcompositor is not supported. Disabling it.");
         pdev->multi_windows = false;
     }
-    pdev->should_compose = property_get_bool("persist.waydroid.use_subsurface", false) || pdev->multi_windows;
+    pdev->use_subsurface = property_get_bool("persist.waydroid.use_subsurface", false);
+    pdev->should_compose = pdev->use_subsurface || pdev->multi_windows;
     if (pdev->should_compose && !pdev->display->subcompositor) {
         ALOGW("usage of subsurfaces requested but wl_subcompositor is not supported. Disabling it.");
         pdev->should_compose = false;
+        pdev->use_subsurface = false;
     }
 
     init_cursor_handler(pdev);
 
-    auto first_window = window::create(pdev->display, pdev->should_compose, "Waydroid", "0", {0, 0, 0, 255});
+    // This is the full-ui window, so it follows full-ui's composition choice.
+    auto first_window = window::create(pdev->display, pdev->use_subsurface, "Waydroid", "0", {0, 0, 0, 255});
     if (!property_get_bool("waydroid.background_start", true)) {
         pdev->display->windows.add("Waydroid", std::move(first_window));
         property_set("waydroid.active_apps", "Waydroid");

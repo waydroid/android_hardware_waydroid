@@ -76,6 +76,8 @@ struct waydroid_hwc_composer_device_1 : hwc_composer_device_1_t {
     int timeline_fd;
     int next_sync_point;
     bool should_compose;
+    // Subsurfaces asked for explicitly, not implied by multi_windows.
+    bool use_subsurface;
     bool multi_windows;
     /* SF renders per-task buffers and posts them over display@1.3;
      * layer-driven window content is disabled (task_streams_mode). */
