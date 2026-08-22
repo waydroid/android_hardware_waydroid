@@ -1572,12 +1572,20 @@ int update_task_list(struct waydroid_hwc_composer_device_1 *pdev,
          * has content and is deactivated or unfocused keeps its last frame,
          * so its posts would be withheld anyway. */
         auto stream = display->task_streams.find(taskId);
-        if (stream != display->task_streams.end() &&
-            stream->second.attached_slot != UINT32_MAX) {
+        const bool has_content = stream != display->task_streams.end() &&
+                                 stream->second.attached_slot != UINT32_MAX;
+        if (has_content) {
             auto it = display->windows.find(tid);
             if (it != display->windows.end() &&
                 (!it->second->activated || !task->second.focused))
                 continue;
+        } else if (display->task_events_seen && !task->second.focused) {
+            /* Nothing to show and not the task in front: SurfaceFlinger has
+             * no content to render for it, so wanting it only buys a
+             * connection that waits for a frame that never comes. It becomes
+             * wanted the moment it is focused. Needs the focus events to be
+             * real -- without them nothing would ever be wanted. */
+            continue;
         }
         /* Not wanted until the task has a connection to carry it. Withholding
          * it here costs one frame; refusing the post instead would cost SF's
@@ -3676,9 +3684,11 @@ static void conn_worker(struct display *display)
 
         const uint32_t taskId = *display->conn_open_requests.begin();
         display->conn_open_requests.erase(display->conn_open_requests.begin());
+        display->conn_opens_in_flight.insert(taskId);
         lock.unlock();
         open_task_conn(display, taskId);
         lock.lock();
+        display->conn_opens_in_flight.erase(taskId);
     }
 }
 
@@ -3686,6 +3696,8 @@ void request_task_conn(struct display *display, uint32_t taskId)
 {
     {
         std::scoped_lock lock(display->conn_worker_mutex);
+        if (display->conn_opens_in_flight.count(taskId))
+            return;
         if (!display->conn_open_requests.insert(taskId).second)
             return;
     }
@@ -3748,6 +3760,8 @@ bool detach_task_conn(struct display *display, uint32_t taskId)
         std::scoped_lock lock(display->conn_worker_mutex);
         display->conn_open_requests.erase(taskId);
         display->conn_graveyard.push_back(std::move(dying));
+        /* An open still in flight for this task is now stale; open_task_conn
+         * discards it because the task is gone or the mode ended. */
     }
     display->conn_worker_cond.notify_one();
     return true;

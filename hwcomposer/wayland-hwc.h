@@ -635,6 +635,10 @@ struct display {
     std::mutex conn_worker_mutex;
     std::condition_variable conn_worker_cond;
     std::set<uint32_t> conn_open_requests;
+    /* The task whose connection the worker is opening right now. Without it,
+     * update_task_list asks again on every frame of the roundtrip and the
+     * worker opens a second connection it immediately throws away. */
+    std::set<uint32_t> conn_opens_in_flight;
     std::vector<dying_task_conn> conn_graveyard;
     bool conn_worker_quit = false;
     std::thread conn_worker_thread;
