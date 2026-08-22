@@ -547,8 +547,8 @@ int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 
             .x = hwc_layer->displayFrame.left,
             .y = hwc_layer->displayFrame.top };
 
-    if (window->display->ctl->presentation) {
-        auto feedback = wp_presentation_feedback(window->display->ctl->presentation, window_layer.surface);
+    if (window->conn->presentation) {
+        auto feedback = wp_presentation_feedback(window->conn->presentation, window_layer.surface);
         wp_presentation_feedback_add_listener(feedback,&feedback_listener, pdev);
     }
 
@@ -1057,7 +1057,7 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     init_cursor_handler(pdev);
 
     // This is the full-ui window, so it follows full-ui's composition choice.
-    auto first_window = window::create(pdev->display, pdev->use_subsurface, "Waydroid", "0", {0, 0, 0, 255});
+    auto first_window = window::create(pdev->display->ctl.get(), pdev->use_subsurface, "Waydroid", "0", {0, 0, 0, 255});
     if (!property_get_bool("waydroid.background_start", true)) {
         pdev->display->windows.add("Waydroid", std::move(first_window));
         property_set("waydroid.active_apps", "Waydroid");

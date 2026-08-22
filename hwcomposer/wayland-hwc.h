@@ -127,6 +127,9 @@ constexpr bool operator!=(const buffer_metadata &lhs, const buffer_metadata &rhs
 
 struct buffer {
     struct wl_buffer *wl_buffer = nullptr;
+    /* The connection this wl_buffer was created on. Only ever one, and it
+     * must outlive the buffer: wl_display_disconnect frees the proxy. */
+    struct wl_conn *conn = nullptr;
 
     buffer_handle_t handle = nullptr;
     buffer_metadata metadata {};
@@ -176,6 +179,83 @@ struct surface_context {
     void set_display_frame(hwc_rect_t rect, double scale);
 };
 
+/* One connection to the host compositor: the wl_display, everything bound on
+ * it, and the thread dispatching its events. Today there is exactly one
+ * (display->ctl); per-task connections come later. */
+struct wl_conn {
+    /* The Android-side state this connection serves. Set before the first
+     * event can be dispatched: the registry handler already reads it. */
+    struct display *dpy;
+
+    pthread_t wayland_thread; // constant after init
+
+    struct wl_display *display;
+    struct wl_registry *registry;
+    struct wl_compositor *compositor;
+    struct wl_subcompositor *subcompositor;
+    struct wl_seat *seat;
+    struct wl_shell *shell;
+    struct wl_shm *shm;
+    struct wl_pointer *pointer;
+    struct wl_keyboard *keyboard;
+    struct wl_touch *touch;
+    struct wl_output *output;
+    struct wp_presentation *presentation;
+    struct wp_viewporter *viewporter;
+    struct android_wlegl *android_wlegl;
+    struct zwp_linux_dmabuf_v1 *dmabuf;
+    struct xdg_wm_base *wm_base;
+    struct zwp_tablet_manager_v2* tablet_manager;
+    struct zwp_tablet_seat_v2 *tablet_seat;
+    struct zwp_pointer_constraints_v1 *pointer_constraints;
+    struct zwp_pointer_gestures_v1 *pointer_gestures;
+    struct zwp_pointer_gesture_pinch_v1 *pointer_gesture_pinch;
+    struct zwp_relative_pointer_manager_v1 *relative_pointer_manager;
+    struct zwp_relative_pointer_v1 *relative_pointer;
+    struct zwp_idle_inhibit_manager_v1 *idle_manager;
+    struct wp_fractional_scale_manager_v1 *fractional_scale_manager;
+    struct wl_data_device_manager *data_device_manager;
+    struct wl_data_device *data_device;
+
+    /* Host format/modifier advertisement of this connection. */
+    std::unordered_set<uint32_t> formats;
+    std::map<uint32_t, std::vector<uint64_t>> modifiers;
+    bool supports_cursor_viewport;
+    bool supports_cursor_hw_buffer;
+
+    /* A wl_buffer belongs to the connection it was created on. */
+    std::unordered_map<buffer_handle_t, std::shared_ptr<buffer>> buffer_map;
+
+    /* Surfaces and seat objects of this connection. */
+    std::map<struct wl_surface *, struct layerFrame> layers;
+    std::map<int, struct wl_surface *> touch_surfaces;
+    struct wl_surface *pointer_surface;
+    struct wl_surface *tablet_surface;
+    std::list<struct zwp_tablet_tool_v2 *> tablet_tools;
+    std::map<struct zwp_tablet_tool_v2 *, uint16_t> tablet_tools_evt;
+    uint32_t keyboard_enter_serial;
+    uint32_t pointer_enter_serial;
+
+    /* Accumulated fractions of this connection's wl_pointer axis events. */
+    double wheelAccumulatorX;
+    double wheelAccumulatorY;
+    bool wheelEvtIsDiscrete;
+    bool wheelEvtIsTouchpad;
+
+    /*
+     * Reconnect support. When the host compositor drops our wl_client (e.g.
+     * Lomiri tearing down the connection on a single toplevel close), the
+     * wayland thread sets wl_alive=false and parks on reconnect_resume instead
+     * of aborting the whole HAL. The hwc compose thread (which owns pdev, and
+     * therefore the cursor handler) performs the actual reconnect and posts
+     * reconnect_resume to wake the wayland thread on the new connection.
+     */
+    std::atomic<bool> wl_alive{true};
+    sem_t reconnect_resume;
+    /* Last reconnect, for the retry backoff. */
+    struct timespec last_reconnect {};
+};
+
 struct window {
     struct layer : public surface_context {
         struct wl_subsurface *subsurface;
@@ -191,7 +271,9 @@ struct window {
         void set_position(int32_t x, int32_t y);
     };
 
-    struct display *display;
+    /* The connection this window's surfaces live on. Android-side state is
+     * reached through conn->dpy. */
+    struct wl_conn *conn;
 
     struct wl_shell_surface *shell_surface;
     struct xdg_surface *xdg_surface;
@@ -264,7 +346,7 @@ struct window {
      * Must be false when called off the wayland thread with windowsMutex held
      * (post_task_buffer): the roundtrip can deadlock against the configure
      * handler (do_hotplug -> adapter mutex -> hwc_set -> windowsMutex). */
-    static std::unique_ptr<window> create(struct display *display, bool use_subsurfaces, std::string appID, std::string taskID, hwc_color_t color, bool sync_configure = true);
+    static std::unique_ptr<window> create(struct wl_conn *conn, bool use_subsurfaces, std::string appID, std::string taskID, hwc_color_t color, bool sync_configure = true);
 
     window::layer &get_next_layer();
     window::layer &create_new_layer();
@@ -362,7 +444,7 @@ class open_windows {
         update([&](){
             for (auto it = windows.begin(), end = windows.end(); it != end;) {
                 if (pred(*it)) {
-                    display = it->second->display;
+                    display = it->second->conn->dpy;
                     it = windows.erase(it);
                 } else {
                     ++it;
@@ -418,82 +500,6 @@ struct task_stream {
     uint32_t attached_slot = UINT32_MAX;
 };
 
-/* One connection to the host compositor: the wl_display, everything bound on
- * it, and the thread dispatching its events. Today there is exactly one
- * (display->ctl); per-task connections come later. */
-struct wl_conn {
-    /* The Android-side state this connection serves. Set before the first
-     * event can be dispatched: the registry handler already reads it. */
-    struct display *dpy;
-
-    pthread_t wayland_thread; // constant after init
-
-    struct wl_display *display;
-    struct wl_registry *registry;
-    struct wl_compositor *compositor;
-    struct wl_subcompositor *subcompositor;
-    struct wl_seat *seat;
-    struct wl_shell *shell;
-    struct wl_shm *shm;
-    struct wl_pointer *pointer;
-    struct wl_keyboard *keyboard;
-    struct wl_touch *touch;
-    struct wl_output *output;
-    struct wp_presentation *presentation;
-    struct wp_viewporter *viewporter;
-    struct android_wlegl *android_wlegl;
-    struct zwp_linux_dmabuf_v1 *dmabuf;
-    struct xdg_wm_base *wm_base;
-    struct zwp_tablet_manager_v2* tablet_manager;
-    struct zwp_tablet_seat_v2 *tablet_seat;
-    struct zwp_pointer_constraints_v1 *pointer_constraints;
-    struct zwp_pointer_gestures_v1 *pointer_gestures;
-    struct zwp_pointer_gesture_pinch_v1 *pointer_gesture_pinch;
-    struct zwp_relative_pointer_manager_v1 *relative_pointer_manager;
-    struct zwp_relative_pointer_v1 *relative_pointer;
-    struct zwp_idle_inhibit_manager_v1 *idle_manager;
-    struct wp_fractional_scale_manager_v1 *fractional_scale_manager;
-    struct wl_data_device_manager *data_device_manager;
-    struct wl_data_device *data_device;
-
-    /* Host format/modifier advertisement of this connection. */
-    std::unordered_set<uint32_t> formats;
-    std::map<uint32_t, std::vector<uint64_t>> modifiers;
-    bool supports_cursor_viewport;
-    bool supports_cursor_hw_buffer;
-
-    /* A wl_buffer belongs to the connection it was created on. */
-    std::unordered_map<buffer_handle_t, std::shared_ptr<buffer>> buffer_map;
-
-    /* Surfaces and seat objects of this connection. */
-    std::map<struct wl_surface *, struct layerFrame> layers;
-    std::map<int, struct wl_surface *> touch_surfaces;
-    struct wl_surface *pointer_surface;
-    struct wl_surface *tablet_surface;
-    std::list<struct zwp_tablet_tool_v2 *> tablet_tools;
-    std::map<struct zwp_tablet_tool_v2 *, uint16_t> tablet_tools_evt;
-    uint32_t keyboard_enter_serial;
-    uint32_t pointer_enter_serial;
-
-    /* Accumulated fractions of this connection's wl_pointer axis events. */
-    double wheelAccumulatorX;
-    double wheelAccumulatorY;
-    bool wheelEvtIsDiscrete;
-    bool wheelEvtIsTouchpad;
-
-    /*
-     * Reconnect support. When the host compositor drops our wl_client (e.g.
-     * Lomiri tearing down the connection on a single toplevel close), the
-     * wayland thread sets wl_alive=false and parks on reconnect_resume instead
-     * of aborting the whole HAL. The hwc compose thread (which owns pdev, and
-     * therefore the cursor handler) performs the actual reconnect and posts
-     * reconnect_resume to wake the wayland thread on the new connection.
-     */
-    std::atomic<bool> wl_alive{true};
-    sem_t reconnect_resume;
-    /* Last reconnect, for the retry backoff. */
-    struct timespec last_reconnect {};
-};
 
 struct display {
     /* The one connection that has always existed: full UI, single window,

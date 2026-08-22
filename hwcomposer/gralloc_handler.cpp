@@ -74,6 +74,7 @@ namespace {
 }
 std::unique_ptr<buffer> create_shm_wl_buffer(wl_conn *conn, const buffer_metadata& metadata, buffer_handle_t handle) {
     std::unique_ptr<buffer> buf { new buffer() };
+    buf->conn = conn;
 
     // Assume 4bpp formats or none of this is going to work
     int shm_stride = metadata.width * 4;
@@ -174,6 +175,7 @@ std::unique_ptr<buffer> create_dmabuf_wl_buffer(wl_conn *conn, const buffer_meta
     assert(prime_fd >= 0);
 
     std::unique_ptr<buffer> buf { new buffer() };
+    buf->conn = conn;
 
     buf->metadata = metadata;
     buf->handle = handle;
@@ -202,6 +204,7 @@ std::unique_ptr<buffer> create_android_wl_buffer(wl_conn *conn, const buffer_met
     }
 
     std::unique_ptr<buffer> buf { new buffer() };
+    buf->conn = conn;
 
     buf->metadata = metadata;
     buf->handle = handle;

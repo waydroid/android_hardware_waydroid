@@ -143,7 +143,7 @@ void snapshot_inactive_app_window(struct display *display, struct window *window
 
     auto old_buf = window->last_layer_buffer;
 
-    window->snapshot_buffer = create_shm_wl_buffer(display->ctl.get(), old_buf->metadata, old_buf->handle);
+    window->snapshot_buffer = create_shm_wl_buffer(window->conn, old_buf->metadata, old_buf->handle);
     if (!window->snapshot_buffer) {
         ALOGE("failed to create a wayland buffer for window snapshot");
         return;
@@ -188,7 +188,7 @@ void snapshot_inactive_app_window(struct display *display, struct window *window
 static void
 attach_pending_stream_buffer(struct window *window)
 {
-    struct display *display = window->display;
+    struct display *display = window->conn->dpy;
     std::shared_ptr<buffer> pending;
     {
         std::scoped_lock lock(display->windowsMutex);
@@ -337,15 +337,16 @@ window_for_surface(struct display *display, struct wl_surface *surface)
  * keeps this from fighting an intentional back press, which arrives with no
  * host input at all. */
 static void
-reassert_task_focus(struct display *display, struct wl_surface *surface, const char *reason)
+reassert_task_focus(struct wl_conn *conn, struct wl_surface *surface, const char *reason)
 {
+    struct display *display = conn->dpy;
     if (display->task == nullptr || !surface)
         return;
 
-    /* Only from the wayland thread. window::create pumps configure events from
-     * hwc_set with windowsMutex held, and a binder call under that lock
-     * deadlocks against the adapter mutex. */
-    if (!pthread_equal(pthread_self(), display->ctl->wayland_thread))
+    /* Only from this connection's wayland thread. window::create pumps
+     * configure events from hwc_set with windowsMutex held, and a binder call
+     * under that lock deadlocks against the adapter mutex. */
+    if (!pthread_equal(pthread_self(), conn->wayland_thread))
         return;
 
     int task_id;
@@ -408,7 +409,7 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
                               struct wl_array *states)
 {
     struct window *window = (struct window *)data;
-    struct display *display = window->display;
+    struct display *display = window->conn->dpy;
 
     bool is_activated = false;
 #ifdef XDG_TOPLEVEL_STATE_SUSPENDED
@@ -449,7 +450,7 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
     } else if (is_activated) {
         /* Already activated, so no edge: the host re-configured a card it
          * still considers focused. Android may have moved on since. */
-        reassert_task_focus(display, window->surface, "activated configure");
+        reassert_task_focus(window->conn, window->surface, "activated configure");
     }
 
     /* Any activation edge re-evaluates screen power: a rising edge wakes
@@ -515,14 +516,14 @@ static void
 xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
 {
     struct window *window = (struct window *)data;
-    struct display *display = window->display;
+    struct display *display = window->conn->dpy;
 
     ALOGI("compositor closed toplevel task=%s app=%s",
           window->taskID.c_str(), window->appID.c_str());
 
     // simulate user input to restart idle timeout (TODO: find a better way)
-    send_key_event(window->display, 0, WL_KEYBOARD_KEY_STATE_PRESSED);
-    send_key_event(window->display, 0, WL_KEYBOARD_KEY_STATE_RELEASED);
+    send_key_event(window->conn->dpy, 0, WL_KEYBOARD_KEY_STATE_PRESSED);
+    send_key_event(window->conn->dpy, 0, WL_KEYBOARD_KEY_STATE_RELEASED);
 
     if (display->task != nullptr) {
         if (window->taskID != "none") {
@@ -535,7 +536,7 @@ xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
         }
     }
 
-    std::scoped_lock lock(window->display->windowsMutex);
+    std::scoped_lock lock(window->conn->dpy->windowsMutex);
     std::string key;
     if (window->taskID != "0" && window->taskID != "none") {
         key = window->taskID;
@@ -578,7 +579,7 @@ void
 shell_surface_configure(void *data, struct wl_shell_surface *, uint32_t, int32_t width, int32_t height)
 {
     struct window *window = (struct window *)data;
-    struct display *display = window->display;
+    struct display *display = window->conn->dpy;
 
     if (width > 1 && height > 1) {
         display->req_width = width;
@@ -696,7 +697,7 @@ void window::set_maximize(bool enabled) {
     } else {
         assert(shell_surface);
         if (enabled) {
-            wl_shell_surface_set_maximized(shell_surface, display->ctl->output);
+            wl_shell_surface_set_maximized(shell_surface, conn->output);
         } else {
             ALOGW("wl_shell_surface: does not support un-maximizing");
         }
@@ -730,7 +731,7 @@ void window::minimize() {
     if (xdg_toplevel) {
         xdg_toplevel_set_minimized(xdg_toplevel);
         wl_surface_commit(surface); // unclear if this is required
-        wl_display_flush(display->ctl->display);
+        wl_display_flush(conn->display);
     }
 }
 
@@ -760,7 +761,7 @@ window::~window() {
             zwp_locked_pointer_v1_destroy(locked_pointer);
     }
 
-    wl_display_flush(display->ctl->display);
+    wl_display_flush(conn->display);
 }
 
 static void fractional_scale_handle_preferred_scale(void *data, struct wp_fractional_scale_v1 *,
@@ -790,7 +791,7 @@ surface_handle_enter(void *data, struct wl_surface *, struct wl_output *)
     auto *window = static_cast<struct window *>(data);
     window->outputs_entered++;
     window->ever_shown = true;
-    update_screen_power(window->display);
+    update_screen_power(window->conn->dpy);
 }
 
 static void
@@ -799,7 +800,7 @@ surface_handle_leave(void *data, struct wl_surface *, struct wl_output *)
     auto *window = static_cast<struct window *>(data);
     if (window->outputs_entered > 0)
         window->outputs_entered--;
-    update_screen_power(window->display);
+    update_screen_power(window->conn->dpy);
 }
 
 /* Only enter/leave are wired; preferred_buffer_scale/transform (wl_surface v6)
@@ -812,19 +813,20 @@ static const struct wl_surface_listener surface_listener = {
 };
 
 std::unique_ptr<window>
-window::create(struct display *display, bool use_subsurfaces, std::string appID, std::string taskID, hwc_color_t color, bool sync_configure)
+window::create(struct wl_conn *conn, bool use_subsurfaces, std::string appID, std::string taskID, hwc_color_t color, bool sync_configure)
 {
+    struct display *display = conn->dpy;
     std::unique_ptr<window> window { new struct window() };
     if (!window)
         return nullptr;
 
-    window->display = display;
+    window->conn = conn;
     ALOGI("creating toplevel task=%s app=%s", taskID.c_str(), appID.c_str());
-    window->surface = wl_compositor_create_surface(display->ctl->compositor);
+    window->surface = wl_compositor_create_surface(conn->compositor);
     wl_surface_set_user_data(window->surface, window.get());
     wl_surface_add_listener(window->surface, &surface_listener, window.get());
-    if (display->ctl->viewporter)
-        window->viewport = wp_viewporter_get_viewport(display->ctl->viewporter, window->surface);
+    if (conn->viewporter)
+        window->viewport = wp_viewporter_get_viewport(conn->viewporter, window->surface);
     window->taskID = std::move(taskID);
     window->dedicated_background_surface = true;
     window->bg_buffer = nullptr;
@@ -837,15 +839,15 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
         close(fd);
         exit(1);
     }
-    struct wl_shm_pool *pool = wl_shm_create_pool(display->ctl->shm, fd, 4);
+    struct wl_shm_pool *pool = wl_shm_create_pool(conn->shm, fd, 4);
     close(fd);
 
     // Is this the first window created?
     bool calibrating = !display->height || !display->width;
 
-    if (display->ctl->wm_base) {
+    if (conn->wm_base) {
         window->xdg_surface =
-                xdg_wm_base_get_xdg_surface(display->ctl->wm_base, window->surface);
+                xdg_wm_base_get_xdg_surface(conn->wm_base, window->surface);
         assert(window->xdg_surface);
         xdg_surface_add_listener(window->xdg_surface,
                                      &xdg_surface_listener, window.get());
@@ -853,9 +855,9 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
         window->xdg_toplevel = xdg_surface_get_toplevel(window->xdg_surface);
         assert(window->xdg_toplevel);
         xdg_toplevel_add_listener(window->xdg_toplevel, &xdg_toplevel_listener, window.get());
-    } else if (display->ctl->shell) {
+    } else if (conn->shell) {
         window->shell_surface =
-            wl_shell_get_shell_surface(display->ctl->shell, window->surface);
+            wl_shell_get_shell_surface(conn->shell, window->surface);
         assert(window->shell_surface);
         wl_shell_surface_add_listener(window->shell_surface, &shell_surface_listener, window.get());
         wl_shell_surface_set_toplevel(window->shell_surface);
@@ -888,19 +890,19 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
     if (sync_configure) {
         // Wait for first configure event
         do {
-            wl_display_roundtrip(display->ctl->display);
+            wl_display_roundtrip(conn->display);
         } while (!window->configured);
     } else {
-        wl_display_flush(display->ctl->display);
+        wl_display_flush(conn->display);
     }
 
     if (calibrating) {
         wp_fractional_scale_v1* fs = nullptr;
-        if (display->ctl->fractional_scale_manager) {
+        if (conn->fractional_scale_manager) {
             // We only support one global scale
             fs = wp_fractional_scale_manager_v1_get_fractional_scale(
-                    display->ctl->fractional_scale_manager, window->surface);
-            wp_fractional_scale_v1_add_listener(fs, &fractional_scale_listener, display->ctl.get());
+                    conn->fractional_scale_manager, window->surface);
+            wp_fractional_scale_v1_add_listener(fs, &fractional_scale_listener, conn);
         }
 
         // Some compositors fail to give us a window size or scale without a buffer attached
@@ -912,7 +914,7 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
         if (window->viewport && display->req_width && display->req_height)
             wp_viewport_set_destination(window->viewport, display->req_width, display->req_height);
         wl_surface_commit(window->surface);
-        wl_display_roundtrip(display->ctl->display);
+        wl_display_roundtrip(conn->display);
 
         if (fs) {
             wp_fractional_scale_v1_destroy(fs);
@@ -931,10 +933,10 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
             window->set_maximize(false);
     }
 
-    if (display->ctl->wm_base)
+    if (conn->wm_base)
         xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width, display->height);
 
-    struct wl_region *region = wl_compositor_create_region(display->ctl->compositor);
+    struct wl_region *region = wl_compositor_create_region(conn->compositor);
     if (color.a == 0) {
         wl_surface_set_input_region(window->surface, region);
         if (display->system_version >= 33)
@@ -950,8 +952,8 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
 
     // TODO: Fix background when viewport is not supported
     // No subsurface background for us!
-    if (!display->ctl->subcompositor ||
-        !display->ctl->viewporter ||
+    if (!conn->subcompositor ||
+        !conn->viewporter ||
         property_get_bool("persist.waydroid.no_background_subsurface", false)) {
         window->dedicated_background_surface = false;
         window->layers.emplace_back(window->surface, window->viewport);
@@ -1055,11 +1057,11 @@ window::layer& window::get_next_layer() {
 }
 
 window::layer& window::create_new_layer() {
-    wl_surface *surface = wl_compositor_create_surface(display->ctl->compositor);
-    wl_subsurface *subsurface = wl_subcompositor_get_subsurface(display->ctl->subcompositor, surface, this->surface);
+    wl_surface *surface = wl_compositor_create_surface(conn->compositor);
+    wl_subsurface *subsurface = wl_subcompositor_get_subsurface(conn->subcompositor, surface, this->surface);
     wp_viewport *viewport = nullptr;
-    if (display->ctl->viewporter)
-        viewport = wp_viewporter_get_viewport(display->ctl->viewporter, surface);
+    if (conn->viewporter)
+        viewport = wp_viewporter_get_viewport(conn->viewporter, surface);
 
     return layers.emplace_back(surface, viewport, subsurface);
 }
@@ -1311,7 +1313,7 @@ int post_task_buffer(struct waydroid_hwc_composer_device_1 *pdev, uint32_t taskI
          * thread, windowsMutex held) deadlocks against the configure
          * handler's do_hotplug (adapter mutex, held by hwc_set's thread,
          * which itself waits on windowsMutex). */
-        auto win = window::create(display, false, task->second.appID, tid, {0, 0, 0, 255},
+        auto win = window::create(display->ctl.get(), false, task->second.appID, tid, {0, 0, 0, 255},
                                   false /*sync_configure*/);
         if (!win)
             return -ENOENT;
@@ -1494,7 +1496,7 @@ keyboard_handle_enter(void *data, struct wl_keyboard *,
         if (window->taskID != "none" && window->taskID != "0") {
             ALOGI("keyboard enter on %s#%s -> setFocusedTask",
                   window->appID.c_str(), window->taskID.c_str());
-            window->display->task->setFocusedTask(stoi(window->taskID));
+            window->conn->dpy->task->setFocusedTask(stoi(window->taskID));
         }
     }
 }
@@ -1675,7 +1677,7 @@ pointer_handle_button(void *data, struct wl_pointer *,
         return;
 
     if (state == WL_POINTER_BUTTON_STATE_PRESSED)
-        reassert_task_focus(display, conn->pointer_surface, "click");
+        reassert_task_focus(conn, conn->pointer_surface, "click");
 
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
         ALOGE("%s:%d error in touch clock_gettime: %s",
@@ -1862,7 +1864,7 @@ touch_handle_down(void *data, struct wl_touch *,
     /* Before the event, not after: a tap on a card whose task Android has
      * backgrounded must raise that task first, or the touch is delivered to
      * whatever is in front instead. */
-    reassert_task_focus(display, surface, "touch");
+    reassert_task_focus(conn, surface, "touch");
 
     int touch_id = create_touch_id(display, id);
     conn->touch_surfaces[id] = surface;
@@ -3038,7 +3040,7 @@ window *open_windows::add(waydroid_hwc_composer_device_1 *pdev, const std::strin
     update([&](){
         auto res = windows.emplace(
             key,
-            window::create(pdev->display, pdev->should_compose, aid, tid, color)
+            window::create(pdev->display->ctl.get(), pdev->should_compose, aid, tid, color)
         );
         assert(res.second);
         window = res.first->second.get();
@@ -3110,7 +3112,7 @@ void open_windows::publish_open_apps() {
 }
 
 void open_windows::erase(const_iterator pos) {
-    struct display *display = pos->second->display;
+    struct display *display = pos->second->conn->dpy;
     update([&](){
         windows.erase(pos);
     });
@@ -3125,7 +3127,7 @@ void open_windows::erase(const key_type& key) {
     auto pos = windows.find(key);
     if (pos == windows.end())
         return;
-    struct display *display = pos->second->display;
+    struct display *display = pos->second->conn->dpy;
     windows.erase(pos);
     std::string windows_size_str = std::to_string(windows.size());
     property_set("waydroid.open_windows", windows_size_str.c_str());
@@ -3166,11 +3168,12 @@ static void reset_wayland_globals(struct wl_conn *conn) {
 /* Tear down everything that belongs to the connection and reconnect,
  * rebinding globals. The caller has already dropped the display-side state
  * that references this connection's proxies. */
-static void wl_conn_reconnect(struct wl_conn *conn) {
-    /* If the previous reconnect was moments ago, the new connection died
-     * right away (e.g. a protocol error every frame). Back off so a
-     * reconnect loop cannot saturate a core and drown the host compositor
-     * in connection churn. */
+/* If the previous reconnect was moments ago, the new connection died right
+ * away (e.g. a protocol error every frame). Back off so a reconnect loop
+ * cannot saturate a core and drown the host compositor in connection churn.
+ * Called before the caller drops its own state, so the sleep bounds the whole
+ * cycle and not just the wayland half. */
+static void wl_conn_reconnect_backoff(struct wl_conn *conn) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     if (conn->last_reconnect.tv_sec && now.tv_sec - conn->last_reconnect.tv_sec < 2) {
@@ -3178,7 +3181,9 @@ static void wl_conn_reconnect(struct wl_conn *conn) {
         usleep(500 * 1000);
     }
     conn->last_reconnect = now;
+}
 
+static void wl_conn_reconnect(struct wl_conn *conn) {
     conn->layers.clear();
     conn->touch_surfaces.clear();
     conn->tablet_tools.clear();
@@ -3213,6 +3218,8 @@ static void wl_conn_reconnect(struct wl_conn *conn) {
 }
 
 void reconnect_display(struct display *display) {
+    wl_conn_reconnect_backoff(display->ctl.get());
+
     /* Caller holds windowsMutex. Drop everything that references the dead
      * connection's proxies BEFORE wl_display_disconnect() frees them. */
     display->windows.clear();
@@ -3277,10 +3284,14 @@ static bool wl_conn_open(struct wl_conn *conn) {
     return true;
 }
 
-static void wl_conn_destroy(struct wl_conn *conn) {
+/* Stop dispatching. Separate from wl_conn_destroy so a caller can quiesce the
+ * connection before tearing down state the dispatch thread can reach. */
+static void wl_conn_stop(struct wl_conn *conn) {
     pthread_kill(conn->wayland_thread, SIGTERM);
     pthread_join(conn->wayland_thread, nullptr);
+}
 
+static void wl_conn_destroy(struct wl_conn *conn) {
     if (conn->wm_base)
         xdg_wm_base_destroy(conn->wm_base);
 
@@ -3348,6 +3359,8 @@ create_display(const char *gralloc)
 void
 destroy_display(struct display *display)
 {
+    wl_conn_stop(display->ctl.get());
+
     if (display->deactivate_thread.joinable()) {
         {
             std::scoped_lock lock(display->deactivate_mutex);
