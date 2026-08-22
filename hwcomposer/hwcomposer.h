@@ -83,8 +83,7 @@ struct waydroid_hwc_composer_device_1 : hwc_composer_device_1_t {
      * layer-driven window content is disabled (task_streams_mode). */
     bool task_streams;
     /* Each streamed task gets its own wayland connection instead of sharing
-     * ctl. Level 2 of persist.waydroid.task_streams; see
-     * PLAN-per-task-connections.md §3.6. */
+     * ctl. Gated by kPerTaskConns in hwcomposer.cpp, not by a property. */
     bool task_conns_per_task;
 
     std::unique_ptr<waydroid_mode> selected_mode;

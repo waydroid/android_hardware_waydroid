@@ -72,8 +72,8 @@ using ::android::status_t;
 #define WINDOW_DECORATION_OUTSET 15
 
 namespace {
-    /* See hwc_open: per-task wayland connections, bring-up only. */
-    constexpr bool kPerTaskConns = false;
+    /* See hwc_open: one wayland connection per streamed task. */
+    constexpr bool kPerTaskConns = true;
 
     hwc_frect_t rect_apply_transform(hwc_frect_t src, uint32_t transform) {
         /* Transform bits are defined so that for both 90° and 270° this bit is set */
