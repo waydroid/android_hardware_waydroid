@@ -404,6 +404,16 @@ void ensure_input_pipe(int input_type);
 void reset_input_pipe(struct display *display, int input_type);
 void init_input_devices(struct display *display);
 
+/* Ask the conn worker to open a task's connection. Cheap and idempotent; the
+ * connection appears in display->task_conns once it is up. */
+void request_task_conn(struct display *display, uint32_t taskId);
+
+/* Detach a task's connection, window and stream from every table and hand
+ * them to the conn worker to destroy. Caller must hold windowsMutex. Returns
+ * false, having done nothing, for a task that has no connection of its own.
+ * Safe to call from the connection's own dispatch thread. */
+bool detach_task_conn(struct display *display, uint32_t taskId);
+
 /* Recompute host-side visibility and flip Android screen power to match.
  * Defined in wayland-hwc.cpp. */
 void update_screen_power(struct display *display);
@@ -478,6 +488,9 @@ class open_windows {
 
     window *add(waydroid_hwc_composer_device_1 *pdev, const std::string& key, const std::string& aid, const std::string& tid, hwc_color_t color = {0, 0, 0, 255});
     void add(const std::string& key, std::unique_ptr<window> window);
+    /* Remove the window but hand it back alive, for a caller that must
+     * destroy it later and elsewhere (see dying_task_conn). */
+    mapped_type extract(const key_type& key);
     void clear();
     void erase(const_iterator pos);
     void erase(const key_type& key);
@@ -543,6 +556,16 @@ struct task_stream {
     uint32_t attached_slot = UINT32_MAX;
 };
 
+/* A task connection detached from every table but not yet destroyed. Its
+ * window and stream come with it: they hold proxies of the connection and
+ * must die first, and only the conn worker may block on the dispatch thread
+ * that is still unwinding. See PLAN-per-task-connections.md §3.2. */
+struct dying_task_conn {
+    std::unique_ptr<struct wl_conn> conn;
+    std::unique_ptr<struct window> win;
+    struct task_stream stream;
+};
+
 
 struct display {
     /* The one connection that has always existed: full UI, single window,
@@ -579,6 +602,23 @@ struct display {
     bool forget_task(const std::string &tid);
 
     std::map<uint32_t, task_stream> task_streams;
+
+    /* One wayland connection per streamed task, so the transport itself
+     * carries the task identity. Guarded by windowsMutex; ctl is separate
+     * and always present. */
+    std::map<uint32_t, std::unique_ptr<wl_conn>> task_conns;
+
+    /* Opening a connection blocks on connect plus a registry roundtrip, and
+     * reaping one joins a dispatch thread. Neither may happen under
+     * windowsMutex or on a binder thread, so both are handed to a worker.
+     * Lock order: conn_worker_mutex may be taken while holding windowsMutex,
+     * never the other way round, and never across a blocking wayland call. */
+    std::mutex conn_worker_mutex;
+    std::condition_variable conn_worker_cond;
+    std::set<uint32_t> conn_open_requests;
+    std::vector<dying_task_conn> conn_graveyard;
+    bool conn_worker_quit = false;
+    std::thread conn_worker_thread;
 
     std::recursive_mutex windowsMutex;
 

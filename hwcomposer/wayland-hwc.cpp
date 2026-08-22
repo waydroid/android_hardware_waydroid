@@ -3203,6 +3203,20 @@ void open_windows::erase(const_iterator pos) {
     update_screen_power(display);
 }
 
+std::unique_ptr<window> open_windows::extract(const key_type& key) {
+    auto pos = windows.find(key);
+    if (pos == windows.end())
+        return nullptr;
+    struct display *display = pos->second->conn->dpy;
+    std::unique_ptr<window> win = std::move(pos->second);
+    update([&](){
+        windows.erase(pos);
+    });
+    /* See open_windows::erase: destroyed surfaces emit no output leave. */
+    update_screen_power(display);
+    return win;
+}
+
 void open_windows::erase(const key_type& key) {
     auto pos = windows.find(key);
     if (pos == windows.end())
@@ -3427,6 +3441,132 @@ static void wl_conn_destroy(struct wl_conn *conn) {
     sem_destroy(&conn->reconnect_resume);
 }
 
+/* Phase B of a task connection teardown: everything that blocks. The window
+ * and the stream hold this connection's proxies, so they are destroyed first
+ * and the connection itself last. Runs on the conn worker with no lock held. */
+static void destroy_dying_conn(struct dying_task_conn &dying)
+{
+    if (dying.conn) {
+        pthread_join(dying.conn->wayland_thread, nullptr);
+        clear_touch_ids(dying.conn.get());
+    }
+
+    dying.win.reset();
+    /* A slot the compositor still held is dropped here too: the socket is
+     * already down, so its wl_buffer.release is never coming. */
+    dying.stream.slots.clear();
+
+    if (dying.conn) {
+        dying.conn->buffer_map.clear();
+        dying.conn->layers.clear();
+        dying.conn->touch_surfaces.clear();
+        dying.conn->tablet_tools.clear();
+        dying.conn->tablet_tools_evt.clear();
+        ALOGI("task %u: connection torn down", dying.conn->task_id);
+        wl_conn_destroy(dying.conn.get());
+        dying.conn.reset();
+    }
+}
+
+static void open_task_conn(struct display *display, uint32_t taskId)
+{
+    auto conn = std::make_unique<wl_conn>();
+    conn->dpy = display;
+    conn->task_id = taskId;
+
+    if (!wl_conn_open(conn.get())) {
+        ALOGE("task %u: could not open a wayland connection", taskId);
+        return;
+    }
+
+    {
+        std::scoped_lock lock(display->windowsMutex);
+        if (!display->task_conns.count(taskId)) {
+            display->task_conns[taskId] = std::move(conn);
+            ALOGI("task %u: wayland connection open", taskId);
+            return;
+        }
+    }
+
+    /* Raced with a detach or another open; drop this one again. */
+    struct dying_task_conn spare;
+    wl_conn_quiesce(conn.get());
+    spare.conn = std::move(conn);
+    destroy_dying_conn(spare);
+}
+
+static void conn_worker(struct display *display)
+{
+    std::unique_lock<std::mutex> lock(display->conn_worker_mutex);
+    while (!display->conn_worker_quit) {
+        if (display->conn_graveyard.empty() && display->conn_open_requests.empty()) {
+            display->conn_worker_cond.wait(lock);
+            continue;
+        }
+
+        /* Reap before opening: a task whose card was just closed and
+         * relaunched must not hold two connections at once. */
+        if (!display->conn_graveyard.empty()) {
+            std::vector<dying_task_conn> dead;
+            dead.swap(display->conn_graveyard);
+            lock.unlock();
+            for (auto &dying : dead)
+                destroy_dying_conn(dying);
+            dead.clear();
+            lock.lock();
+            continue;
+        }
+
+        const uint32_t taskId = *display->conn_open_requests.begin();
+        display->conn_open_requests.erase(display->conn_open_requests.begin());
+        lock.unlock();
+        open_task_conn(display, taskId);
+        lock.lock();
+    }
+}
+
+void request_task_conn(struct display *display, uint32_t taskId)
+{
+    {
+        std::scoped_lock lock(display->conn_worker_mutex);
+        if (!display->conn_open_requests.insert(taskId).second)
+            return;
+    }
+    display->conn_worker_cond.notify_one();
+}
+
+bool detach_task_conn(struct display *display, uint32_t taskId)
+{
+    auto it = display->task_conns.find(taskId);
+    if (it == display->task_conns.end())
+        return false;
+
+    struct dying_task_conn dying;
+    /* Phase A. End the session host-side first: the dispatch thread then
+     * unwinds on its own while we take the window and the stream out of
+     * reach. Both stay alive until the worker destroys them, so a handler
+     * still blocked on windowsMutex cannot find a freed window. */
+    wl_conn_quiesce(it->second.get());
+    dying.conn = std::move(it->second);
+    display->task_conns.erase(it);
+
+    dying.win = display->windows.extract(std::to_string(taskId));
+
+    auto stream = display->task_streams.find(taskId);
+    if (stream != display->task_streams.end()) {
+        dying.stream = std::move(stream->second);
+        display->task_streams.erase(stream);
+    }
+
+    {
+        std::scoped_lock lock(display->conn_worker_mutex);
+        display->conn_open_requests.erase(taskId);
+        display->conn_graveyard.push_back(std::move(dying));
+    }
+    display->conn_worker_cond.notify_one();
+    return true;
+}
+
 struct display *
 create_display(const char *gralloc)
 {
@@ -3460,6 +3600,7 @@ create_display(const char *gralloc)
 
     display->task = IWaydroidTask::getService();
     display->deactivate_thread = std::thread(deactivate_worker, display);
+    display->conn_worker_thread = std::thread(conn_worker, display);
     return display;
 }
 
@@ -3475,6 +3616,15 @@ destroy_display(struct display *display)
             display->deactivate_cond.notify_one();
         }
         display->deactivate_thread.join();
+    }
+
+    if (display->conn_worker_thread.joinable()) {
+        {
+            std::scoped_lock lock(display->conn_worker_mutex);
+            display->conn_worker_quit = true;
+            display->conn_worker_cond.notify_one();
+        }
+        display->conn_worker_thread.join();
     }
 
     wl_conn_destroy(display->ctl.get());
