@@ -143,7 +143,7 @@ void snapshot_inactive_app_window(struct display *display, struct window *window
 
     auto old_buf = window->last_layer_buffer;
 
-    window->snapshot_buffer = create_shm_wl_buffer(display, old_buf->metadata, old_buf->handle);
+    window->snapshot_buffer = create_shm_wl_buffer(display->ctl.get(), old_buf->metadata, old_buf->handle);
     if (!window->snapshot_buffer) {
         ALOGE("failed to create a wayland buffer for window snapshot");
         return;
@@ -765,8 +765,9 @@ window::~window() {
 
 static void fractional_scale_handle_preferred_scale(void *data, struct wp_fractional_scale_v1 *,
             uint32_t scale_times_120) {
-    struct display *display = (struct display *)data;
-    if (!display->ctl->viewporter) {
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
+    if (!conn->viewporter) {
         // We should always have the viewporter if we have the fractional scale manager
         // but for debugging purpuses we may decide to disable one
         return;
@@ -899,7 +900,7 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
             // We only support one global scale
             fs = wp_fractional_scale_manager_v1_get_fractional_scale(
                     display->ctl->fractional_scale_manager, window->surface);
-            wp_fractional_scale_v1_add_listener(fs, &fractional_scale_listener, display);
+            wp_fractional_scale_v1_add_listener(fs, &fractional_scale_listener, display->ctl.get());
         }
 
         // Some compositors fail to give us a window size or scale without a buffer attached
@@ -1245,13 +1246,14 @@ deactivate_worker(struct display *display)
     }
 }
 
-/* wl_buffer.release for a task-stream slot. Userdata is the display, not the
- * slot: a slot (and its window) can be destroyed while the compositor still
- * holds the buffer, so we look the slot up by wl_buffer instead. */
+/* wl_buffer.release for a task-stream slot. Userdata is the connection, not
+ * the slot: a slot (and its window) can be destroyed while the compositor
+ * still holds the buffer, so we look the slot up by wl_buffer instead. */
 static void
 task_stream_buffer_release(void *data, struct wl_buffer *wl_buf)
 {
-    struct display *display = static_cast<struct display *>(data);
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     std::scoped_lock lock(display->windowsMutex);
     for (auto &[taskId, stream] : display->task_streams) {
         for (auto &[slot, sb] : stream.slots) {
@@ -1344,8 +1346,8 @@ int post_task_buffer(struct waydroid_hwc_composer_device_1 *pdev, uint32_t taskI
     if (sb.busy)
         return -EBUSY;
     if (!sb.buf) {
-        auto buf = create_android_wl_buffer(display, md, handle,
-                                            &task_stream_buffer_listener, display);
+        auto buf = create_android_wl_buffer(display->ctl.get(), md, handle,
+                                            &task_stream_buffer_listener, display->ctl.get());
         if (!buf)
             return -EINVAL;
         /* The handle belongs to the transport; libwayland already dup'ed the
@@ -1474,8 +1476,9 @@ keyboard_handle_enter(void *data, struct wl_keyboard *,
         return;
     }
 
-    struct display *display = (struct display *)data;
-    display->ctl->keyboard_enter_serial = serial;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
+    conn->keyboard_enter_serial = serial;
 
     std::scoped_lock lock(display->windowsMutex);
     auto window = reinterpret_cast<struct window *>(wl_surface_get_user_data(surface));
@@ -1500,7 +1503,8 @@ static void
 keyboard_handle_leave(void *data, struct wl_keyboard *,
                       uint32_t, struct wl_surface *)
 {
-    struct display *display = (struct display *)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
 
     for (size_t i = 0; i < display->keysDown.size(); i++) {
         if (display->keysDown[i] == WL_KEYBOARD_KEY_STATE_PRESSED) {
@@ -1516,7 +1520,8 @@ keyboard_handle_key(void *data, struct wl_keyboard *,
 {
     if (key == KEY_POWER)
         return;
-    send_key_event((struct display*)data, key, (enum wl_keyboard_key_state)state);
+    struct wl_conn *conn = (struct wl_conn *)data;
+    send_key_event(conn->dpy, key, (enum wl_keyboard_key_state)state);
 }
 
 static void
@@ -1554,9 +1559,10 @@ pointer_handle_enter(void *data, struct wl_pointer *,
         return;
     }
 
-    struct display *display = (struct display *)data;
-    display->ctl->pointer_surface = surface;
-    display->ctl->pointer_enter_serial = serial;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
+    conn->pointer_surface = surface;
+    conn->pointer_enter_serial = serial;
     display->cursor_handler->on_cursor_enter(display);
 }
 
@@ -1564,15 +1570,17 @@ static void
 pointer_handle_leave(void *data, struct wl_pointer *,
                      uint32_t, struct wl_surface *)
 {
-    struct display *display = (struct display *)data;
-    display->ctl->pointer_surface = NULL;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
+    conn->pointer_surface = NULL;
 }
 
 static void
 pointer_handle_motion(void *data, struct wl_pointer *,
                       uint32_t, wl_fixed_t sx, wl_fixed_t sy)
 {
-    struct display* display = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     struct input_event event[5];
     struct timespec rt;
     int x, y;
@@ -1581,7 +1589,7 @@ pointer_handle_motion(void *data, struct wl_pointer *,
     if (ensure_pipe(display, INPUT_POINTER))
         return;
 
-    if (!display->ctl->pointer_surface)
+    if (!conn->pointer_surface)
         return;
 
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
@@ -1594,8 +1602,8 @@ pointer_handle_motion(void *data, struct wl_pointer *,
         x = int(x * display->scale);
         y = int(y * display->scale);
     }
-    x += display->ctl->layers[display->ctl->pointer_surface].x;
-    y += display->ctl->layers[display->ctl->pointer_surface].y;
+    x += conn->layers[conn->pointer_surface].x;
+    y += conn->layers[conn->pointer_surface].y;
 
     ADD_EVENT(EV_ABS, ABS_X, x);
     ADD_EVENT(EV_ABS, ABS_Y, y);
@@ -1614,7 +1622,8 @@ void
 handle_relative_motion(void *data, struct zwp_relative_pointer_v1*,
         uint32_t, uint32_t, wl_fixed_t dx, wl_fixed_t dy, wl_fixed_t, wl_fixed_t)
 {
-    struct display *display = (struct display *)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     struct input_event event[3];
     struct timespec rt;
     unsigned int res, n = 0;
@@ -1653,7 +1662,8 @@ pointer_handle_button(void *data, struct wl_pointer *,
                       uint32_t, uint32_t, uint32_t button,
                       uint32_t state)
 {
-    struct display* display = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     struct input_event event[2];
     struct timespec rt;
     unsigned int res, n = 0;
@@ -1661,11 +1671,11 @@ pointer_handle_button(void *data, struct wl_pointer *,
     if (ensure_pipe(display, INPUT_POINTER))
         return;
 
-    if (!display->ctl->pointer_surface)
+    if (!conn->pointer_surface)
         return;
 
     if (state == WL_POINTER_BUTTON_STATE_PRESSED)
-        reassert_task_focus(display, display->ctl->pointer_surface, "click");
+        reassert_task_focus(display, conn->pointer_surface, "click");
 
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
         ALOGE("%s:%d error in touch clock_gettime: %s",
@@ -1683,7 +1693,8 @@ static void
 pointer_handle_axis(void *data, struct wl_pointer *,
                     uint32_t, uint32_t axis, wl_fixed_t value)
 {
-    struct display* display = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     struct input_event event[2];
     struct timespec rt;
     unsigned int res, n = 0;
@@ -1694,7 +1705,7 @@ pointer_handle_axis(void *data, struct wl_pointer *,
     if (ensure_pipe(display, INPUT_POINTER))
         return;
 
-    if (!display->ctl->pointer_surface)
+    if (!conn->pointer_surface)
         return;
 
     if (!display->reverseScroll) {
@@ -1702,22 +1713,22 @@ pointer_handle_axis(void *data, struct wl_pointer *,
     }
 
     if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL) {
-        display->ctl->wheelAccumulatorY += fVal;
-        if (std::abs(display->ctl->wheelAccumulatorY) < step)
+        conn->wheelAccumulatorY += fVal;
+        if (std::abs(conn->wheelAccumulatorY) < step)
             return;
-        move = (int)(display->ctl->wheelAccumulatorY / step);
-        display->ctl->wheelAccumulatorY = display->ctl->wheelEvtIsDiscrete ? 0 :
-                                     std::fmod(display->ctl->wheelAccumulatorY, step);
+        move = (int)(conn->wheelAccumulatorY / step);
+        conn->wheelAccumulatorY = conn->wheelEvtIsDiscrete ? 0 :
+                                     std::fmod(conn->wheelAccumulatorY, step);
     } else {
-        display->ctl->wheelAccumulatorX += fVal;
-        if (std::abs(display->ctl->wheelAccumulatorX) < step)
+        conn->wheelAccumulatorX += fVal;
+        if (std::abs(conn->wheelAccumulatorX) < step)
             return;
-        move = (int)(display->ctl->wheelAccumulatorX / step);
-        display->ctl->wheelAccumulatorX = display->ctl->wheelEvtIsDiscrete ? 0 :
-                                     std::fmod(display->ctl->wheelAccumulatorY, step);
+        move = (int)(conn->wheelAccumulatorX / step);
+        conn->wheelAccumulatorX = conn->wheelEvtIsDiscrete ? 0 :
+                                     std::fmod(conn->wheelAccumulatorY, step);
     }
 
-    if (display->ctl->wheelEvtIsTouchpad) {
+    if (conn->wheelEvtIsTouchpad) {
         gesture_swipe_update(display, axis, move);
         return;
     }
@@ -1738,20 +1749,22 @@ pointer_handle_axis(void *data, struct wl_pointer *,
 static void
 pointer_handle_axis_source(void *data, struct wl_pointer *, uint32_t source)
 {
-    struct display* display = (struct display*)data;
-    display->ctl->wheelEvtIsDiscrete = (source == WL_POINTER_AXIS_SOURCE_WHEEL);
-    display->ctl->wheelEvtIsTouchpad = (source == WL_POINTER_AXIS_SOURCE_FINGER);
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
+    conn->wheelEvtIsDiscrete = (source == WL_POINTER_AXIS_SOURCE_WHEEL);
+    conn->wheelEvtIsTouchpad = (source == WL_POINTER_AXIS_SOURCE_FINGER);
 
-    if (display->ctl->wheelEvtIsTouchpad)
-        gesture_swipe_begin(display, display->ctl->pointer_enter_serial);
+    if (conn->wheelEvtIsTouchpad)
+        gesture_swipe_begin(display, conn->pointer_enter_serial);
 }
 
 static void
 pointer_handle_axis_stop(void *data, struct wl_pointer *, uint32_t, uint32_t)
 {
-    struct display* display = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
 
-    if (display->ctl->wheelEvtIsTouchpad)
+    if (conn->wheelEvtIsTouchpad)
         gesture_swipe_end(display);
 }
 
@@ -1836,7 +1849,8 @@ touch_handle_down(void *data, struct wl_touch *,
         return;
     }
 
-    struct display* display = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     struct input_event event[6];
     struct timespec rt;
     int x, y;
@@ -1851,7 +1865,7 @@ touch_handle_down(void *data, struct wl_touch *,
     reassert_task_focus(display, surface, "touch");
 
     int touch_id = create_touch_id(display, id);
-    display->ctl->touch_surfaces[id] = surface;
+    conn->touch_surfaces[id] = surface;
 
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
        ALOGE("%s:%d error in touch clock_gettime: %s",
@@ -1863,8 +1877,8 @@ touch_handle_down(void *data, struct wl_touch *,
         x = int(x * display->scale);
         y = int(y * display->scale);
     }
-    x += display->ctl->layers[surface].x;
-    y += display->ctl->layers[surface].y;
+    x += conn->layers[surface].x;
+    y += conn->layers[surface].y;
 
     ADD_EVENT(EV_ABS, ABS_MT_SLOT, touch_id);
     ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, touch_id);
@@ -1882,7 +1896,8 @@ static void
 touch_handle_up(void *data, struct wl_touch *,
         uint32_t, uint32_t, int32_t id)
 {
-    struct display* display = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     struct input_event event[3];
     struct timespec rt;
     unsigned int res, n = 0;
@@ -1897,7 +1912,7 @@ touch_handle_up(void *data, struct wl_touch *,
             ALOGE("%s:%d error in touch clock_gettime: %s",
                   __FILE__, __LINE__, strerror(errno));
         }
-        display->ctl->touch_surfaces[id] = NULL;
+        conn->touch_surfaces[id] = NULL;
 
         ADD_EVENT(EV_ABS, ABS_MT_SLOT, touch_id);
         ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, -1);
@@ -1913,7 +1928,8 @@ static void
 touch_handle_motion(void *data, struct wl_touch *,
             uint32_t, int32_t id, wl_fixed_t x_w, wl_fixed_t y_w)
 {
-    struct display* display = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     struct input_event event[6];
     struct timespec rt;
     int x, y;
@@ -1935,8 +1951,8 @@ touch_handle_motion(void *data, struct wl_touch *,
             x = int(x * display->scale);
             y = int(y * display->scale);
         }
-        x += display->ctl->layers[display->ctl->touch_surfaces[id]].x;
-        y += display->ctl->layers[display->ctl->touch_surfaces[id]].y;
+        x += conn->layers[conn->touch_surfaces[id]].x;
+        y += conn->layers[conn->touch_surfaces[id]].y;
 
         ADD_EVENT(EV_ABS, ABS_MT_SLOT, touch_id);
         ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, touch_id);
@@ -1959,7 +1975,8 @@ touch_handle_frame(void *, struct wl_touch *)
 static void
 touch_handle_cancel(void *data, struct wl_touch *)
 {
-    struct display* display = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     struct input_event event[6];
     struct timespec rt;
     unsigned int res, n;
@@ -1978,7 +1995,7 @@ touch_handle_cancel(void *data, struct wl_touch *)
         if (display->touch_id[i] != -1) {
             id = display->touch_id[i];
             display->touch_id[i] = -1;
-            display->ctl->touch_surfaces[id] = NULL;
+            conn->touch_surfaces[id] = NULL;
 
             n = 0;
             // Turn finger into palm.
@@ -2000,7 +2017,8 @@ touch_handle_cancel(void *data, struct wl_touch *)
 static void
 touch_handle_shape(void *data, struct wl_touch *, int32_t id, wl_fixed_t major, wl_fixed_t minor)
 {
-    struct display* display = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     struct input_event event[5];
     struct timespec rt;
     unsigned int res, n = 0;
@@ -2131,7 +2149,8 @@ gesture_swipe_end(struct display* display) {
 static void
 gesture_pinch_begin(void *data, struct zwp_pointer_gesture_pinch_v1 *, uint32_t id, uint32_t, struct wl_surface *, uint32_t)
 {
-    struct display* display = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
 
     // Do not interrupt active gestures
     if (!empty_touch_id(display))
@@ -2148,7 +2167,8 @@ static void
 gesture_pinch_update(void *data, struct zwp_pointer_gesture_pinch_v1 *, uint32_t,
             wl_fixed_t, wl_fixed_t, wl_fixed_t scale, wl_fixed_t)
 {
-    struct display* display = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     struct input_event event[11];
     struct timespec rt;
     double zoom_scale = wl_fixed_to_double(scale);
@@ -2211,7 +2231,8 @@ gesture_pinch_update(void *data, struct zwp_pointer_gesture_pinch_v1 *, uint32_t
 static void
 gesture_pinch_end(void *data, struct zwp_pointer_gesture_pinch_v1 *, uint32_t, uint32_t, int)
 {
-    struct display* display = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     struct input_event event[6];
     struct timespec rt;
     int touch_id[2];
@@ -2264,11 +2285,12 @@ static const struct xdg_wm_base_listener xdg_wm_base_listener = {
 static void
 seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t wl_caps)
 {
-    struct display *d = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *d = conn->dpy;
     enum wl_seat_capability caps = (enum wl_seat_capability) wl_caps;
 
-    if ((caps & WL_SEAT_CAPABILITY_POINTER) && !d->ctl->pointer) {
-        d->ctl->pointer = wl_seat_get_pointer(seat);
+    if ((caps & WL_SEAT_CAPABILITY_POINTER) && !conn->pointer) {
+        conn->pointer = wl_seat_get_pointer(seat);
         d->input_fd[INPUT_POINTER] = -1;
         d->ptrPrvX = 0;
         d->ptrPrvY = 0;
@@ -2278,42 +2300,42 @@ seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t wl_caps)
         d->gesturePoints[0] = d->gesturePoints[1] = -1;
         mkfifo(INPUT_PIPE_NAME[INPUT_POINTER], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
         chown(INPUT_PIPE_NAME[INPUT_POINTER], 1000, 1000);
-        wl_pointer_add_listener(d->ctl->pointer, &pointer_listener, d);
-    } else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && d->ctl->pointer) {
+        wl_pointer_add_listener(conn->pointer, &pointer_listener, conn);
+    } else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && conn->pointer) {
         remove(INPUT_PIPE_NAME[INPUT_POINTER]);
-        wl_pointer_destroy(d->ctl->pointer);
-        d->ctl->pointer = NULL;
+        wl_pointer_destroy(conn->pointer);
+        conn->pointer = NULL;
     }
 
-    if ((caps & WL_SEAT_CAPABILITY_KEYBOARD) && !d->ctl->keyboard) {
-        d->ctl->keyboard = wl_seat_get_keyboard(seat);
+    if ((caps & WL_SEAT_CAPABILITY_KEYBOARD) && !conn->keyboard) {
+        conn->keyboard = wl_seat_get_keyboard(seat);
         d->input_fd[INPUT_KEYBOARD] = -1;
         mkfifo(INPUT_PIPE_NAME[INPUT_KEYBOARD], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
         chown(INPUT_PIPE_NAME[INPUT_KEYBOARD], 1000, 1000);
-        wl_keyboard_add_listener(d->ctl->keyboard, &keyboard_listener, d);
-    } else if (!(caps & WL_SEAT_CAPABILITY_KEYBOARD) && d->ctl->keyboard) {
+        wl_keyboard_add_listener(conn->keyboard, &keyboard_listener, conn);
+    } else if (!(caps & WL_SEAT_CAPABILITY_KEYBOARD) && conn->keyboard) {
         remove(INPUT_PIPE_NAME[INPUT_KEYBOARD]);
-        wl_keyboard_destroy(d->ctl->keyboard);
-        d->ctl->keyboard = NULL;
+        wl_keyboard_destroy(conn->keyboard);
+        conn->keyboard = NULL;
     }
 
-    if ((caps & WL_SEAT_CAPABILITY_TOUCH) && !d->ctl->touch) {
-        d->ctl->touch = wl_seat_get_touch(seat);
+    if ((caps & WL_SEAT_CAPABILITY_TOUCH) && !conn->touch) {
+        conn->touch = wl_seat_get_touch(seat);
         d->input_fd[INPUT_TOUCH] = -1;
         mkfifo(INPUT_PIPE_NAME[INPUT_TOUCH], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
         chown(INPUT_PIPE_NAME[INPUT_TOUCH], 1000, 1000);
         for (int i = 0; i < MAX_TOUCHPOINTS; i++)
             d->touch_id[i] = -1;
-        wl_touch_set_user_data(d->ctl->touch, d);
-        wl_touch_add_listener(d->ctl->touch, &touch_listener, d);
-    } else if (!(caps & WL_SEAT_CAPABILITY_TOUCH) && d->ctl->touch) {
+        wl_touch_set_user_data(conn->touch, conn);
+        wl_touch_add_listener(conn->touch, &touch_listener, conn);
+    } else if (!(caps & WL_SEAT_CAPABILITY_TOUCH) && conn->touch) {
         remove(INPUT_PIPE_NAME[INPUT_TOUCH]);
-        wl_touch_destroy(d->ctl->touch);
-        d->ctl->touch = NULL;
+        wl_touch_destroy(conn->touch);
+        conn->touch = NULL;
     }
 
-    if (d->ctl->pointer_gestures && d->ctl->pointer) {
-        if (!(caps & WL_SEAT_CAPABILITY_TOUCH) && !d->ctl->touch) {
+    if (conn->pointer_gestures && conn->pointer) {
+        if (!(caps & WL_SEAT_CAPABILITY_TOUCH) && !conn->touch) {
             d->input_fd[INPUT_TOUCH] = -1;
             mkfifo(INPUT_PIPE_NAME[INPUT_TOUCH], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
             chown(INPUT_PIPE_NAME[INPUT_TOUCH], 1000, 1000);
@@ -2321,8 +2343,8 @@ seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t wl_caps)
                 d->touch_id[i] = -1;
         }
 
-        d->ctl->pointer_gesture_pinch = zwp_pointer_gestures_v1_get_pinch_gesture(d->ctl->pointer_gestures, d->ctl->pointer);
-        zwp_pointer_gesture_pinch_v1_add_listener(d->ctl->pointer_gesture_pinch, &pinch_listener, d);
+        conn->pointer_gesture_pinch = zwp_pointer_gestures_v1_get_pinch_gesture(conn->pointer_gestures, conn->pointer);
+        zwp_pointer_gesture_pinch_v1_add_listener(conn->pointer_gesture_pinch, &pinch_listener, conn);
     }
 }
 
@@ -2343,27 +2365,29 @@ dmabuf_modifiers(void *data, struct zwp_linux_dmabuf_v1 * dmabuf,
 {
     dmabuf_format(data, dmabuf, format);
 
-    struct display *d = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *d = conn->dpy;
     uint64_t modifier = ((uint64_t)modifier_hi << 32) | modifier_lo;
     if (modifier == DRM_FORMAT_MOD_INVALID)
         return;
 
     std::stringstream prop_name_stream;
     std::stringstream prop_value_stream;
-    prop_name_stream << "waydroid.modifiers." << std::hex << format << "." << std::dec << d->ctl->modifiers[format].size();
+    prop_name_stream << "waydroid.modifiers." << std::hex << format << "." << std::dec << conn->modifiers[format].size();
     prop_value_stream << std::hex << modifier;
     std::string prop_name = prop_name_stream.str();
     std::string prop_value = prop_value_stream.str();
     property_set(prop_name.c_str(), prop_value.c_str());
 
-    d->ctl->modifiers[format].push_back(modifier);
+    conn->modifiers[format].push_back(modifier);
 }
 
 static void
 dmabuf_format(void *data, struct zwp_linux_dmabuf_v1 *, uint32_t format)
 {
-    struct display *d = (struct display*)data;
-    d->ctl->formats.insert(format);
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *d = conn->dpy;
+    conn->formats.insert(format);
 }
 
 static const struct zwp_linux_dmabuf_v1_listener dmabuf_listener = {
@@ -2376,7 +2400,8 @@ output_handle_mode(void *data, struct wl_output *,
                    uint32_t, int32_t width, int32_t height,
                    int32_t refresh)
 {
-    struct display *d = (struct display *)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *d = conn->dpy;
     d->refresh = std::max(d->refresh, refresh);
 
     // Fallback size
@@ -2406,7 +2431,8 @@ static void
 output_handle_scale(void *data, struct wl_output *,
             int32_t scale)
 {
-    struct display *d = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *d = conn->dpy;
     d->scale = std::max((int)d->scale, scale);
 }
 
@@ -2442,7 +2468,8 @@ static void
 tablet_tool_receive_type(void *data, struct zwp_tablet_tool_v2 *tool,
                          uint32_t type)
 {
-    struct display* display = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     uint16_t evt_code;
     switch(type) {
         case ZWP_TABLET_TOOL_V2_TYPE_PEN:
@@ -2472,7 +2499,7 @@ tablet_tool_receive_type(void *data, struct zwp_tablet_tool_v2 *tool,
         default:
             evt_code = BTN_DIGI;
     }
-    display->ctl->tablet_tools_evt[tool] = evt_code;
+    conn->tablet_tools_evt[tool] = evt_code;
 }
 
 static void
@@ -2507,7 +2534,8 @@ tablet_tool_proximity_in(void *data, struct zwp_tablet_tool_v2 *tool,
                          uint32_t, struct zwp_tablet_v2 *,
                          struct wl_surface *surface)
 {
-    struct display* display = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     struct input_event event[2];
     struct timespec rt;
     unsigned int res, n = 0;
@@ -2515,14 +2543,14 @@ tablet_tool_proximity_in(void *data, struct zwp_tablet_tool_v2 *tool,
     if (ensure_pipe(display, INPUT_TABLET))
         return;
 
-    display->ctl->tablet_surface = surface;
+    conn->tablet_surface = surface;
 
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
         ALOGE("%s:%d error in touch clock_gettime: %s",
               __FILE__, __LINE__, strerror(errno));
     }
 
-    ADD_EVENT(EV_KEY, display->ctl->tablet_tools_evt[tool], 1);
+    ADD_EVENT(EV_KEY, conn->tablet_tools_evt[tool], 1);
     ADD_EVENT(EV_SYN, SYN_REPORT, 0);
 
     res = write(display->input_fd[INPUT_TABLET], &event, sizeof(event));
@@ -2533,7 +2561,8 @@ tablet_tool_proximity_in(void *data, struct zwp_tablet_tool_v2 *tool,
 static void
 tablet_tool_proximity_out(void *data, struct zwp_tablet_tool_v2 *tool)
 {
-    struct display* display = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     struct input_event event[2];
     struct timespec rt;
     unsigned int res, n = 0;
@@ -2541,14 +2570,14 @@ tablet_tool_proximity_out(void *data, struct zwp_tablet_tool_v2 *tool)
     if (ensure_pipe(display, INPUT_TABLET))
         return;
 
-    display->ctl->tablet_surface = NULL;
+    conn->tablet_surface = NULL;
 
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
         ALOGE("%s:%d error in touch clock_gettime: %s",
               __FILE__, __LINE__, strerror(errno));
     }
 
-    ADD_EVENT(EV_KEY, display->ctl->tablet_tools_evt[tool], 0);
+    ADD_EVENT(EV_KEY, conn->tablet_tools_evt[tool], 0);
     ADD_EVENT(EV_SYN, SYN_REPORT, 0);
 
     res = write(display->input_fd[INPUT_TABLET], &event, sizeof(event));
@@ -2559,7 +2588,8 @@ tablet_tool_proximity_out(void *data, struct zwp_tablet_tool_v2 *tool)
 static void
 tablet_tool_down(void *data, struct zwp_tablet_tool_v2 *, uint32_t)
 {
-    struct display* display = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     struct input_event event[2];
     struct timespec rt;
     unsigned int res, n = 0;
@@ -2583,7 +2613,8 @@ tablet_tool_down(void *data, struct zwp_tablet_tool_v2 *, uint32_t)
 static void
 tablet_tool_up(void *data, struct zwp_tablet_tool_v2 *)
 {
-    struct display* display = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     struct input_event event[2];
     struct timespec rt;
     unsigned int res, n = 0;
@@ -2608,13 +2639,14 @@ static void
 tablet_tool_motion(void *data, struct zwp_tablet_tool_v2 *,
                    wl_fixed_t x_w, wl_fixed_t y_w)
 {
-    struct display* display = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     struct input_event event[3];
     struct timespec rt;
     int x, y;
     unsigned int res, n = 0;
 
-    if (display->ctl->tablet_surface) {
+    if (conn->tablet_surface) {
         if (ensure_pipe(display, INPUT_TABLET))
             return;
 
@@ -2628,8 +2660,8 @@ tablet_tool_motion(void *data, struct zwp_tablet_tool_v2 *,
             x = int(x * display->scale);
             y = int(y * display->scale);
         }
-        x += display->ctl->layers[display->ctl->tablet_surface].x;
-        y += display->ctl->layers[display->ctl->tablet_surface].y;
+        x += conn->layers[conn->tablet_surface].x;
+        y += conn->layers[conn->tablet_surface].y;
 
         ADD_EVENT(EV_ABS, ABS_X, x);
         ADD_EVENT(EV_ABS, ABS_Y, y);
@@ -2645,7 +2677,8 @@ static void
 tablet_tool_pressure(void *data, struct zwp_tablet_tool_v2 *,
                      uint32_t pressure)
 {
-    struct display* display = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     struct input_event event[2];
     struct timespec rt;
     unsigned int res, n = 0;
@@ -2673,7 +2706,8 @@ static void
 tablet_tool_distance(void *data, struct zwp_tablet_tool_v2 *,
                      uint32_t distance_raw)
 {
-    struct display* display = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     struct input_event event[2];
     struct timespec rt;
     unsigned int res, n = 0;
@@ -2698,7 +2732,8 @@ static void
 tablet_tool_tilt(void *data, struct zwp_tablet_tool_v2 *,
                  wl_fixed_t tilt_x, wl_fixed_t tilt_y)
 {
-    struct display* display = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     struct input_event event[3];
     struct timespec rt;
     unsigned int res, n = 0;
@@ -2739,7 +2774,8 @@ static void
 tablet_tool_button_state(void *data, struct zwp_tablet_tool_v2 *,
                          uint32_t, uint32_t button, uint32_t state)
 {
-    struct display* display = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     struct input_event event[2];
     struct timespec rt;
     unsigned int res, n = 0;
@@ -2794,9 +2830,10 @@ static void tablet_seat_handle_add_tool(void *data, struct zwp_tablet_seat_v2 *,
         return;
     }
 
-    struct display *d = (struct display*)data;
-    d->ctl->tablet_tools.push_back(tool);
-    zwp_tablet_tool_v2_add_listener(tool, &tablet_tool_listener, d);
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *d = conn->dpy;
+    conn->tablet_tools.push_back(tool);
+    zwp_tablet_tool_v2_add_listener(tool, &tablet_tool_listener, conn);
     ALOGI("Added tablet tool");
 }
 
@@ -2806,13 +2843,13 @@ static const struct zwp_tablet_seat_v2_listener tablet_seat_listener = {
     tablet_seat_handle_add_pad
 };
 
-static void add_tablet_seat(struct display *d) {
-    d->input_fd[INPUT_TABLET] = -1;
+static void add_tablet_seat(struct wl_conn *conn) {
+    conn->dpy->input_fd[INPUT_TABLET] = -1;
     mkfifo(INPUT_PIPE_NAME[INPUT_TABLET], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
     chown(INPUT_PIPE_NAME[INPUT_TABLET], 1000, 1000);
 
-    d->ctl->tablet_seat = zwp_tablet_manager_v2_get_tablet_seat(d->ctl->tablet_manager, d->ctl->seat);
-    zwp_tablet_seat_v2_add_listener(d->ctl->tablet_seat, &tablet_seat_listener, d);
+    conn->tablet_seat = zwp_tablet_manager_v2_get_tablet_seat(conn->tablet_manager, conn->seat);
+    zwp_tablet_seat_v2_add_listener(conn->tablet_seat, &tablet_seat_listener, conn);
 }
 
 static void
@@ -2832,16 +2869,16 @@ registry_handle_global(void *data, struct wl_registry *registry,
     } else if (strcmp(interface, "xdg_wm_base") == 0) {
         conn->wm_base = (struct xdg_wm_base*)wl_registry_bind(registry,
                 id, &xdg_wm_base_interface, 1);
-        xdg_wm_base_add_listener(conn->wm_base, &xdg_wm_base_listener, conn->dpy);
+        xdg_wm_base_add_listener(conn->wm_base, &xdg_wm_base_listener, conn);
     } else if(strcmp(interface, "wl_shell") == 0) {
         conn->shell = (struct wl_shell *)wl_registry_bind(
                 registry, id, &wl_shell_interface, 1);
     } else if (strcmp(interface, "wl_seat") == 0) {
         conn->seat = (struct wl_seat*)wl_registry_bind(registry, id,
                 &wl_seat_interface, std::min(version, (uint32_t)WL_POINTER_AXIS_SOURCE_SINCE_VERSION));
-        wl_seat_add_listener(conn->seat, &seat_listener, conn->dpy);
+        wl_seat_add_listener(conn->seat, &seat_listener, conn);
         if (conn->tablet_manager && !conn->tablet_seat)
-            add_tablet_seat(conn->dpy);
+            add_tablet_seat(conn);
         if (conn->data_device_manager && !conn->data_device)
             conn->data_device = wl_data_device_manager_get_data_device(conn->data_device_manager, conn->seat);
     } else if (strcmp(interface, "wl_shm") == 0) {
@@ -2850,7 +2887,7 @@ registry_handle_global(void *data, struct wl_registry *registry,
     } else if (strcmp(interface, "wl_output") == 0) {
         conn->output = (struct wl_output*)wl_registry_bind(registry, id,
                 &wl_output_interface, std::min(version, 3U));
-        wl_output_add_listener(conn->output, &output_listener, conn->dpy);
+        wl_output_add_listener(conn->output, &output_listener, conn);
         wl_display_roundtrip(conn->display);
     } else if (strcmp(interface, "wp_presentation") == 0) {
         bool no_presentation = property_get_bool("persist.waydroid.no_presentation", false);
@@ -2858,7 +2895,7 @@ registry_handle_global(void *data, struct wl_registry *registry,
             conn->presentation = (struct wp_presentation*)wl_registry_bind(registry, id,
                     &wp_presentation_interface, 1);
             wp_presentation_add_listener(conn->presentation,
-                    &presentation_listener, conn->dpy);
+                    &presentation_listener, conn);
         }
     } else if (strcmp(interface, "wp_viewporter") == 0) {
         conn->viewporter = (struct wp_viewporter*)wl_registry_bind(registry, id,
@@ -2873,12 +2910,12 @@ registry_handle_global(void *data, struct wl_registry *registry,
             return;
         conn->dmabuf = (struct zwp_linux_dmabuf_v1*)wl_registry_bind(registry, id,
                 &zwp_linux_dmabuf_v1_interface, 3);
-        zwp_linux_dmabuf_v1_add_listener(conn->dmabuf, &dmabuf_listener, conn->dpy);
+        zwp_linux_dmabuf_v1_add_listener(conn->dmabuf, &dmabuf_listener, conn);
     } else if (strcmp(interface, "zwp_tablet_manager_v2") == 0) {
         conn->tablet_manager = (struct zwp_tablet_manager_v2 *)wl_registry_bind(registry, id,
                 &zwp_tablet_manager_v2_interface, 1);
         if (conn->tablet_manager && conn->seat)
-            add_tablet_seat(conn->dpy);
+            add_tablet_seat(conn);
     } else if (strcmp(interface, "zwp_pointer_constraints_v1") == 0) {
         conn->pointer_constraints = (struct zwp_pointer_constraints_v1 *)wl_registry_bind(
                 registry, id, &zwp_pointer_constraints_v1_interface, 1);

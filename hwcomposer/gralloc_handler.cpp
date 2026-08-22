@@ -72,7 +72,7 @@ namespace {
         [](void *, struct wl_buffer *) {}
     };
 }
-std::unique_ptr<buffer> create_shm_wl_buffer(display *display, const buffer_metadata& metadata, buffer_handle_t handle) {
+std::unique_ptr<buffer> create_shm_wl_buffer(wl_conn *conn, const buffer_metadata& metadata, buffer_handle_t handle) {
     std::unique_ptr<buffer> buf { new buffer() };
 
     // Assume 4bpp formats or none of this is going to work
@@ -96,7 +96,7 @@ std::unique_ptr<buffer> create_shm_wl_buffer(display *display, const buffer_meta
         close(fd);
         return nullptr;
     }
-    struct wl_shm_pool *pool = wl_shm_create_pool(display->ctl->shm, fd, size);
+    struct wl_shm_pool *pool = wl_shm_create_pool(conn->shm, fd, size);
     buf->wl_buffer = wl_shm_pool_create_buffer(pool, 0, metadata.width, metadata.height, shm_stride, shm_format);
     wl_buffer_add_listener(buf->wl_buffer, &buffer_listener, nullptr);
     wl_shm_pool_destroy(pool);
@@ -118,56 +118,56 @@ namespace {
             create_failed
     };
 
-    bool isFormatSupported(struct display *display, uint32_t format) {
-        return display->ctl->formats.count(format) == 1;
+    bool isFormatSupported(struct wl_conn *conn, uint32_t format) {
+        return conn->formats.count(format) == 1;
     }
 
-    uint32_t ConvertHalFormatToDrm(struct display *display, uint32_t hal_format) {
+    uint32_t ConvertHalFormatToDrm(struct wl_conn *conn, uint32_t hal_format) {
         uint32_t fmt;
 
         switch (hal_format) {
             case HAL_PIXEL_FORMAT_RGB_888:
                 fmt = DRM_FORMAT_BGR888;
-                if (!isFormatSupported(display, fmt))
+                if (!isFormatSupported(conn, fmt))
                     fmt = DRM_FORMAT_RGB888;
                 break;
             case HAL_PIXEL_FORMAT_BGRA_8888:
                 fmt = DRM_FORMAT_ARGB8888;
-                if (!isFormatSupported(display, fmt))
+                if (!isFormatSupported(conn, fmt))
                     fmt = DRM_FORMAT_ABGR8888;
                 break;
             case HAL_PIXEL_FORMAT_RGBX_8888:
                 fmt = DRM_FORMAT_XBGR8888;
-                if (!isFormatSupported(display, fmt))
+                if (!isFormatSupported(conn, fmt))
                     fmt = DRM_FORMAT_XRGB8888;
                 break;
             case HAL_PIXEL_FORMAT_RGBA_8888:
                 fmt = DRM_FORMAT_ABGR8888;
-                if (!isFormatSupported(display, fmt))
+                if (!isFormatSupported(conn, fmt))
                     fmt = DRM_FORMAT_ARGB8888;
                 break;
             case HAL_PIXEL_FORMAT_RGB_565:
                 fmt = DRM_FORMAT_BGR565;
-                if (!isFormatSupported(display, fmt))
+                if (!isFormatSupported(conn, fmt))
                     fmt = DRM_FORMAT_RGB565;
                 break;
             case HAL_PIXEL_FORMAT_YV12:
                 fmt = DRM_FORMAT_YVU420;
-                if (!isFormatSupported(display, fmt))
+                if (!isFormatSupported(conn, fmt))
                     fmt = DRM_FORMAT_GR88;
                 break;
             default:
                 ALOGE("Cannot convert hal format to drm format %u", hal_format);
                 return -EINVAL;
         }
-        if (!isFormatSupported(display, fmt)) {
+        if (!isFormatSupported(conn, fmt)) {
             ALOGE("Current wayland display doesn't support hal format %u", hal_format);
             return -EINVAL;
         }
         return fmt;
     }
 }
-std::unique_ptr<buffer> create_dmabuf_wl_buffer(display *display, const buffer_metadata& metadata,
+std::unique_ptr<buffer> create_dmabuf_wl_buffer(wl_conn *conn, const buffer_metadata& metadata,
                                                                 int prime_fd, int drm_format, int byte_stride,
                                                                 int offset, uint64_t modifier, buffer_handle_t handle)
 {
@@ -179,11 +179,11 @@ std::unique_ptr<buffer> create_dmabuf_wl_buffer(display *display, const buffer_m
     buf->handle = handle;
 
     if (drm_format < 0) {
-        drm_format = ConvertHalFormatToDrm(display, metadata.format);
+        drm_format = ConvertHalFormatToDrm(conn, metadata.format);
     }
     assert(drm_format >= 0);
 
-    zwp_linux_buffer_params_v1 *params = zwp_linux_dmabuf_v1_create_params(display->ctl->dmabuf);
+    zwp_linux_buffer_params_v1 *params = zwp_linux_dmabuf_v1_create_params(conn->dmabuf);
     zwp_linux_buffer_params_v1_add(params, prime_fd, 0, offset, byte_stride, modifier >> 32, modifier & 0xffffffff);
     zwp_linux_buffer_params_v1_add_listener(params, &params_listener, nullptr);
 
@@ -193,10 +193,10 @@ std::unique_ptr<buffer> create_dmabuf_wl_buffer(display *display, const buffer_m
     return buf;
 }
 
-std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_metadata& metadata, buffer_handle_t handle,
+std::unique_ptr<buffer> create_android_wl_buffer(wl_conn *conn, const buffer_metadata& metadata, buffer_handle_t handle,
                                                  const wl_buffer_listener *listener, void *listener_data)
 {
-    if (!display->ctl->android_wlegl) {
+    if (!conn->android_wlegl) {
         ALOGE("create_android_wl_buffer called without android_wlegl");
         return nullptr;
     }
@@ -210,7 +210,7 @@ std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_
     wl_array_init(&ints);
     int *the_ints = (int *)wl_array_add(&ints, handle->numInts * sizeof(int));
     memcpy(the_ints, handle->data + handle->numFds, handle->numInts * sizeof(int));
-    android_wlegl_handle *wlegl_handle = android_wlegl_create_handle(display->ctl->android_wlegl, handle->numFds, &ints);
+    android_wlegl_handle *wlegl_handle = android_wlegl_create_handle(conn->android_wlegl, handle->numFds, &ints);
     wl_array_release(&ints);
     if (!wlegl_handle) {
         ALOGE("android_wlegl_create_handle failed");
@@ -229,7 +229,7 @@ std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_
         android_wlegl_handle_add_fd(wlegl_handle, handle->data[i]);
     }
 
-    buf->wl_buffer = android_wlegl_create_buffer(display->ctl->android_wlegl, buf->metadata.width, buf->metadata.height, buf->metadata.pixel_stride, metadata.format, GRALLOC_USAGE_HW_RENDER, wlegl_handle);
+    buf->wl_buffer = android_wlegl_create_buffer(conn->android_wlegl, buf->metadata.width, buf->metadata.height, buf->metadata.pixel_stride, metadata.format, GRALLOC_USAGE_HW_RENDER, wlegl_handle);
     android_wlegl_handle_destroy(wlegl_handle);
     if (!buf->wl_buffer) {
         ALOGE("android_wlegl_create_buffer failed for format=%u stride=%u %ux%u handle=%p",
@@ -296,23 +296,23 @@ buffer_metadata get_buffer_metadata_cros(display *, hwc_layer_1_t *layer, size_t
     };
 }
 
-std::unique_ptr<buffer> create_buffer_generic(display *display, const buffer_metadata& metadata, buffer_handle_t handle) {
-    return create_shm_wl_buffer(display, metadata, handle);
+std::unique_ptr<buffer> create_buffer_generic(wl_conn *conn, const buffer_metadata& metadata, buffer_handle_t handle) {
+    return create_shm_wl_buffer(conn, metadata, handle);
 }
-std::unique_ptr<buffer> create_buffer_gbm(display *display, const buffer_metadata& metadata, buffer_handle_t handle) {
+std::unique_ptr<buffer> create_buffer_gbm(wl_conn *conn, const buffer_metadata& metadata, buffer_handle_t handle) {
     auto *drm_handle = reinterpret_cast<const gralloc_handle_t *>(handle);
-    return create_dmabuf_wl_buffer(display, metadata, drm_handle->prime_fd, -1 /* compute drm format */, drm_handle->stride, 0 /* offset */, drm_handle->modifier, handle);
+    return create_dmabuf_wl_buffer(conn, metadata, drm_handle->prime_fd, -1 /* compute drm format */, drm_handle->stride, 0 /* offset */, drm_handle->modifier, handle);
 }
-std::unique_ptr<buffer> create_buffer_cros(display *display, const buffer_metadata& metadata, buffer_handle_t handle) {
+std::unique_ptr<buffer> create_buffer_cros(wl_conn *conn, const buffer_metadata& metadata, buffer_handle_t handle) {
     auto *cros_handle = reinterpret_cast<const cros_gralloc_handle *>(handle);
-    return create_dmabuf_wl_buffer(display, metadata, cros_handle->fds[0], cros_handle->format, cros_handle->strides[0], cros_handle->offsets[0], cros_handle->format_modifier, handle);
+    return create_dmabuf_wl_buffer(conn, metadata, cros_handle->fds[0], cros_handle->format, cros_handle->strides[0], cros_handle->offsets[0], cros_handle->format_modifier, handle);
 }
-std::unique_ptr<buffer> create_buffer_android(display *display, const buffer_metadata& metadata, buffer_handle_t handle) {
-    return create_android_wl_buffer(display, metadata, handle);
+std::unique_ptr<buffer> create_buffer_android(wl_conn *conn, const buffer_metadata& metadata, buffer_handle_t handle) {
+    return create_android_wl_buffer(conn, metadata, handle);
 }
 // SHM cannot present gralloc-android buffers, so fail loudly instead of
 // falling back to it and rendering garbage.
-std::unique_ptr<buffer> create_buffer_missing_android_wlegl(display *display __unused, const buffer_metadata& metadata, buffer_handle_t handle) {
+std::unique_ptr<buffer> create_buffer_missing_android_wlegl(wl_conn *conn __unused, const buffer_metadata& metadata, buffer_handle_t handle) {
     ALOGE("GRALLOC_ANDROID selected but Wayland compositor does not advertise android_wlegl; refusing SHM fallback for format=%u stride=%u %ux%u handle=%p",
           metadata.format, metadata.pixel_stride, metadata.width, metadata.height, handle);
     return nullptr;
@@ -437,13 +437,13 @@ gralloc_handler::get_buffer_metadata_func gralloc_handler::select_get_buffer_met
     }
 }
 
-gralloc_handler::create_buffer_func gralloc_handler::select_create_buffer_impl(display *display, GrallocType gralloc_type) {
-    if (gralloc_type == GrallocType::GRALLOC_GBM && display->ctl->dmabuf) {
+gralloc_handler::create_buffer_func gralloc_handler::select_create_buffer_impl(wl_conn *conn, GrallocType gralloc_type) {
+    if (gralloc_type == GrallocType::GRALLOC_GBM && conn->dmabuf) {
         return create_buffer_gbm;
-    } else if (gralloc_type == GrallocType::GRALLOC_CROS && display->ctl->dmabuf) {
+    } else if (gralloc_type == GrallocType::GRALLOC_CROS && conn->dmabuf) {
         return create_buffer_cros;
     } else if (gralloc_type == GrallocType::GRALLOC_ANDROID) {
-        if (display->ctl->android_wlegl)
+        if (conn->android_wlegl)
             return create_buffer_android;
         ALOGE("GRALLOC_ANDROID requested, but android_wlegl is unavailable on the Wayland compositor");
         return create_buffer_missing_android_wlegl;
@@ -462,5 +462,5 @@ gralloc_handler::update_shm_buffer_func gralloc_handler::select_update_shm_buffe
 
 gralloc_handler::gralloc_handler(display *display)
     : get_buffer_metadata_impl(select_get_buffer_metadata_impl(display->gtype))
-    , create_buffer_impl(select_create_buffer_impl(display, display->gtype))
+    , create_buffer_impl(select_create_buffer_impl(display->ctl.get(), display->gtype))
     , update_shm_buffer_impl(select_update_shm_buffer_impl(display->gtype)) { }

@@ -30,18 +30,18 @@
 
 #include "wayland-hwc.h"
 
-std::unique_ptr<buffer> create_shm_wl_buffer(display *display, const buffer_metadata& metadata, buffer_handle_t handle);
-std::unique_ptr<buffer> create_dmabuf_wl_buffer(display *display, const buffer_metadata& metadata,
+std::unique_ptr<buffer> create_shm_wl_buffer(wl_conn *conn, const buffer_metadata& metadata, buffer_handle_t handle);
+std::unique_ptr<buffer> create_dmabuf_wl_buffer(wl_conn *conn, const buffer_metadata& metadata,
                                                                 int prime_fd, int format, int byte_stride,
                                                                 int offset, uint64_t modifier, buffer_handle_t handle);
-std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_metadata& metadata, buffer_handle_t target,
+std::unique_ptr<buffer> create_android_wl_buffer(wl_conn *conn, const buffer_metadata& metadata, buffer_handle_t target,
                                                  const wl_buffer_listener *listener = nullptr, void *listener_data = nullptr);
 bool cpu_render_to_pixels(buffer *buffer);
 
 
 class gralloc_handler {
     using get_buffer_metadata_func = buffer_metadata (*)(display *display, hwc_layer_1_t *layer, size_t pos);
-    using create_buffer_func = std::unique_ptr<buffer> (*)(display *display, const buffer_metadata& metadata, buffer_handle_t handle);
+    using create_buffer_func = std::unique_ptr<buffer> (*)(wl_conn *conn, const buffer_metadata& metadata, buffer_handle_t handle);
     using update_shm_buffer_func = void (*)(display *display, buffer *buffer);
 
     get_buffer_metadata_func get_buffer_metadata_impl;
@@ -49,7 +49,7 @@ class gralloc_handler {
     update_shm_buffer_func update_shm_buffer_impl;
 
     static get_buffer_metadata_func select_get_buffer_metadata_impl(GrallocType gralloc_type);
-    static create_buffer_func select_create_buffer_impl(display *display, GrallocType gralloc_type);
+    static create_buffer_func select_create_buffer_impl(wl_conn *conn, GrallocType gralloc_type);
     static update_shm_buffer_func select_update_shm_buffer_impl(GrallocType gralloc_type);
 
   public:
@@ -59,8 +59,8 @@ class gralloc_handler {
     buffer_metadata get_buffer_metadata(display *display, hwc_layer_1_t *layer, size_t pos) const {
         return get_buffer_metadata_impl(display, layer, pos);
     }
-    std::unique_ptr<buffer> create_buffer(display *display, const buffer_metadata& metadata, buffer_handle_t handle) const {
-        return create_buffer_impl(display, metadata, handle);
+    std::unique_ptr<buffer> create_buffer(wl_conn *conn, const buffer_metadata& metadata, buffer_handle_t handle) const {
+        return create_buffer_impl(conn, metadata, handle);
     }
     void update_shm_buffer(display *display, buffer *buffer) const {
         update_shm_buffer_impl(display, buffer);

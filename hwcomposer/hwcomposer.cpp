@@ -122,7 +122,7 @@ namespace {
             if (layer->flags & HWC_IS_CURSOR_LAYER)
                 result = pdev->display->cursor_handler->create_buffer(pdev, metadata, layer);
             else
-                result = gralloc_handler.create_buffer(pdev->display, metadata, layer->handle);
+                result = gralloc_handler.create_buffer(pdev->display->ctl.get(), metadata, layer->handle);
             if (!result) {
                 ALOGE("failed to create a wayland buffer");
                 return nullptr;
@@ -1100,7 +1100,7 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
 }
 
 std::unique_ptr<buffer> cursor_handler::create_buffer(waydroid_hwc_composer_device_1 *pdev, const buffer_metadata& metadata, hwc_layer_1 *hwc_layer) {
-    return pdev->gralloc_handler.create_buffer(pdev->display, metadata, hwc_layer->handle);
+    return pdev->gralloc_handler.create_buffer(pdev->display->ctl.get(), metadata, hwc_layer->handle);
 };
 
 void subsurface_cursor_handler::clear_previous_subsurface_if_needed(waydroid_hwc_composer_device_1 *pdev) {
@@ -1183,7 +1183,7 @@ std::unique_ptr<buffer> wl_cursor_cursor_handler::create_buffer(waydroid_hwc_com
     if (pdev->display->ctl->supports_cursor_hw_buffer)
         return cursor_handler::create_buffer(pdev, metadata, hwc_layer);
     else
-        return create_shm_wl_buffer (pdev->display, metadata, hwc_layer->handle);
+        return create_shm_wl_buffer (pdev->display->ctl.get(), metadata, hwc_layer->handle);
 }
 
 void wl_cursor_cursor_handler::set_cursor(display* display) const {

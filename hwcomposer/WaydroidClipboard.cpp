@@ -65,7 +65,8 @@ static const struct wl_data_source_listener data_source_listener = {
     .action = data_source_handle_action,
 };
 
-static void read_selection(struct display *display, struct wl_data_offer *offer, const std::string &mime_type) {
+static void read_selection(struct wl_conn *conn, struct wl_data_offer *offer, const std::string &mime_type) {
+    struct display *display = conn->dpy;
     int fds[2];
     pipe(fds);
     wl_data_offer_receive(offer, mime_type.c_str(), fds[1]);
@@ -75,7 +76,7 @@ static void read_selection(struct display *display, struct wl_data_offer *offer,
      * We need to make sure our request is sent to the compositor, otherwise the source client won’t send any data.
      * The blocking read calls stall the Wayland event loop.
      */
-    wl_display_roundtrip(display->ctl->display);
+    wl_display_roundtrip(conn->display);
 
     // Read the clipboard contents
     std::string contents;
@@ -98,7 +99,8 @@ static void read_selection(struct display *display, struct wl_data_offer *offer,
 
 static void data_device_handle_selection(void *data, struct wl_data_device *, struct wl_data_offer *offer) {
     // An application has set the clipboard contents
-    struct display *display = (struct display *)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     if (offer == NULL) {
         display->clipboard_offer_mime_types.clear();
         return;
@@ -120,14 +122,15 @@ static void data_device_handle_selection(void *data, struct wl_data_device *, st
     }
 
     // TODO: only read if necessary. needs careful threading
-    read_selection(display, offer, mime_type);
+    read_selection(conn, offer, mime_type);
 }
 
 static void data_offer_handle_source_actions(void *, struct wl_data_offer *, uint32_t) {}
 static void data_offer_handle_action(void *, struct wl_data_offer *, uint32_t) {}
 
 static void data_offer_handle_offer(void *data, struct wl_data_offer *, const char *mime_type) {
-    struct display *display = (struct display *)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
     display->clipboard_offer_mime_types.push_back(mime_type);
 }
 
@@ -142,8 +145,9 @@ static void data_device_handle_data_offer(void *data, struct wl_data_device *, s
         return;
     }
     // An application has created a new data source
-    struct display *display = (struct display *)data;
-    wl_data_offer_add_listener(offer, &data_offer_listener, display);
+    struct wl_conn *conn = (struct wl_conn *)data;
+    struct display *display = conn->dpy;
+    wl_data_offer_add_listener(offer, &data_offer_listener, conn);
 }
 
 static void data_device_handle_enter(void *, struct wl_data_device *, uint32_t, struct wl_surface *, wl_fixed_t, wl_fixed_t, struct wl_data_offer *) {}
@@ -167,7 +171,7 @@ WaydroidClipboard::WaydroidClipboard(struct display* display)
 {
     if (!mDisplay->ctl->data_device)
         return;
-    wl_data_device_add_listener(mDisplay->ctl->data_device, &data_device_listener, mDisplay);
+    wl_data_device_add_listener(mDisplay->ctl->data_device, &data_device_listener, mDisplay->ctl.get());
 }
 
 // Methods from ::vendor::waydroid::clipboard::V1_0::IWaydroidClipboard follow.
