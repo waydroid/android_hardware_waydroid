@@ -88,8 +88,12 @@ using ::android::hardware::hidl_string;
 struct buffer;
 
 buffer::~buffer() {
-    if (wl_buffer)
-        wl_buffer_destroy(wl_buffer);
+    if (wl_buffer) {
+        if (conn && !conn->proxies_valid)
+            ALOGE("buffer %p outlived its connection; wl_display_disconnect already freed its wl_buffer", this);
+        else
+            wl_buffer_destroy(wl_buffer);
+    }
     if (isShm && shm_data && shm_data != MAP_FAILED)
         munmap(shm_data, size);
 }
@@ -1671,11 +1675,11 @@ pointer_handle_motion(void *data, struct wl_pointer *,
 
     ADD_EVENT(EV_ABS, ABS_X, x);
     ADD_EVENT(EV_ABS, ABS_Y, y);
-    ADD_EVENT(EV_REL, REL_X, x - display->ptrPrvX);
-    ADD_EVENT(EV_REL, REL_Y, y - display->ptrPrvY);
+    ADD_EVENT(EV_REL, REL_X, x - conn->ptrPrvX);
+    ADD_EVENT(EV_REL, REL_Y, y - conn->ptrPrvY);
     ADD_EVENT(EV_SYN, SYN_REPORT, 0);
-    display->ptrPrvX = x;
-    display->ptrPrvY = y;
+    conn->ptrPrvX = x;
+    conn->ptrPrvY = y;
 
     res = write(display->input_fd[INPUT_POINTER], &event, sizeof(event));
     if (res < sizeof(event))
@@ -1692,16 +1696,14 @@ handle_relative_motion(void *data, struct zwp_relative_pointer_v1*,
     struct timespec rt;
     unsigned int res, n = 0;
 
-    static double acc_x = 0;
-    static double acc_y = 0;
 
     if (ensure_pipe(display, INPUT_POINTER))
         return;
 
-    acc_x += wl_fixed_to_double(dx);
-    acc_y += wl_fixed_to_double(dy);
+    conn->rel_acc_x += wl_fixed_to_double(dx);
+    conn->rel_acc_y += wl_fixed_to_double(dy);
 
-    if (abs(acc_x) < 1 && abs(acc_y) < 1)
+    if (abs(conn->rel_acc_x) < 1 && abs(conn->rel_acc_y) < 1)
         return;
 
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
@@ -1709,12 +1711,12 @@ handle_relative_motion(void *data, struct zwp_relative_pointer_v1*,
               __FILE__, __LINE__, strerror(errno));
     }
 
-    ADD_EVENT(EV_REL, REL_X, (int)acc_x);
-    ADD_EVENT(EV_REL, REL_Y, (int)acc_y);
+    ADD_EVENT(EV_REL, REL_X, (int)conn->rel_acc_x);
+    ADD_EVENT(EV_REL, REL_Y, (int)conn->rel_acc_y);
     ADD_EVENT(EV_SYN, SYN_REPORT, 0);
 
-    acc_x -= (int)acc_x;
-    acc_y -= (int)acc_y;
+    conn->rel_acc_x -= (int)conn->rel_acc_x;
+    conn->rel_acc_y -= (int)conn->rel_acc_y;
 
     res = write(display->input_fd[INPUT_POINTER], &event, sizeof(event));
     if (res < sizeof(event))
@@ -2159,10 +2161,10 @@ gesture_swipe_begin(struct wl_conn* conn, uint32_t id) {
     if (!empty_touch_id(conn))
         return;
 
-    display->gesturePoints[0] = create_touch_id(conn, id);
-    display->gesturePosX = display->ptrPrvX;
-    display->gesturePosY = display->ptrPrvY;
-    display->gestureLength = -1;
+    conn->gesturePoints[0] = create_touch_id(conn, id);
+    conn->gesturePosX = conn->ptrPrvX;
+    conn->gesturePosY = conn->ptrPrvY;
+    conn->gestureLength = -1;
 }
 
 static void
@@ -2172,7 +2174,7 @@ gesture_swipe_update(struct wl_conn* conn, uint32_t axis, int value) {
     struct timespec rt;
     unsigned int res, n = 0;
 
-    if (display->gesturePoints[0] == -1)
+    if (conn->gesturePoints[0] == -1)
         return;
 
     if (ensure_pipe(display, INPUT_TOUCH))
@@ -2183,26 +2185,26 @@ gesture_swipe_update(struct wl_conn* conn, uint32_t axis, int value) {
               __FILE__, __LINE__, strerror(errno));
     }
 
-    if (display->gestureLength == -1) {
-        ADD_EVENT(EV_ABS, ABS_MT_SLOT, display->gesturePoints[0]);
-        ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, display->gesturePoints[0]);
-        ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, display->gesturePosX);
-        ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, display->gesturePosY);
+    if (conn->gestureLength == -1) {
+        ADD_EVENT(EV_ABS, ABS_MT_SLOT, conn->gesturePoints[0]);
+        ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, conn->gesturePoints[0]);
+        ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, conn->gesturePosX);
+        ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, conn->gesturePosY);
         ADD_EVENT(EV_ABS, ABS_MT_PRESSURE, 50);
         ADD_EVENT(EV_SYN, SYN_REPORT, 0);
     }
 
-    display->gestureLength = display->scrollSensitivity * display->scale * value;
+    conn->gestureLength = display->scrollSensitivity * display->scale * value;
     if (axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL) {
-        display->gesturePosX += display->gestureLength;
+        conn->gesturePosX += conn->gestureLength;
     } else {
-        display->gesturePosY += display->gestureLength;
+        conn->gesturePosY += conn->gestureLength;
     }
 
-    ADD_EVENT(EV_ABS, ABS_MT_SLOT, display->gesturePoints[0]);
-    ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, display->gesturePoints[0]);
-    ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, display->gesturePosX);
-    ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, display->gesturePosY);
+    ADD_EVENT(EV_ABS, ABS_MT_SLOT, conn->gesturePoints[0]);
+    ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, conn->gesturePoints[0]);
+    ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, conn->gesturePosX);
+    ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, conn->gesturePosY);
     ADD_EVENT(EV_ABS, ABS_MT_PRESSURE, 50);
     ADD_EVENT(EV_SYN, SYN_REPORT, 0);
 
@@ -2218,7 +2220,7 @@ gesture_swipe_end(struct wl_conn* conn) {
     struct timespec rt;
     unsigned int res, n = 0;
 
-    if (display->gesturePoints[0] == -1)
+    if (conn->gesturePoints[0] == -1)
         return;
 
     if (ensure_pipe(display, INPUT_TOUCH))
@@ -2229,12 +2231,12 @@ gesture_swipe_end(struct wl_conn* conn) {
               __FILE__, __LINE__, strerror(errno));
     }
 
-    ADD_EVENT(EV_ABS, ABS_MT_SLOT, display->gesturePoints[0]);
+    ADD_EVENT(EV_ABS, ABS_MT_SLOT, conn->gesturePoints[0]);
     ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, -1);
     ADD_EVENT(EV_SYN, SYN_REPORT, 0);
 
-    flush_touch_id(conn, display->touch_id[display->gesturePoints[0]].id);
-    display->gesturePoints[0] = -1;
+    flush_touch_id(conn, display->touch_id[conn->gesturePoints[0]].id);
+    conn->gesturePoints[0] = -1;
 
     res = write(display->input_fd[INPUT_TOUCH], &event, sizeof(event));
     if (res < sizeof(event))
@@ -2251,11 +2253,11 @@ gesture_pinch_begin(void *data, struct zwp_pointer_gesture_pinch_v1 *, uint32_t 
     if (!empty_touch_id(conn))
         return;
 
-    display->gesturePoints[0] = create_touch_id(conn, id);
-    display->gesturePoints[1] = create_touch_id(conn, id + 1);
-    display->gesturePosX = display->ptrPrvX;
-    display->gesturePosY = display->ptrPrvY;
-    display->gestureLength = -1;
+    conn->gesturePoints[0] = create_touch_id(conn, id);
+    conn->gesturePoints[1] = create_touch_id(conn, id + 1);
+    conn->gesturePosX = conn->ptrPrvX;
+    conn->gesturePosY = conn->ptrPrvY;
+    conn->gestureLength = -1;
 }
 
 static void
@@ -2269,7 +2271,7 @@ gesture_pinch_update(void *data, struct zwp_pointer_gesture_pinch_v1 *, uint32_t
     double zoom_scale = wl_fixed_to_double(scale);
     unsigned int res, n = 0;
 
-    if (display->gesturePoints[0] == -1 || display->gesturePoints[1] == -1)
+    if (conn->gesturePoints[0] == -1 || conn->gesturePoints[1] == -1)
         return;
 
     if (ensure_pipe(display, INPUT_TOUCH))
@@ -2280,19 +2282,19 @@ gesture_pinch_update(void *data, struct zwp_pointer_gesture_pinch_v1 *, uint32_t
               __FILE__, __LINE__, strerror(errno));
     }
 
-    if (display->gestureLength == -1) {
-        display->gestureLength = display->zoomSensitivity * display->scale * ((zoom_scale < 1) ? 2 : 1);
+    if (conn->gestureLength == -1) {
+        conn->gestureLength = display->zoomSensitivity * display->scale * ((zoom_scale < 1) ? 2 : 1);
 
-        ADD_EVENT(EV_ABS, ABS_MT_SLOT, display->gesturePoints[0]);
-        ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, display->gesturePoints[0]);
-        ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, display->gesturePosX - (display->gestureLength / 2));
-        ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, display->gesturePosY);
+        ADD_EVENT(EV_ABS, ABS_MT_SLOT, conn->gesturePoints[0]);
+        ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, conn->gesturePoints[0]);
+        ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, conn->gesturePosX - (conn->gestureLength / 2));
+        ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, conn->gesturePosY);
         ADD_EVENT(EV_ABS, ABS_MT_PRESSURE, 50);
 
-        ADD_EVENT(EV_ABS, ABS_MT_SLOT, display->gesturePoints[1]);
-        ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, display->gesturePoints[1]);
-        ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, display->gesturePosX + (display->gestureLength / 2));
-        ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, display->gesturePosY);
+        ADD_EVENT(EV_ABS, ABS_MT_SLOT, conn->gesturePoints[1]);
+        ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, conn->gesturePoints[1]);
+        ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, conn->gesturePosX + (conn->gestureLength / 2));
+        ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, conn->gesturePosY);
         ADD_EVENT(EV_ABS, ABS_MT_PRESSURE, 50);
 
         ADD_EVENT(EV_SYN, SYN_REPORT, 0);
@@ -2304,16 +2306,16 @@ gesture_pinch_update(void *data, struct zwp_pointer_gesture_pinch_v1 *, uint32_t
         n = 0;
     }
 
-    ADD_EVENT(EV_ABS, ABS_MT_SLOT, display->gesturePoints[0]);
-    ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, display->gesturePoints[0]);
-    ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, display->gesturePosX - (display->gestureLength * zoom_scale / 2));
-    ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, display->gesturePosY);
+    ADD_EVENT(EV_ABS, ABS_MT_SLOT, conn->gesturePoints[0]);
+    ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, conn->gesturePoints[0]);
+    ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, conn->gesturePosX - (conn->gestureLength * zoom_scale / 2));
+    ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, conn->gesturePosY);
     ADD_EVENT(EV_ABS, ABS_MT_PRESSURE, 50);
 
-    ADD_EVENT(EV_ABS, ABS_MT_SLOT, display->gesturePoints[1]);
-    ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, display->gesturePoints[1]);
-    ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, display->gesturePosX + (display->gestureLength * zoom_scale / 2));
-    ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, display->gesturePosY);
+    ADD_EVENT(EV_ABS, ABS_MT_SLOT, conn->gesturePoints[1]);
+    ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, conn->gesturePoints[1]);
+    ADD_EVENT(EV_ABS, ABS_MT_POSITION_X, conn->gesturePosX + (conn->gestureLength * zoom_scale / 2));
+    ADD_EVENT(EV_ABS, ABS_MT_POSITION_Y, conn->gesturePosY);
     ADD_EVENT(EV_ABS, ABS_MT_PRESSURE, 50);
 
     ADD_EVENT(EV_SYN, SYN_REPORT, 0);
@@ -2333,7 +2335,7 @@ gesture_pinch_end(void *data, struct zwp_pointer_gesture_pinch_v1 *, uint32_t, u
     int touch_id[2];
     unsigned int res, n = 0;
 
-    if (display->gesturePoints[0] == -1 || display->gesturePoints[1] == -1)
+    if (conn->gesturePoints[0] == -1 || conn->gesturePoints[1] == -1)
         return;
 
     if (ensure_pipe(display, INPUT_TOUCH))
@@ -2344,17 +2346,17 @@ gesture_pinch_end(void *data, struct zwp_pointer_gesture_pinch_v1 *, uint32_t, u
               __FILE__, __LINE__, strerror(errno));
     }
 
-    ADD_EVENT(EV_ABS, ABS_MT_SLOT, display->gesturePoints[0]);
+    ADD_EVENT(EV_ABS, ABS_MT_SLOT, conn->gesturePoints[0]);
     ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, -1);
     ADD_EVENT(EV_SYN, SYN_REPORT, 0);
 
-    ADD_EVENT(EV_ABS, ABS_MT_SLOT, display->gesturePoints[1]);
+    ADD_EVENT(EV_ABS, ABS_MT_SLOT, conn->gesturePoints[1]);
     ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, -1);
     ADD_EVENT(EV_SYN, SYN_REPORT, 0);
 
-    flush_touch_id(conn, display->touch_id[display->gesturePoints[0]].id);
-    flush_touch_id(conn, display->touch_id[display->gesturePoints[1]].id);
-    display->gesturePoints[0] = display->gesturePoints[1] = -1;
+    flush_touch_id(conn, display->touch_id[conn->gesturePoints[0]].id);
+    flush_touch_id(conn, display->touch_id[conn->gesturePoints[1]].id);
+    conn->gesturePoints[0] = conn->gesturePoints[1] = -1;
 
     res = write(display->input_fd[INPUT_TOUCH], &event, sizeof(event));
     if (res < sizeof(event))
@@ -2390,9 +2392,9 @@ seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t wl_caps)
     if ((caps & WL_SEAT_CAPABILITY_POINTER) && !conn->pointer) {
         conn->pointer = wl_seat_get_pointer(seat);
         ensure_input_pipe(INPUT_POINTER);
-        d->ptrPrvX = 0;
-        d->ptrPrvY = 0;
-        d->gesturePoints[0] = d->gesturePoints[1] = -1;
+        conn->ptrPrvX = 0;
+        conn->ptrPrvY = 0;
+        conn->gesturePoints[0] = conn->gesturePoints[1] = -1;
         wl_pointer_add_listener(conn->pointer, &pointer_listener, conn);
     } else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && conn->pointer) {
         wl_pointer_destroy(conn->pointer);
@@ -3235,6 +3237,8 @@ static void reset_wayland_globals(struct wl_conn *conn) {
     conn->tablet_manager = nullptr;
     conn->tablet_seat = nullptr;
     conn->pointer_constraints = nullptr;
+    conn->pointer_gestures = nullptr;
+    conn->pointer_gesture_pinch = nullptr;
     conn->relative_pointer_manager = nullptr;
     conn->relative_pointer = nullptr;
     conn->idle_manager = nullptr;
@@ -3276,6 +3280,7 @@ static void wl_conn_reconnect(struct wl_conn *conn) {
 
     if (conn->registry)
         wl_registry_destroy(conn->registry);
+    conn->proxies_valid = false;
     wl_display_disconnect(conn->display);
     conn->display = nullptr;
     reset_wayland_globals(conn);
@@ -3283,8 +3288,10 @@ static void wl_conn_reconnect(struct wl_conn *conn) {
     /* Reconnect with backoff; the host compositor may not be ready yet. */
     while (true) {
         conn->display = wl_display_connect(NULL);
-        if (conn->display)
+        if (conn->display) {
+            conn->proxies_valid = true;
             break;
+        }
         ALOGE("wl_conn_reconnect: wl_display_connect failed, retrying");
         usleep(500 * 1000);
     }
@@ -3318,12 +3325,20 @@ static void* wl_conn_thread(void* data) {
         if (wl_display_dispatch(conn->display) != -1)
             continue;
 
+        conn->wl_alive = false;
+
+        /* Torn down on purpose, or a task connection whose session is simply
+         * gone: exit and let the joiner clean up. Only ctl is reconnected. */
+        if (conn->stopping || !conn->is_ctl) {
+            ALOGI("*** %s: connection closed; ending dispatch", __PRETTY_FUNCTION__);
+            return nullptr;
+        }
+
         /* The connection dropped. Rather than aborting the whole HAL, signal
          * the compose thread to reconnect and park until it wakes us on the
          * fresh connection. */
         ALOGE("*** %s: Wayland client was disconnected: %s; awaiting reconnect",
               __PRETTY_FUNCTION__, strerror(errno));
-        conn->wl_alive = false;
         sem_wait(&conn->reconnect_resume);
         ALOGI("*** %s: resuming dispatch on reconnected display", __PRETTY_FUNCTION__);
     }
@@ -3362,10 +3377,21 @@ static bool wl_conn_open(struct wl_conn *conn) {
     return true;
 }
 
+/* End the session host-side and make wl_display_dispatch return. This is what
+ * xdg_toplevel_handle_close has always used to force a reconnect; it is also
+ * the only way to wake the dispatch thread. pthread_kill(SIGTERM) does not:
+ * nothing installs a handler, so the default disposition terminates the whole
+ * composer, and the signal is process-wide however it is targeted. */
+static void wl_conn_quiesce(struct wl_conn *conn) {
+    conn->stopping = true;
+    if (conn->display)
+        shutdown(wl_display_get_fd(conn->display), SHUT_RDWR);
+}
+
 /* Stop dispatching. Separate from wl_conn_destroy so a caller can quiesce the
  * connection before tearing down state the dispatch thread can reach. */
 static void wl_conn_stop(struct wl_conn *conn) {
-    pthread_kill(conn->wayland_thread, SIGTERM);
+    wl_conn_quiesce(conn);
     pthread_join(conn->wayland_thread, nullptr);
 }
 
@@ -3395,6 +3421,7 @@ static void wl_conn_destroy(struct wl_conn *conn) {
 
     wl_registry_destroy(conn->registry);
     wl_display_flush(conn->display);
+    conn->proxies_valid = false;
     wl_display_disconnect(conn->display);
 
     sem_destroy(&conn->reconnect_resume);

@@ -136,7 +136,8 @@ constexpr bool operator!=(const buffer_metadata &lhs, const buffer_metadata &rhs
 struct buffer {
     struct wl_buffer *wl_buffer = nullptr;
     /* The connection this wl_buffer was created on. Only ever one, and it
-     * must outlive the buffer: wl_display_disconnect frees the proxy. */
+     * must outlive the buffer: wl_display_disconnect frees the proxy, and
+     * destroying one afterwards is a double free (see ~buffer). */
     struct wl_conn *conn = nullptr;
 
     buffer_handle_t handle = nullptr;
@@ -256,6 +257,18 @@ struct wl_conn {
     bool wheelEvtIsDiscrete;
     bool wheelEvtIsTouchpad;
 
+    /* Pointer and gesture state, all in this connection's surface space. The
+     * previous position from another connection would emit a screen-wide
+     * relative jump, and a gesture is driven end to end by one wl_pointer. */
+    int ptrPrvX = 0;
+    int ptrPrvY = 0;
+    int gesturePoints[2] = {-1, -1};
+    int gesturePosX = 0;
+    int gesturePosY = 0;
+    int gestureLength = -1;
+    double rel_acc_x = 0;
+    double rel_acc_y = 0;
+
     /*
      * Reconnect support. When the host compositor drops our wl_client (e.g.
      * Lomiri tearing down the connection on a single toplevel close), the
@@ -265,9 +278,18 @@ struct wl_conn {
      * reconnect_resume to wake the wayland thread on the new connection.
      */
     std::atomic<bool> wl_alive{true};
+    /* Set before quiescing so the dispatch thread exits instead of parking
+     * for a reconnect that is never coming. */
+    std::atomic<bool> stopping{false};
     sem_t reconnect_resume;
     /* Last reconnect, for the retry backoff. */
     struct timespec last_reconnect {};
+
+    /* False between wl_display_disconnect and the next successful connect:
+     * every proxy made on this connection is already freed. A wl_conn is
+     * destroyed only after its dispatch thread is joined and everything that
+     * names it is gone, so a buffer seeing this false is a lifetime bug. */
+    bool proxies_valid = true;
 };
 
 struct window {
@@ -532,15 +554,9 @@ struct display {
     double scale;
 
     int input_fd[INPUT_TOTAL];
-    int ptrPrvX;
-    int ptrPrvY;
     bool reverseScroll;
     int scrollSensitivity;
     int zoomSensitivity;
-    int gesturePoints[2];
-    int gesturePosX;
-    int gesturePosY;
-    int gestureLength;
     /* Guarded by input_mutex: dispatch threads of different connections
      * allocate from it, and ensure_pipe's lazy open races the same way. The
      * uinput writes themselves need no lock -- every batch is well under
