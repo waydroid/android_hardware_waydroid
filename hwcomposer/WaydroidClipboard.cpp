@@ -164,28 +164,48 @@ static const struct wl_data_device_listener data_device_listener = {
     .selection = data_device_handle_selection,
 };
 
+void clipboard_watch_conn(struct wl_conn *conn)
+{
+    if (conn->data_device)
+        wl_data_device_add_listener(conn->data_device, &data_device_listener, conn);
+}
+
+/* The connection holding host keyboard focus, whose data device carries the
+ * selection and whose serial set_selection must quote. Caller holds
+ * windowsMutex. */
+static struct wl_conn *clipboard_conn(struct display *display)
+{
+    if (display->focus_task) {
+        auto it = display->task_conns.find(*display->focus_task);
+        if (it != display->task_conns.end() && it->second->wl_alive)
+            return it->second.get();
+    }
+    return display->ctl.get();
+}
+
 namespace vendor::waydroid::clipboard::implementation {
 
 WaydroidClipboard::WaydroidClipboard(struct display* display)
     : mDisplay(display)
 {
-    if (!mDisplay->ctl->data_device)
-        return;
-    wl_data_device_add_listener(mDisplay->ctl->data_device, &data_device_listener, mDisplay->ctl.get());
+    clipboard_watch_conn(mDisplay->ctl.get());
 }
 
 // Methods from ::vendor::waydroid::clipboard::V1_0::IWaydroidClipboard follow.
 Return<void> WaydroidClipboard::sendClipboardData(const hidl_string& in) {
     mDisplay->clipboard = in;
 
-    if (!mDisplay->ctl->data_device)
+    std::scoped_lock lock(mDisplay->windowsMutex);
+    struct wl_conn *conn = clipboard_conn(mDisplay);
+    if (!conn->data_device)
         return Void();
 
-    struct wl_data_source *source = wl_data_device_manager_create_data_source(mDisplay->ctl->data_device_manager);
+    struct wl_data_source *source = wl_data_device_manager_create_data_source(conn->data_device_manager);
     wl_data_source_add_listener(source, &data_source_listener, strdup(in.c_str()));
     for (auto mime_type : MIME_TYPES)
         wl_data_source_offer(source, mime_type.c_str());
-    wl_data_device_set_selection(mDisplay->ctl->data_device, source, mDisplay->ctl->keyboard_enter_serial);
+    wl_data_device_set_selection(conn->data_device, source, conn->keyboard_enter_serial);
+    wl_display_flush(conn->display);
 
     return Void();
 }

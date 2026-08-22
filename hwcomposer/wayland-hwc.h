@@ -62,6 +62,7 @@
 #include <functional>
 #include <mutex>
 #include <thread>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -404,6 +405,10 @@ void ensure_input_pipe(int input_type);
 void reset_input_pipe(struct display *display, int input_type);
 void init_input_devices(struct display *display);
 
+/* Listen for selections on this connection's wl_data_device. Defined in
+ * WaydroidClipboard.cpp. */
+void clipboard_watch_conn(struct wl_conn *conn);
+
 /* Ask the conn worker to open a task's connection. Cheap and idempotent; the
  * connection appears in display->task_conns once it is up. */
 void request_task_conn(struct display *display, uint32_t taskId);
@@ -491,6 +496,10 @@ class open_windows {
     /* Remove the window but hand it back alive, for a caller that must
      * destroy it later and elsewhere (see dying_task_conn). */
     mapped_type extract(const key_type& key);
+    /* Drop one connection's windows, leaving every other connection's alone.
+     * Like clear(), it does not touch screen power: the caller is tearing
+     * them down only to recreate them. */
+    void clear_for_conn(const struct wl_conn *conn);
     void clear();
     void erase(const_iterator pos);
     void erase(const key_type& key);
@@ -624,6 +633,12 @@ struct display {
 
     std::string clipboard;
     std::list<std::string> clipboard_offer_mime_types;
+    /* Which connection the host gave keyboard focus to; empty means ctl. The
+     * selection and its serial belong to the focused client, so with a
+     * session per task the clipboard has to follow focus. Stored as a task ID
+     * rather than a pointer and resolved under windowsMutex, so a detached
+     * connection simply stops resolving. */
+    std::optional<uint32_t> focus_task;
     struct {float x; float y;} cursor_hotspot;
 
     EGLDisplay egl_dpy;
@@ -684,10 +699,11 @@ void
 destroy_display(struct display *display);
 
 /*
- * Tear down all wayland-side state of a disconnected display and reconnect,
- * rebinding globals. Caller MUST hold display->windowsMutex and MUST recreate
- * the cursor handler afterwards (it lives in hwcomposer.cpp and holds surfaces
- * that this drops). On return display->ctl->display is a fresh, bound connection.
+ * Tear down ctl's wayland-side state and reconnect, rebinding globals. Task
+ * connections are independent and are left running. Caller MUST hold
+ * display->windowsMutex and MUST recreate the cursor handler afterwards (it
+ * lives in hwcomposer.cpp and holds surfaces that this drops). On return
+ * display->ctl->display is a fresh, bound connection.
  */
 void
 reconnect_display(struct display *display);

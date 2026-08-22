@@ -39,9 +39,6 @@ static const struct zwp_relative_pointer_v1_listener relative_pointer_listener =
 Return<bool> WaydroidWindow::minimize(const hidl_string& packageName) {
     char property[PROPERTY_VALUE_MAX];
 
-    if (!mDisplay->ctl->wm_base)
-        return false;
-
     property_get("waydroid.active_apps", property, "Waydroid");
     if (!strcmp(property, "Waydroid"))
         return false;
@@ -49,6 +46,8 @@ Return<bool> WaydroidWindow::minimize(const hidl_string& packageName) {
     std::scoped_lock lock(mDisplay->windowsMutex);
     for (auto& [id, window] : mDisplay->windows){
         if (window->appID == packageName) {
+            if (!window->conn->wm_base)
+                return false;
             window->minimize();
             return true;
         }
@@ -61,12 +60,6 @@ Return<void> WaydroidWindow::setPointerCapture(const hidl_string& packageName, b
     char property[PROPERTY_VALUE_MAX];
     std::string windowName = packageName;
 
-    if (!mDisplay->ctl->pointer_constraints)
-        return Void();
-
-    if (!mDisplay->ctl->pointer)
-        return Void();
-
     property_get("waydroid.active_apps", property, "Waydroid");
     if (!strcmp(property, "Waydroid"))
         windowName = "Waydroid";
@@ -74,6 +67,13 @@ Return<void> WaydroidWindow::setPointerCapture(const hidl_string& packageName, b
     std::scoped_lock lock(mDisplay->windowsMutex);
     for (auto& [id, window] : mDisplay->windows) {
         if (window->appID == windowName) {
+            /* A pointer lock names a surface and a pointer, so both must come
+             * from the window's own connection: sending its surface on ctl is
+             * a wrong-object error, and the host kills ctl for it. */
+            struct wl_conn *conn = window->conn;
+            if (!conn->pointer_constraints || !conn->pointer)
+                return Void();
+
             ALOGI("%slocking pointer for %s#%s", enabled ? "" : "un", window->appID.c_str(), window->taskID.c_str());
             /* Lock both the toplevel and all subsurfaces:
              * https://gitlab.freedesktop.org/wayland/wayland-protocols/-/issues/287
@@ -81,8 +81,8 @@ Return<void> WaydroidWindow::setPointerCapture(const hidl_string& packageName, b
             for (auto& layer : window->layers) {
                 if (enabled && !layer.locked_pointer) {
                     layer.locked_pointer = zwp_pointer_constraints_v1_lock_pointer(
-                            mDisplay->ctl->pointer_constraints,
-                            layer.surface, mDisplay->ctl->pointer, nullptr,
+                            conn->pointer_constraints,
+                            layer.surface, conn->pointer, nullptr,
                             ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_PERSISTENT);
                 } else if (!enabled && layer.locked_pointer) {
                     zwp_locked_pointer_v1_destroy(layer.locked_pointer);
@@ -91,29 +91,33 @@ Return<void> WaydroidWindow::setPointerCapture(const hidl_string& packageName, b
             }
             if (enabled && window->dedicated_background_surface && !window->locked_pointer) {
                 window->locked_pointer = zwp_pointer_constraints_v1_lock_pointer(
-                        mDisplay->ctl->pointer_constraints,
-                        window->surface, mDisplay->ctl->pointer, nullptr,
+                        conn->pointer_constraints,
+                        window->surface, conn->pointer, nullptr,
                         ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_PERSISTENT);
             } else if (!enabled && window->dedicated_background_surface && window->locked_pointer) {
                 zwp_locked_pointer_v1_destroy(window->locked_pointer);
                 window->locked_pointer = nullptr;
             }
 
-            if (enabled && !mDisplay->ctl->relative_pointer) {
-                mDisplay->ctl->relative_pointer = zwp_relative_pointer_manager_v1_get_relative_pointer(
-                        mDisplay->ctl->relative_pointer_manager, mDisplay->ctl->pointer);
-                zwp_relative_pointer_v1_add_listener(mDisplay->ctl->relative_pointer, &relative_pointer_listener, mDisplay->ctl.get());
-            } else if (!enabled && mDisplay->ctl->relative_pointer) {
+            if (enabled && !conn->relative_pointer) {
+                conn->relative_pointer = zwp_relative_pointer_manager_v1_get_relative_pointer(
+                        conn->relative_pointer_manager, conn->pointer);
+                zwp_relative_pointer_v1_add_listener(conn->relative_pointer, &relative_pointer_listener, conn);
+            } else if (!enabled && conn->relative_pointer) {
+                /* The relative pointer is per connection, so only this
+                 * connection's remaining locks keep it alive. */
                 bool any_locks =
                     window->locked_pointer ||
-                    std::any_of(mDisplay->windows.begin(), mDisplay->windows.end(), [](auto& pair) {
+                    std::any_of(mDisplay->windows.begin(), mDisplay->windows.end(), [conn](auto& pair) {
+                        if (pair.second->conn != conn)
+                            return false;
                         return std::any_of(pair.second->layers.begin(), pair.second->layers.end(), [](auto& layer) {
                             return layer.locked_pointer;
                         });
                     });
                 if (!any_locks) {
-                    zwp_relative_pointer_v1_destroy(mDisplay->ctl->relative_pointer);
-                    mDisplay->ctl->relative_pointer = nullptr;
+                    zwp_relative_pointer_v1_destroy(conn->relative_pointer);
+                    conn->relative_pointer = nullptr;
                 }
             }
             break;
@@ -127,9 +131,6 @@ Return<void> WaydroidWindow::setIdleInhibit(const hidl_string& task, bool enable
     char property[PROPERTY_VALUE_MAX];
     std::string taskID = task;
 
-    if (!mDisplay->ctl->idle_manager)
-        return Void();
-
     property_get("waydroid.active_apps", property, "Waydroid");
     if (!strcmp(property, "Waydroid"))
         taskID = "0";
@@ -137,10 +138,14 @@ Return<void> WaydroidWindow::setIdleInhibit(const hidl_string& task, bool enable
     std::scoped_lock lock(mDisplay->windowsMutex);
     for (auto& [id, window] : mDisplay->windows) {
         if (window && (window->taskID == taskID || taskID == "*")) {
+            /* Same as the pointer lock: the inhibitor names the window's
+             * surface, so it has to be created on that surface's connection. */
+            if (!window->conn->idle_manager)
+                continue;
             ALOGI("%sinhibiting sleep for %s#%s", enabled ? "" : "un", window->appID.c_str(), window->taskID.c_str());
             if (enabled && window->idle_inhibitor == nullptr) {
                 window->idle_inhibitor = zwp_idle_inhibit_manager_v1_create_inhibitor(
-                        mDisplay->ctl->idle_manager,
+                        window->conn->idle_manager,
                         window->surface);
             } else if (!enabled && window->idle_inhibitor != nullptr) {
                 zwp_idle_inhibitor_v1_destroy(window->idle_inhibitor);

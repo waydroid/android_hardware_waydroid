@@ -206,7 +206,7 @@ attach_pending_stream_buffer(struct window *window)
         if (layer.viewport)
             wp_viewport_set_destination(layer.viewport, display->width, display->height);
         wl_surface_commit(layer.surface);
-        wl_display_flush(display->ctl->display);
+        wl_display_flush(window->conn->display);
     }
 }
 
@@ -547,13 +547,20 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
 		return;
 	}
 
+    /* A task toplevel's configure describes its card, not the Android
+     * display. Lomiri sizes each card differently in the spread, so letting
+     * every task write the display geometry would have them fight over it and
+     * hotplug on every switch. Geometry belongs to ctl. */
+    if (!window->conn->is_ctl)
+        return;
+
     display->req_width = width;
     display->req_height = height;
 
     if (display->height && display->width) {
         const int32_t old_width = display->width, old_height = display->height;
         choose_width_height(display, width, height);
-        if (display->ctl->wm_base)
+        if (window->conn->wm_base)
             xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width, display->height);
         /* Only a real size change warrants a hotplug. Every window creation
          * lands here with the unchanged display size, and hotplugging then is
@@ -605,6 +612,13 @@ xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
             task.appID = window->appID;
         task.closing = true;
         task.closing_since = std::chrono::steady_clock::now();
+
+        /* With a connection per task the connection is the session, so a
+         * closed card tears the whole thing down, not just the window. We are
+         * on that connection's own dispatch thread: quiescing it here is
+         * safe, and the worker's join cannot outrun this handler. */
+        if (detach_task_conn(display, (uint32_t)stoul(key)))
+            return;
     } else {
         key = window->appID;
     }
@@ -644,6 +658,9 @@ shell_surface_configure(void *data, struct wl_shell_surface *, uint32_t, int32_t
 	}
 
     window->configured = true;
+
+    if (!window->conn->is_ctl)
+        return;
 
     if (display->height && display->width) {
         choose_width_height(display, width, height);
@@ -899,8 +916,10 @@ window::create(struct wl_conn *conn, bool use_subsurfaces, std::string appID, st
     struct wl_shm_pool *pool = wl_shm_create_pool(conn->shm, fd, 4);
     close(fd);
 
-    // Is this the first window created?
-    bool calibrating = !display->height || !display->width;
+    /* Is this the first window created? Only ctl ever calibrates: hwc_open
+     * creates its bootstrap toplevel before the HIDL services are registered,
+     * so the display is already sized by the time any task can post. */
+    bool calibrating = conn->is_ctl && (!display->height || !display->width);
 
     if (conn->wm_base) {
         window->xdg_surface =
@@ -1323,14 +1342,48 @@ task_stream_buffer_release(void *data, struct wl_buffer *wl_buf)
     struct display *display = conn->dpy;
     std::scoped_lock lock(display->windowsMutex);
     for (auto &[taskId, stream] : display->task_streams) {
+        /* A task connection carries only its own task's buffers. Comparing
+         * the wl_buffer alone is not enough across connections: a freed
+         * proxy's address can come back from another one's next import. */
+        if (!conn->is_ctl && taskId != conn->task_id)
+            continue;
         for (auto &[slot, sb] : stream.slots) {
-            if (sb.buf && sb.buf->wl_buffer == wl_buf) {
+            if (sb.buf && sb.buf->wl_buffer == wl_buf && sb.buf->conn == conn) {
                 sb.busy = false;
                 stream.released.push_back(slot);
                 return;
             }
         }
     }
+}
+
+/* The connection carrying a task's frames: its own in per-task mode, ctl
+ * otherwise. Returns null when the task's connection is not up yet or has
+ * died -- the caller must then not stream this task for now. Caller holds
+ * windowsMutex. */
+static struct wl_conn *
+task_conn_for(struct waydroid_hwc_composer_device_1 *pdev, uint32_t taskId)
+{
+    struct display *display = pdev->display;
+    if (!pdev->task_conns_per_task)
+        return display->ctl.get();
+
+    auto it = display->task_conns.find(taskId);
+    if (it == display->task_conns.end()) {
+        request_task_conn(display, taskId);
+        return nullptr;
+    }
+
+    if (!it->second->wl_alive) {
+        /* The host ended this task's session. Drop the connection and open a
+         * fresh one; every other task is untouched. */
+        ALOGI("task %u: connection lost, reopening", taskId);
+        detach_task_conn(display, taskId);
+        request_task_conn(display, taskId);
+        return nullptr;
+    }
+
+    return it->second.get();
 }
 
 static const struct wl_buffer_listener task_stream_buffer_listener {
@@ -1345,7 +1398,8 @@ int post_task_buffer(struct waydroid_hwc_composer_device_1 *pdev, uint32_t taskI
     struct display *display = pdev->display;
     std::scoped_lock lock(display->windowsMutex);
 
-    if (!pdev->task_streams_mode_active || !display->ctl->wl_alive)
+    if (!pdev->task_streams_mode_active ||
+        (!pdev->task_conns_per_task && !display->ctl->wl_alive))
         return -EAGAIN;
 
     const std::string tid = std::to_string(taskId);
@@ -1362,11 +1416,33 @@ int post_task_buffer(struct waydroid_hwc_composer_device_1 *pdev, uint32_t taskI
     *releasedSlots = std::move(stream.released);
     stream.released.clear();
 
-    /* A display that has no size yet is still calibrating; window::create
-     * would roundtrip, which is forbidden on this thread (see below). */
-    if (!display->width || !display->height)
+    /* Only ctl calibrates, and it does so in hwc_open before any post can
+     * arrive; no size here means that never happened (no host compositor at
+     * startup), not that we are mid-calibration. */
+    if (!display->width || !display->height) {
+        static std::chrono::steady_clock::time_point last_warn;
+        auto now = std::chrono::steady_clock::now();
+        if (now - last_warn > std::chrono::seconds(5)) {
+            last_warn = now;
+            ALOGW("task %u: refusing posts, the display was never calibrated", taskId);
+        }
         return -EAGAIN;
+    }
 
+
+    struct wl_conn *conn = task_conn_for(pdev, taskId);
+    if (!conn) {
+        /* update_task_list leaves a task out until its connection is up, so
+         * SF should not be rendering this one at all. Three refusals in a row
+         * cost it a 300-frame backoff, so say when it happens. */
+        static std::chrono::steady_clock::time_point last_warn;
+        auto now = std::chrono::steady_clock::now();
+        if (now - last_warn > std::chrono::seconds(5)) {
+            last_warn = now;
+            ALOGW("task %u: posted with no connection of its own; refusing", taskId);
+        }
+        return -EAGAIN;
+    }
 
     window *w;
     auto it = display->windows.find(tid);
@@ -1378,7 +1454,7 @@ int post_task_buffer(struct waydroid_hwc_composer_device_1 *pdev, uint32_t taskI
          * thread, windowsMutex held) deadlocks against the configure
          * handler's do_hotplug (adapter mutex, held by hwc_set's thread,
          * which itself waits on windowsMutex). */
-        auto win = window::create(display->ctl.get(), false, task->second.appID, tid, {0, 0, 0, 255},
+        auto win = window::create(conn, false, task->second.appID, tid, {0, 0, 0, 255},
                                   false /*sync_configure*/);
         if (!win)
             return -ENOENT;
@@ -1413,8 +1489,8 @@ int post_task_buffer(struct waydroid_hwc_composer_device_1 *pdev, uint32_t taskI
     if (sb.busy)
         return -EBUSY;
     if (!sb.buf) {
-        auto buf = create_android_wl_buffer(display->ctl.get(), md, handle,
-                                            &task_stream_buffer_listener, display->ctl.get());
+        auto buf = create_android_wl_buffer(conn, md, handle,
+                                            &task_stream_buffer_listener, conn);
         if (!buf)
             return -EINVAL;
         /* The handle belongs to the transport; libwayland already dup'ed the
@@ -1445,7 +1521,7 @@ int post_task_buffer(struct waydroid_hwc_composer_device_1 *pdev, uint32_t taskI
         /* xdg-shell forbids attaching before the initial configure is acked;
          * the configure handler (wayland thread) attaches this buffer. */
         w->pending_stream_buffer = sb.buf;
-        wl_display_flush(display->ctl->display);
+        wl_display_flush(conn->display);
     } else {
         /* A live attach supersedes any frame stashed while deactivated. */
         w->pending_stream_buffer = nullptr;
@@ -1455,7 +1531,7 @@ int post_task_buffer(struct waydroid_hwc_composer_device_1 *pdev, uint32_t taskI
         if (layer.viewport)
             wp_viewport_set_destination(layer.viewport, display->width, display->height);
         wl_surface_commit(layer.surface);
-        wl_display_flush(display->ctl->display);
+        wl_display_flush(conn->display);
     }
 
     sb.busy = true;
@@ -1479,7 +1555,8 @@ int update_task_list(struct waydroid_hwc_composer_device_1 *pdev,
     struct display *display = pdev->display;
     std::scoped_lock lock(display->windowsMutex);
 
-    if (!pdev->task_streams_mode_active || !display->ctl->wl_alive)
+    if (!pdev->task_streams_mode_active ||
+        (!pdev->task_conns_per_task && !display->ctl->wl_alive))
         return -EAGAIN;
 
     for (uint32_t taskId : tasks) {
@@ -1501,6 +1578,11 @@ int update_task_list(struct waydroid_hwc_composer_device_1 *pdev,
                 (!it->second->activated || !task->second.focused))
                 continue;
         }
+        /* Not wanted until the task has a connection to carry it. Withholding
+         * it here costs one frame; refusing the post instead would cost SF's
+         * 300-frame backoff. */
+        if (!task_conn_for(pdev, taskId))
+            continue;
         wanted->push_back(taskId);
     }
     return 0;
@@ -1546,24 +1628,24 @@ keyboard_handle_enter(void *data, struct wl_keyboard *,
     struct wl_conn *conn = (struct wl_conn *)data;
     struct display *display = conn->dpy;
     conn->keyboard_enter_serial = serial;
-
-    std::scoped_lock lock(display->windowsMutex);
-    auto window = reinterpret_cast<struct window *>(wl_surface_get_user_data(surface));
-    if (!window)
-        return; // Window was destroyed in hwc_set
+    {
+        /* The clipboard follows keyboard focus: the selection and the serial
+         * it must quote belong to whichever client the host focused. */
+        std::scoped_lock lock(display->windowsMutex);
+        display->focus_task = conn->is_ctl ? std::nullopt
+                                           : std::optional<uint32_t>(conn->task_id);
+    }
 
     /* Keyboard focus is engagement too; cure a stale screen_on belief here
      * as well (greeter unlock re-enters without any ACTIVATED edge). Wake
      * before focusing so the resume isn't swallowed by sleep. */
     force_screen_wakeup(display);
 
-    if (display->task != nullptr) {
-        if (window->taskID != "none" && window->taskID != "0") {
-            ALOGI("keyboard enter on %s#%s -> setFocusedTask",
-                  window->appID.c_str(), window->taskID.c_str());
-            window->conn->dpy->task->setFocusedTask(stoi(window->taskID));
-        }
-    }
+    /* Reconcile the same way a click or a touch does, rather than asserting
+     * unconditionally: with a session per task, every card switch is a
+     * keyboard leave/enter pair, and each one was a binder round trip even
+     * when Android already had that task focused. */
+    reassert_task_focus(conn, surface, "keyboard enter");
 }
 
 static void
@@ -1572,6 +1654,12 @@ keyboard_handle_leave(void *data, struct wl_keyboard *,
 {
     struct wl_conn *conn = (struct wl_conn *)data;
     struct display *display = conn->dpy;
+
+    {
+        std::scoped_lock lock(display->windowsMutex);
+        if (!conn->is_ctl && display->focus_task == conn->task_id)
+            display->focus_task.reset();
+    }
 
     for (size_t i = 0; i < display->keysDown.size(); i++) {
         if (display->keysDown[i] == WL_KEYBOARD_KEY_STATE_PRESSED) {
@@ -1630,7 +1718,13 @@ pointer_handle_enter(void *data, struct wl_pointer *,
     struct display *display = conn->dpy;
     conn->pointer_surface = surface;
     conn->pointer_enter_serial = serial;
-    display->cursor_handler->on_cursor_enter(display);
+    /* The cursor handler is ctl's: it draws on ctl's surfaces and answers with
+     * ctl's serial, so a task connection's enter must not drive it. Android's
+     * own cursor images are therefore not shown over a streamed card; the host
+     * draws its own pointer there. It can also be null between a ctl
+     * disconnect and hwc_set recreating it. */
+    if (conn->is_ctl && display->cursor_handler)
+        display->cursor_handler->on_cursor_enter(display);
 }
 
 static void
@@ -2961,8 +3055,10 @@ registry_handle_global(void *data, struct wl_registry *registry,
         wl_seat_add_listener(conn->seat, &seat_listener, conn);
         if (conn->tablet_manager && !conn->tablet_seat)
             add_tablet_seat(conn);
-        if (conn->data_device_manager && !conn->data_device)
+        if (conn->data_device_manager && !conn->data_device) {
             conn->data_device = wl_data_device_manager_get_data_device(conn->data_device_manager, conn->seat);
+            clipboard_watch_conn(conn);
+        }
     } else if (strcmp(interface, "wl_shm") == 0) {
 		conn->shm = (struct wl_shm *)wl_registry_bind(registry, id,
                 &wl_shm_interface, 1);
@@ -3016,8 +3112,10 @@ registry_handle_global(void *data, struct wl_registry *registry,
     } else if (strcmp(interface, wl_data_device_manager_interface.name) == 0) {
         conn->data_device_manager = (struct wl_data_device_manager *)wl_registry_bind(registry, id,
                 &wl_data_device_manager_interface, std::min(version,  3U));
-        if (conn->data_device_manager && conn->seat)
+        if (conn->data_device_manager && conn->seat) {
             conn->data_device = wl_data_device_manager_get_data_device(conn->data_device_manager, conn->seat);
+            clipboard_watch_conn(conn);
+        }
     } else if (strcmp(interface, "gtk_shell1") == 0) {
         if (version < 6)
             conn->supports_cursor_viewport = false;
@@ -3090,10 +3188,18 @@ bool display::forget_task(const std::string &tid) {
      * layer name are decimal too, but parse defensively. */
     char *end = nullptr;
     unsigned long id = strtoul(tid.c_str(), &end, 10);
-    if (end != tid.c_str() && *end == '\0')
-        task_streams.erase(static_cast<uint32_t>(id));
+    const bool numeric = end != tid.c_str() && *end == '\0';
 
     bool had_window = windows.find(tid) != windows.end();
+
+    /* A task with a connection of its own takes its window and stream with
+     * it: they hold that connection's proxies, so only the conn worker may
+     * destroy them, and only after the dispatch thread is joined. */
+    if (numeric && detach_task_conn(this, static_cast<uint32_t>(id)))
+        return had_window;
+
+    if (numeric)
+        task_streams.erase(static_cast<uint32_t>(id));
     if (had_window)
         windows.erase(tid);
     return had_window;
@@ -3139,6 +3245,17 @@ void open_windows::add(const std::string& key, std::unique_ptr<window> window) {
         );
         assert(res.second); (void)res;
     });
+}
+
+void open_windows::clear_for_conn(const struct wl_conn *conn) {
+    for (auto it = windows.begin(); it != windows.end();) {
+        if (it->second->conn == conn)
+            it = windows.erase(it);
+        else
+            ++it;
+    }
+    property_set("waydroid.open_windows", std::to_string(windows.size()).c_str());
+    publish_open_apps();
 }
 
 void open_windows::clear() {
@@ -3320,9 +3437,17 @@ void reconnect_display(struct display *display) {
     wl_conn_reconnect_backoff(display->ctl.get());
 
     /* Caller holds windowsMutex. Drop everything that references the dead
-     * connection's proxies BEFORE wl_display_disconnect() frees them. */
-    display->windows.clear();
-    display->task_streams.clear();
+     * connection's proxies BEFORE wl_display_disconnect() frees them -- and
+     * only that: a task connection is independent of ctl and keeps running. */
+    display->windows.clear_for_conn(display->ctl.get());
+    for (auto it = display->task_streams.begin(); it != display->task_streams.end();) {
+        /* A stream whose task has its own connection imported its buffers
+         * there; ctl's disconnect does not touch them. */
+        if (display->task_conns.count(it->first))
+            ++it;
+        else
+            it = display->task_streams.erase(it);
+    }
     /* The cursor handler holds wl_surfaces; drop it now and let the caller
      * (which has pdev) recreate it after we rebind the compositor. */
     display->cursor_handler.reset();
@@ -3484,6 +3609,12 @@ static void open_task_conn(struct display *display, uint32_t taskId)
         if (!display->task_conns.count(taskId)) {
             display->task_conns[taskId] = std::move(conn);
             ALOGI("task %u: wayland connection open", taskId);
+            /* update_task_list withheld this task while the connection was
+             * coming up, so SurfaceFlinger rendered nothing for it -- and it
+             * only asks again when it composites. Nothing else is going to
+             * change on screen, so ask for the frame that lets it through. */
+            if (display->procs && display->procs->invalidate)
+                display->procs->invalidate(display->procs);
             return;
         }
     }
@@ -3549,6 +3680,9 @@ bool detach_task_conn(struct display *display, uint32_t taskId)
     wl_conn_quiesce(it->second.get());
     dying.conn = std::move(it->second);
     display->task_conns.erase(it);
+
+    if (display->focus_task == taskId)
+        display->focus_task.reset();
 
     dying.win = display->windows.extract(std::to_string(taskId));
 

@@ -72,6 +72,9 @@ using ::android::status_t;
 #define WINDOW_DECORATION_OUTSET 15
 
 namespace {
+    /* See hwc_open: per-task wayland connections, bring-up only. */
+    constexpr bool kPerTaskConns = false;
+
     hwc_frect_t rect_apply_transform(hwc_frect_t src, uint32_t transform) {
         /* Transform bits are defined so that for both 90° and 270° this bit is set */
         if (transform & HWC_TRANSFORM_ROT_90) {
@@ -148,6 +151,22 @@ namespace {
         return std::string(property, size);
     }
 
+    /* A task that stopped posting cannot notice its own connection dying, so
+     * reap them here too; the next update_task_list reopens the ones whose
+     * task is still wanted. */
+    void sweep_dead_task_conns(waydroid_hwc_composer_device_1 *pdev) {
+        auto *display = pdev->display;
+        std::vector<uint32_t> dead;
+        for (auto const& [taskId, conn] : display->task_conns) {
+            if (!conn->wl_alive)
+                dead.push_back(taskId);
+        }
+        for (uint32_t taskId : dead) {
+            ALOGI("task %u: connection died while idle, dropping it", taskId);
+            detach_task_conn(display, taskId);
+        }
+    }
+
     /* Windows are created and fed exclusively by post_task_buffer
      * (display@1.3); the hwc layer walk drives nothing. Window teardown is
      * handled by taskRemoved and close_windows_for_dead_tasks. */
@@ -161,6 +180,7 @@ namespace {
             /* That sweep skips taskID "0", so the full-ui window would stay
              * as a fullscreen card nothing feeds. Other modes evict it too. */
             pdev->display->windows.erase("Waydroid");
+            sweep_dead_task_conns(pdev);
             return 0;
         }
         int handle_layer(waydroid_hwc_composer_device_1 *, hwc_layer_1 *hwc_layer, size_t) override {
@@ -176,6 +196,27 @@ namespace {
         }
     };
 
+    /* Leaving task streams, the modes that take over clear display->windows
+     * from the compose thread -- which would destroy task windows under their
+     * own live dispatch threads, and would trip full UI's "one window, named
+     * Waydroid" assertion. This runs from hwc_prepare, so the task windows are
+     * gone before hwc_set reaches any mode cleanup. */
+    void drop_all_task_conns(waydroid_hwc_composer_device_1 *pdev) {
+        auto *display = pdev->display;
+        std::scoped_lock lock(display->windowsMutex);
+
+        std::vector<uint32_t> tasks;
+        for (auto const& [taskId, conn] : display->task_conns) {
+            (void)conn;
+            tasks.push_back(taskId);
+        }
+        for (uint32_t taskId : tasks)
+            detach_task_conn(display, taskId);
+
+        std::scoped_lock requests(display->conn_worker_mutex);
+        display->conn_open_requests.clear();
+    }
+
     /* SF reads this prop each frame and skips physical-display composition
      * while it is set: in task-streams mode the fb target is shown nowhere. */
     void set_task_streams_mode_active(waydroid_hwc_composer_device_1 *pdev, bool active) {
@@ -184,6 +225,8 @@ namespace {
         pdev->task_streams_mode_active = active;
         property_set("waydroid.task_streams_active", active ? "1" : "0");
         ALOGI("task streams mode %s", active ? "active" : "inactive");
+        if (!active)
+            drop_all_task_conns(pdev);
     }
 
     std::unique_ptr<waydroid_mode> select_mode(waydroid_hwc_composer_device_1 *pdev, hwc_display_contents_1_t *contents) {
@@ -397,6 +440,18 @@ static const struct wp_presentation_feedback_listener feedback_listener = {
  * open.<pkg> prop makes the host launcher treat the app as running — icon
  * clicks then focus the zombie instead of launching. Fresh windows are
  * spared: their task may not have reached the table/prop yet. */
+/* A card whose Android task is gone. Its key is the task ID, so it may own a
+ * connection; that has to go through the detach path rather than a plain
+ * erase, which would destroy the window under a live dispatch thread. */
+static void close_dead_card(struct display *display, const std::string &id) {
+    char *end = nullptr;
+    unsigned long tid = strtoul(id.c_str(), &end, 10);
+    if (end != id.c_str() && *end == '\0' &&
+        detach_task_conn(display, static_cast<uint32_t>(tid)))
+        return;
+    display->windows.erase(id);
+}
+
 void close_windows_for_dead_tasks(struct waydroid_hwc_composer_device_1 *pdev) {
     auto *display = pdev->display;
     auto now = std::chrono::steady_clock::now();
@@ -416,7 +471,7 @@ void close_windows_for_dead_tasks(struct waydroid_hwc_composer_device_1 *pdev) {
         }
         for (auto const& id : dead) {
             ALOGI("closing card %s: its Android task is gone", id.c_str());
-            display->windows.erase(id);
+            close_dead_card(display, id);
         }
         return;
     }
@@ -438,7 +493,7 @@ void close_windows_for_dead_tasks(struct waydroid_hwc_composer_device_1 *pdev) {
     }
     for (auto const& id : dead) {
         ALOGI("closing card %s: its Android task is gone", id.c_str());
-        display->windows.erase(id);
+        close_dead_card(display, id);
     }
 }
 
@@ -590,6 +645,33 @@ static void maybe_dump_hal_state(waydroid_hwc_composer_device_1 *pdev, hwc_displ
           pdev->multi_windows, pdev->should_compose, pdev->display->ctl->wl_alive.load());
     ALOGI("buffer_map=%zu layers=%zu", pdev->display->ctl->buffer_map.size(), contents->numHwLayers);
 
+    {
+        size_t open_requests, graveyard;
+        {
+            std::scoped_lock worker(pdev->display->conn_worker_mutex);
+            open_requests = pdev->display->conn_open_requests.size();
+            graveyard = pdev->display->conn_graveyard.size();
+        }
+        ALOGI("task_streams=%d per_task_conns=%d ts_active=%d task_conns=%zu open_requests=%zu graveyard=%zu",
+              pdev->task_streams, pdev->task_conns_per_task,
+              pdev->task_streams_mode_active.load(),
+              pdev->display->task_conns.size(), open_requests, graveyard);
+    }
+
+    for (const auto &[taskId, conn] : pdev->display->task_conns)
+        ALOGI("  conn[task %u] fd=%d alive=%d", taskId,
+              conn->display ? wl_display_get_fd(conn->display) : -1,
+              conn->wl_alive.load());
+
+    for (const auto &[taskId, stream] : pdev->display->task_streams) {
+        size_t busy = 0;
+        for (const auto &[slot, sb] : stream.slots)
+            busy += sb.busy;
+        ALOGI("  stream[%u] slots=%zu attached_slot=%u released=%zu busy=%zu",
+              taskId, stream.slots.size(), stream.attached_slot,
+              stream.released.size(), busy);
+    }
+
     for (size_t l = 0; l < contents->numHwLayers; l++) {
         auto *layer = &contents->hwLayers[l];
         ALOGI("  layer[%zu] name=%s%s%s", l,
@@ -607,8 +689,13 @@ static void maybe_dump_hal_state(waydroid_hwc_composer_device_1 *pdev, hwc_displ
               task.focused, task.closing, task.from_layer);
 
     for (const auto &[id, window] : pdev->display->windows) {
-        ALOGI("  window[%s] app=%s task=%s activated=%d outputs=%d suspended=%d shown=%d snapshot=%s live_buf=%d",
-              id.c_str(), window->appID.c_str(), window->taskID.c_str(),
+        char conn_name[32];
+        if (window->conn->is_ctl)
+            snprintf(conn_name, sizeof(conn_name), "ctl");
+        else
+            snprintf(conn_name, sizeof(conn_name), "task %u", window->conn->task_id);
+        ALOGI("  window[%s] conn=%s app=%s task=%s activated=%d outputs=%d suspended=%d shown=%d snapshot=%s live_buf=%d",
+              id.c_str(), conn_name, window->appID.c_str(), window->taskID.c_str(),
               window->activated, window->outputs_entered, window->suspended,
               window->ever_shown,
               window->snapshot_buffer ? "yes" : (window->snapshot_unavailable ? "unavailable" : "no"),
@@ -746,6 +833,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             wl_surface_set_input_region(window->surface, window->input_region);
         }
         wl_surface_commit(window->surface);
+        if (!window->conn->is_ctl)
+            wl_display_flush(window->conn->display);
     }
     wl_display_flush(pdev->display->ctl->display);
 
@@ -1039,6 +1128,13 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     pdev->gralloc_handler = gralloc_handler(pdev->display);
     pdev->multi_windows = property_get_bool("persist.waydroid.multi_windows", false);
     pdev->task_streams = property_get_bool("persist.waydroid.task_streams", false);
+    /* Bring-up switch for per-task connections, flipped by hand and rebuilt.
+     * It cannot be a property: a new waydroid.* name is a fingerprint guest
+     * apps can read, and persist.waydroid.task_streams cannot carry a level
+     * because SurfaceFlinger parses that same name as a boolean
+     * (WaydroidTaskStreams.cpp), so any value but 1/true silently turns
+     * streaming off on its side -- the mode goes active and nothing streams. */
+    pdev->task_conns_per_task = pdev->task_streams && kPerTaskConns;
     /* A HAL restart must not leave SF trusting a stale value; select_mode
      * only publishes on transitions. */
     property_set("waydroid.task_streams_active", "0");
@@ -1132,6 +1228,11 @@ int subsurface_cursor_handler::apply_cursor(waydroid_hwc_composer_device_1* pdev
 
     auto window_it = std::find_if(pdev->display->windows.begin(), pdev->display->windows.end(), [&](const auto &it){
         auto &window = it.second;
+        /* The surface came from ctl's pointer, so only a ctl window can own
+         * it -- and attaching a ctl buffer to a task surface would be a
+         * wrong-object error on ctl. */
+        if (!window->conn->is_ctl)
+            return false;
         return window->surface == pdev->display->ctl->pointer_surface
                || std::any_of(window->layers.begin(), window->layers.end(), [&](const auto &layer) {
                       return layer.surface == pdev->display->ctl->pointer_surface;

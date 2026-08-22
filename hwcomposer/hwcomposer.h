@@ -82,6 +82,10 @@ struct waydroid_hwc_composer_device_1 : hwc_composer_device_1_t {
     /* SF renders per-task buffers and posts them over display@1.3;
      * layer-driven window content is disabled (task_streams_mode). */
     bool task_streams;
+    /* Each streamed task gets its own wayland connection instead of sharing
+     * ctl. Level 2 of persist.waydroid.task_streams; see
+     * PLAN-per-task-connections.md §3.6. */
+    bool task_conns_per_task;
     /* select_mode chose task_streams_mode this frame; gates post_task_buffer
      * (binder thread) so posts are refused in full-ui/closed modes. */
     std::atomic<bool> task_streams_mode_active {false};
