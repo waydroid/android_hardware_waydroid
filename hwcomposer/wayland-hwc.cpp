@@ -1885,7 +1885,7 @@ pointer_handle_axis(void *data, struct wl_pointer *,
             return;
         move = (int)(conn->wheelAccumulatorX / step);
         conn->wheelAccumulatorX = conn->wheelEvtIsDiscrete ? 0 :
-                                     std::fmod(conn->wheelAccumulatorY, step);
+                                     std::fmod(conn->wheelAccumulatorX, step);
     }
 
     if (conn->wheelEvtIsTouchpad) {
