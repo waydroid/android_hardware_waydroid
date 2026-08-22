@@ -39,7 +39,7 @@ static const struct zwp_relative_pointer_v1_listener relative_pointer_listener =
 Return<bool> WaydroidWindow::minimize(const hidl_string& packageName) {
     char property[PROPERTY_VALUE_MAX];
 
-    if (!mDisplay->wm_base)
+    if (!mDisplay->ctl->wm_base)
         return false;
 
     property_get("waydroid.active_apps", property, "Waydroid");
@@ -61,10 +61,10 @@ Return<void> WaydroidWindow::setPointerCapture(const hidl_string& packageName, b
     char property[PROPERTY_VALUE_MAX];
     std::string windowName = packageName;
 
-    if (!mDisplay->pointer_constraints)
+    if (!mDisplay->ctl->pointer_constraints)
         return Void();
 
-    if (!mDisplay->pointer)
+    if (!mDisplay->ctl->pointer)
         return Void();
 
     property_get("waydroid.active_apps", property, "Waydroid");
@@ -81,8 +81,8 @@ Return<void> WaydroidWindow::setPointerCapture(const hidl_string& packageName, b
             for (auto& layer : window->layers) {
                 if (enabled && !layer.locked_pointer) {
                     layer.locked_pointer = zwp_pointer_constraints_v1_lock_pointer(
-                            mDisplay->pointer_constraints,
-                            layer.surface, mDisplay->pointer, nullptr,
+                            mDisplay->ctl->pointer_constraints,
+                            layer.surface, mDisplay->ctl->pointer, nullptr,
                             ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_PERSISTENT);
                 } else if (!enabled && layer.locked_pointer) {
                     zwp_locked_pointer_v1_destroy(layer.locked_pointer);
@@ -91,19 +91,19 @@ Return<void> WaydroidWindow::setPointerCapture(const hidl_string& packageName, b
             }
             if (enabled && window->dedicated_background_surface && !window->locked_pointer) {
                 window->locked_pointer = zwp_pointer_constraints_v1_lock_pointer(
-                        mDisplay->pointer_constraints,
-                        window->surface, mDisplay->pointer, nullptr,
+                        mDisplay->ctl->pointer_constraints,
+                        window->surface, mDisplay->ctl->pointer, nullptr,
                         ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_PERSISTENT);
             } else if (!enabled && window->dedicated_background_surface && window->locked_pointer) {
                 zwp_locked_pointer_v1_destroy(window->locked_pointer);
                 window->locked_pointer = nullptr;
             }
 
-            if (enabled && !mDisplay->relative_pointer) {
-                mDisplay->relative_pointer = zwp_relative_pointer_manager_v1_get_relative_pointer(
-                        mDisplay->relative_pointer_manager, mDisplay->pointer);
-                zwp_relative_pointer_v1_add_listener(mDisplay->relative_pointer, &relative_pointer_listener, mDisplay);
-            } else if (!enabled && mDisplay->relative_pointer) {
+            if (enabled && !mDisplay->ctl->relative_pointer) {
+                mDisplay->ctl->relative_pointer = zwp_relative_pointer_manager_v1_get_relative_pointer(
+                        mDisplay->ctl->relative_pointer_manager, mDisplay->ctl->pointer);
+                zwp_relative_pointer_v1_add_listener(mDisplay->ctl->relative_pointer, &relative_pointer_listener, mDisplay);
+            } else if (!enabled && mDisplay->ctl->relative_pointer) {
                 bool any_locks =
                     window->locked_pointer ||
                     std::any_of(mDisplay->windows.begin(), mDisplay->windows.end(), [](auto& pair) {
@@ -112,8 +112,8 @@ Return<void> WaydroidWindow::setPointerCapture(const hidl_string& packageName, b
                         });
                     });
                 if (!any_locks) {
-                    zwp_relative_pointer_v1_destroy(mDisplay->relative_pointer);
-                    mDisplay->relative_pointer = nullptr;
+                    zwp_relative_pointer_v1_destroy(mDisplay->ctl->relative_pointer);
+                    mDisplay->ctl->relative_pointer = nullptr;
                 }
             }
             break;
@@ -127,7 +127,7 @@ Return<void> WaydroidWindow::setIdleInhibit(const hidl_string& task, bool enable
     char property[PROPERTY_VALUE_MAX];
     std::string taskID = task;
 
-    if (!mDisplay->idle_manager)
+    if (!mDisplay->ctl->idle_manager)
         return Void();
 
     property_get("waydroid.active_apps", property, "Waydroid");
@@ -140,7 +140,7 @@ Return<void> WaydroidWindow::setIdleInhibit(const hidl_string& task, bool enable
             ALOGI("%sinhibiting sleep for %s#%s", enabled ? "" : "un", window->appID.c_str(), window->taskID.c_str());
             if (enabled && window->idle_inhibitor == nullptr) {
                 window->idle_inhibitor = zwp_idle_inhibit_manager_v1_create_inhibitor(
-                        mDisplay->idle_manager,
+                        mDisplay->ctl->idle_manager,
                         window->surface);
             } else if (!enabled && window->idle_inhibitor != nullptr) {
                 zwp_idle_inhibitor_v1_destroy(window->idle_inhibitor);
@@ -166,8 +166,8 @@ Return<void> WaydroidWindow::taskCreated(uint32_t taskID, const hidl_string& pac
          * no longer be a resync replaying taskCreated mid-close. */
         ALOGI("taskCreated %s (%s): ID reused while close pending, retiring the old card",
               tid.c_str(), packageName.c_str());
-        if (mDisplay->forget_task(tid) && mDisplay->wl_alive.load())
-            wl_display_flush(mDisplay->display);
+        if (mDisplay->forget_task(tid) && mDisplay->ctl->wl_alive.load())
+            wl_display_flush(mDisplay->ctl->display);
     }
     auto &task = mDisplay->tasks[tid];
     task.appID = packageName;
@@ -186,8 +186,8 @@ Return<void> WaydroidWindow::taskRemoved(uint32_t taskID) {
     ALOGI("taskRemoved %s%s", tid.c_str(), had_window ? ": closed its card" : "");
     /* hwc_set flushes each frame, but with the display asleep SF posts no
      * frames and the surface destruction would sit in the send buffer. */
-    if (had_window && mDisplay->wl_alive.load())
-        wl_display_flush(mDisplay->display);
+    if (had_window && mDisplay->ctl->wl_alive.load())
+        wl_display_flush(mDisplay->ctl->display);
     return Void();
 }
 
@@ -270,8 +270,8 @@ Return<void> WaydroidWindow::taskListSnapshot(
     ALOGI("taskListSnapshot #%u: %zu tasks, retired %zu (%zu cards closed)",
           generation, (size_t)tasks.size(), dead.size(), closed);
     /* See taskRemoved: a sleeping display posts no frames to flush behind. */
-    if (closed && mDisplay->wl_alive.load())
-        wl_display_flush(mDisplay->display);
+    if (closed && mDisplay->ctl->wl_alive.load())
+        wl_display_flush(mDisplay->ctl->display);
     return Void();
 }
 

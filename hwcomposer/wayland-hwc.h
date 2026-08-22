@@ -418,7 +418,14 @@ struct task_stream {
     uint32_t attached_slot = UINT32_MAX;
 };
 
-struct display {
+/* One connection to the host compositor: the wl_display, everything bound on
+ * it, and the thread dispatching its events. Today there is exactly one
+ * (display->ctl); per-task connections come later. */
+struct wl_conn {
+    /* The Android-side state this connection serves. Set before the first
+     * event can be dispatched: the registry handler already reads it. */
+    struct display *dpy;
+
     pthread_t wayland_thread; // constant after init
 
     struct wl_display *display;
@@ -449,6 +456,50 @@ struct display {
     struct wl_data_device_manager *data_device_manager;
     struct wl_data_device *data_device;
 
+    /* Host format/modifier advertisement of this connection. */
+    std::unordered_set<uint32_t> formats;
+    std::map<uint32_t, std::vector<uint64_t>> modifiers;
+    bool supports_cursor_viewport;
+    bool supports_cursor_hw_buffer;
+
+    /* A wl_buffer belongs to the connection it was created on. */
+    std::unordered_map<buffer_handle_t, std::shared_ptr<buffer>> buffer_map;
+
+    /* Surfaces and seat objects of this connection. */
+    std::map<struct wl_surface *, struct layerFrame> layers;
+    std::map<int, struct wl_surface *> touch_surfaces;
+    struct wl_surface *pointer_surface;
+    struct wl_surface *tablet_surface;
+    std::list<struct zwp_tablet_tool_v2 *> tablet_tools;
+    std::map<struct zwp_tablet_tool_v2 *, uint16_t> tablet_tools_evt;
+    uint32_t keyboard_enter_serial;
+    uint32_t pointer_enter_serial;
+
+    /* Accumulated fractions of this connection's wl_pointer axis events. */
+    double wheelAccumulatorX;
+    double wheelAccumulatorY;
+    bool wheelEvtIsDiscrete;
+    bool wheelEvtIsTouchpad;
+
+    /*
+     * Reconnect support. When the host compositor drops our wl_client (e.g.
+     * Lomiri tearing down the connection on a single toplevel close), the
+     * wayland thread sets wl_alive=false and parks on reconnect_resume instead
+     * of aborting the whole HAL. The hwc compose thread (which owns pdev, and
+     * therefore the cursor handler) performs the actual reconnect and posts
+     * reconnect_resume to wake the wayland thread on the new connection.
+     */
+    std::atomic<bool> wl_alive{true};
+    sem_t reconnect_resume;
+    /* Last reconnect, for the retry backoff. */
+    struct timespec last_reconnect {};
+};
+
+struct display {
+    /* The one connection that has always existed: full UI, single window,
+     * cursor and clipboard all live here. */
+    std::unique_ptr<wl_conn> ctl;
+
     int system_version;
     GrallocType gtype;
     double scale;
@@ -456,10 +507,6 @@ struct display {
     int input_fd[INPUT_TOTAL];
     int ptrPrvX;
     int ptrPrvY;
-    double wheelAccumulatorX;
-    double wheelAccumulatorY;
-    bool wheelEvtIsDiscrete;
-    bool wheelEvtIsTouchpad;
     bool reverseScroll;
     int scrollSensitivity;
     int zoomSensitivity;
@@ -468,7 +515,6 @@ struct display {
     int gesturePosY;
     int gestureLength;
     int touch_id[MAX_TOUCHPOINTS];
-    std::map<struct wl_surface *, struct layerFrame> layers;
 
     open_windows windows;
 
@@ -488,15 +534,8 @@ struct display {
 
     std::recursive_mutex windowsMutex;
 
-    std::map<int, struct wl_surface *> touch_surfaces;
-    struct wl_surface *pointer_surface;
-    struct wl_surface *tablet_surface;
-    std::list<struct zwp_tablet_tool_v2 *> tablet_tools;
-    std::map<struct zwp_tablet_tool_v2 *, uint16_t> tablet_tools_evt;
-    uint32_t keyboard_enter_serial;
     std::string clipboard;
     std::list<std::string> clipboard_offer_mime_types;
-    uint32_t pointer_enter_serial;
     struct {float x; float y;} cursor_hotspot;
 
     EGLDisplay egl_dpy;
@@ -512,37 +551,18 @@ struct display {
     int req_height;
     int refresh;
 
-    std::unordered_set<uint32_t> formats;
-
-    std::map<uint32_t, std::vector<uint64_t>> modifiers;
     std::map<uint32_t, std::string> layer_names;
     std::map<uint32_t, struct handleExt> layer_handles_ext;
     struct handleExt target_layer_handle_ext;
-    std::unordered_map<buffer_handle_t, std::shared_ptr<buffer>> buffer_map;
     std::array<uint8_t, 239> keysDown;
 
     std::unique_ptr<cursor_handler> cursor_handler;
-    bool supports_cursor_viewport;
-    bool supports_cursor_hw_buffer;
 
     bool isMaximized;
     sp<IWaydroidTask> task;
 
     const hwc_procs_t *procs;
     bool needHotplug;
-
-    /*
-     * Reconnect support. When the host compositor drops our wl_client (e.g.
-     * Lomiri tearing down the connection on a single toplevel close), the
-     * wayland thread sets wl_alive=false and parks on reconnect_resume instead
-     * of aborting the whole HAL. The hwc compose thread (which owns pdev, and
-     * therefore the cursor handler) performs the actual reconnect and posts
-     * reconnect_resume to wake the wayland thread on the new connection.
-     */
-    std::atomic<bool> wl_alive{true};
-    sem_t reconnect_resume;
-    /* Last reconnect, for the retry backoff. */
-    struct timespec last_reconnect {};
 
     /* Desired Android screen state, tracked so we only inject a sleep/wake
      * key on an actual on<->off transition driven by host visibility. */
@@ -579,7 +599,7 @@ destroy_display(struct display *display);
  * Tear down all wayland-side state of a disconnected display and reconnect,
  * rebinding globals. Caller MUST hold display->windowsMutex and MUST recreate
  * the cursor handler afterwards (it lives in hwcomposer.cpp and holds surfaces
- * that this drops). On return display->display is a fresh, bound connection.
+ * that this drops). On return display->ctl->display is a fresh, bound connection.
  */
 void
 reconnect_display(struct display *display);

@@ -86,13 +86,13 @@ namespace {
     }
 
     std::shared_ptr<buffer> find_cached_buffer(waydroid_hwc_composer_device_1 *pdev, const buffer_metadata &metadata, buffer_handle_t handle) {
-        auto it = pdev->display->buffer_map.find(handle);
-        if (it != pdev->display->buffer_map.end()) {
+        auto it = pdev->display->ctl->buffer_map.find(handle);
+        if (it != pdev->display->ctl->buffer_map.end()) {
             /* FIXME We can't be sure that our cached buffer actually refers to the buffer corresponding to the given handle
              * It's possible that a new buffer got the same handle after the old one was destroyed
              * At least check for the metadata to match. This way this situation is hopefully unlikely */
             if (it->second->metadata != metadata) {
-                pdev->display->buffer_map.erase(it);
+                pdev->display->ctl->buffer_map.erase(it);
             } else {
                 return it->second;
             }
@@ -127,14 +127,14 @@ namespace {
                 ALOGE("failed to create a wayland buffer");
                 return nullptr;
             }
-            auto emplace_result = pdev->display->buffer_map.emplace(layer->handle, std::shared_ptr<buffer>(std::move(result)));
+            auto emplace_result = pdev->display->ctl->buffer_map.emplace(layer->handle, std::shared_ptr<buffer>(std::move(result)));
             assert(emplace_result.second);
             buf = emplace_result.first->second;
 
             static uint32_t creates = 0;
             if (++creates % 300 == 0)
                 ALOGI("get_wl_buffer: %u wl_buffers created so far (map=%zu)",
-                      creates, pdev->display->buffer_map.size());
+                      creates, pdev->display->ctl->buffer_map.size());
         }
 
         if (buf->isShm)
@@ -543,12 +543,12 @@ int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 
                       2*WINDOW_DECORATION_OUTSET + ceil((hwc_layer->displayFrame.bottom - hwc_layer->displayFrame.top) / pdev->display->scale));
     }
 
-    pdev->display->layers[window_layer.surface] = {
+    pdev->display->ctl->layers[window_layer.surface] = {
             .x = hwc_layer->displayFrame.left,
             .y = hwc_layer->displayFrame.top };
 
-    if (window->display->presentation) {
-        auto feedback = wp_presentation_feedback(window->display->presentation, window_layer.surface);
+    if (window->display->ctl->presentation) {
+        auto feedback = wp_presentation_feedback(window->display->ctl->presentation, window_layer.surface);
         wp_presentation_feedback_add_listener(feedback,&feedback_listener, pdev);
     }
 
@@ -587,8 +587,8 @@ static void maybe_dump_hal_state(waydroid_hwc_composer_device_1 *pdev, hwc_displ
     ALOGI("=== HAL STATE DUMP ===");
     ALOGI("active_apps=%s multi_windows=%d should_compose=%d wl_alive=%d",
           property_get_string("waydroid.active_apps", "none").c_str(),
-          pdev->multi_windows, pdev->should_compose, pdev->display->wl_alive.load());
-    ALOGI("buffer_map=%zu layers=%zu", pdev->display->buffer_map.size(), contents->numHwLayers);
+          pdev->multi_windows, pdev->should_compose, pdev->display->ctl->wl_alive.load());
+    ALOGI("buffer_map=%zu layers=%zu", pdev->display->ctl->buffer_map.size(), contents->numHwLayers);
 
     for (size_t l = 0; l < contents->numHwLayers; l++) {
         auto *layer = &contents->hwLayers[l];
@@ -655,9 +655,9 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
      * pdev, hence the cursor handler) before touching any wayland proxy.
      * Defer the reconnect until a frame has a window to map: a bare client
      * connection already makes qtmir spawn a splash-screen application. */
-    if (!pdev->display->wl_alive.load()) {
+    if (!pdev->display->ctl->wl_alive.load()) {
         std::scoped_lock lock(pdev->display->windowsMutex);
-        if (!pdev->display->wl_alive.load()) {
+        if (!pdev->display->ctl->wl_alive.load()) {
             /* frame_has_content skips close-pending tasks, so a stale mark
              * on the only visible task would also block reconnecting. */
             pdev->display->expire_closing_marks();
@@ -686,8 +686,8 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             }
             reconnect_display(pdev->display);
             init_cursor_handler(pdev);
-            pdev->display->wl_alive = true;
-            sem_post(&pdev->display->reconnect_resume);
+            pdev->display->ctl->wl_alive = true;
+            sem_post(&pdev->display->ctl->reconnect_resume);
         }
     }
 
@@ -712,9 +712,9 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
             last_names = names;
         } else if (geom_count % 120 == 0) {
             ALOGI("geometry changed #%u with same layer set: %s (map=%zu)",
-                  geom_count, names.c_str(), pdev->display->buffer_map.size());
+                  geom_count, names.c_str(), pdev->display->ctl->buffer_map.size());
         }
-        pdev->display->buffer_map.clear();
+        pdev->display->ctl->buffer_map.clear();
     }
 
     auto& mode = pdev->selected_mode;
@@ -747,14 +747,14 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
         }
         wl_surface_commit(window->surface);
     }
-    wl_display_flush(pdev->display->display);
+    wl_display_flush(pdev->display->ctl->display);
 
     sw_sync_timeline_inc(pdev->timeline_fd, 1);
     contents->retireFenceFd = sw_sync_fence_create(pdev->timeline_fd, "hwc_contents_release", ++pdev->next_sync_point);
 
     if (pdev->display->needHotplug && pdev->procs && pdev->procs->hotplug) {
         pdev->procs->hotplug(pdev->procs, 0, 1);
-        pdev->display->buffer_map.clear();
+        pdev->display->ctl->buffer_map.clear();
         pdev->display->needHotplug = false;
     }
     return 0;
@@ -904,7 +904,7 @@ static int hwc_set_cursor_position_async(struct hwc_composer_device_1 *, int, in
 static int hwc_close(hw_device_t* dev) {
     auto *pdev = reinterpret_cast<waydroid_hwc_composer_device_1 *>(dev);
 
-    pdev->display->buffer_map.clear();
+    pdev->display->ctl->buffer_map.clear();
 
     destroy_display(pdev->display);
 
@@ -1042,13 +1042,13 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     /* A HAL restart must not leave SF trusting a stale value; select_mode
      * only publishes on transitions. */
     property_set("waydroid.task_streams_active", "0");
-    if (pdev->multi_windows && !pdev->display->subcompositor) {
+    if (pdev->multi_windows && !pdev->display->ctl->subcompositor) {
         ALOGW("multi window mode requested but wl_subcompositor is not supported. Disabling it.");
         pdev->multi_windows = false;
     }
     pdev->use_subsurface = property_get_bool("persist.waydroid.use_subsurface", false);
     pdev->should_compose = pdev->use_subsurface || pdev->multi_windows;
-    if (pdev->should_compose && !pdev->display->subcompositor) {
+    if (pdev->should_compose && !pdev->display->ctl->subcompositor) {
         ALOGW("usage of subsurfaces requested but wl_subcompositor is not supported. Disabling it.");
         pdev->should_compose = false;
         pdev->use_subsurface = false;
@@ -1122,7 +1122,7 @@ void subsurface_cursor_handler::clear_previous_subsurface_if_needed(waydroid_hwc
 }
 
 int subsurface_cursor_handler::apply_cursor(waydroid_hwc_composer_device_1* pdev, hwc_layer_1* hwc_layer, size_t hwc_layer_index) {
-    if (!pdev->display->pointer_surface) {
+    if (!pdev->display->ctl->pointer_surface) {
         if (hwc_layer->acquireFenceFd != -1) {
             close(hwc_layer->acquireFenceFd);
         }
@@ -1132,9 +1132,9 @@ int subsurface_cursor_handler::apply_cursor(waydroid_hwc_composer_device_1* pdev
 
     auto window_it = std::find_if(pdev->display->windows.begin(), pdev->display->windows.end(), [&](const auto &it){
         auto &window = it.second;
-        return window->surface == pdev->display->pointer_surface
+        return window->surface == pdev->display->ctl->pointer_surface
                || std::any_of(window->layers.begin(), window->layers.end(), [&](const auto &layer) {
-                      return layer.surface == pdev->display->pointer_surface;
+                      return layer.surface == pdev->display->ctl->pointer_surface;
                   });
     });
     if (window_it == pdev->display->windows.end()) {
@@ -1162,8 +1162,8 @@ int subsurface_cursor_handler::reset_cursor(waydroid_hwc_composer_device_1* pdev
 }
 
 int subsurface_cursor_handler::on_cursor_enter(display* display) {
-    if (display->pointer) {
-        wl_pointer_set_cursor(display->pointer, display->pointer_enter_serial,
+    if (display->ctl->pointer) {
+        wl_pointer_set_cursor(display->ctl->pointer, display->ctl->pointer_enter_serial,
                               nullptr,
                               0,
                               0);
@@ -1172,30 +1172,30 @@ int subsurface_cursor_handler::on_cursor_enter(display* display) {
 }
 
 wl_cursor_cursor_handler::wl_cursor_cursor_handler(waydroid_hwc_composer_device_1* pdev) {
-    cursor_surface_context.surface = wl_compositor_create_surface(pdev->display->compositor);
-    if (pdev->display->viewporter && pdev->display->supports_cursor_viewport) {
+    cursor_surface_context.surface = wl_compositor_create_surface(pdev->display->ctl->compositor);
+    if (pdev->display->ctl->viewporter && pdev->display->ctl->supports_cursor_viewport) {
         cursor_surface_context.viewport =
-                wp_viewporter_get_viewport(pdev->display->viewporter, cursor_surface_context.surface);
+                wp_viewporter_get_viewport(pdev->display->ctl->viewporter, cursor_surface_context.surface);
     }
 }
 
 std::unique_ptr<buffer> wl_cursor_cursor_handler::create_buffer(waydroid_hwc_composer_device_1* pdev, const buffer_metadata& metadata, hwc_layer_1 *hwc_layer) {
-    if (pdev->display->supports_cursor_hw_buffer)
+    if (pdev->display->ctl->supports_cursor_hw_buffer)
         return cursor_handler::create_buffer(pdev, metadata, hwc_layer);
     else
         return create_shm_wl_buffer (pdev->display, metadata, hwc_layer->handle);
 }
 
 void wl_cursor_cursor_handler::set_cursor(display* display) const {
-    assert(display->pointer);
-    wl_pointer_set_cursor (display->pointer, display->pointer_enter_serial,
+    assert(display->ctl->pointer);
+    wl_pointer_set_cursor (display->ctl->pointer, display->ctl->pointer_enter_serial,
                           cursor_surface_context.surface,
                           round(display->cursor_hotspot.x / display->scale),
                           round(display->cursor_hotspot.y / display->scale));
 }
 
 int wl_cursor_cursor_handler::apply_cursor(waydroid_hwc_composer_device_1* pdev, hwc_layer_1* hwc_layer, size_t hwc_layer_index) {
-    if (pdev->display->pointer) {
+    if (pdev->display->ctl->pointer) {
         if (apply_hwc_layer_to_surface_context(pdev, hwc_layer, hwc_layer_index, cursor_surface_context) != 0) {
             ALOGE("Failed to prepare cursur surface");
             return -1;
@@ -1206,8 +1206,8 @@ int wl_cursor_cursor_handler::apply_cursor(waydroid_hwc_composer_device_1* pdev,
 }
 
 int wl_cursor_cursor_handler::reset_cursor(waydroid_hwc_composer_device_1* pdev) {
-    if (pdev->display->pointer) {
-        wl_pointer_set_cursor(pdev->display->pointer, pdev->display->pointer_enter_serial,
+    if (pdev->display->ctl->pointer) {
+        wl_pointer_set_cursor(pdev->display->ctl->pointer, pdev->display->ctl->pointer_enter_serial,
                               nullptr,
                               0,
                               0);

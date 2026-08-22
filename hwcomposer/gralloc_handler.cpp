@@ -96,7 +96,7 @@ std::unique_ptr<buffer> create_shm_wl_buffer(display *display, const buffer_meta
         close(fd);
         return nullptr;
     }
-    struct wl_shm_pool *pool = wl_shm_create_pool(display->shm, fd, size);
+    struct wl_shm_pool *pool = wl_shm_create_pool(display->ctl->shm, fd, size);
     buf->wl_buffer = wl_shm_pool_create_buffer(pool, 0, metadata.width, metadata.height, shm_stride, shm_format);
     wl_buffer_add_listener(buf->wl_buffer, &buffer_listener, nullptr);
     wl_shm_pool_destroy(pool);
@@ -119,7 +119,7 @@ namespace {
     };
 
     bool isFormatSupported(struct display *display, uint32_t format) {
-        return display->formats.count(format) == 1;
+        return display->ctl->formats.count(format) == 1;
     }
 
     uint32_t ConvertHalFormatToDrm(struct display *display, uint32_t hal_format) {
@@ -183,7 +183,7 @@ std::unique_ptr<buffer> create_dmabuf_wl_buffer(display *display, const buffer_m
     }
     assert(drm_format >= 0);
 
-    zwp_linux_buffer_params_v1 *params = zwp_linux_dmabuf_v1_create_params(display->dmabuf);
+    zwp_linux_buffer_params_v1 *params = zwp_linux_dmabuf_v1_create_params(display->ctl->dmabuf);
     zwp_linux_buffer_params_v1_add(params, prime_fd, 0, offset, byte_stride, modifier >> 32, modifier & 0xffffffff);
     zwp_linux_buffer_params_v1_add_listener(params, &params_listener, nullptr);
 
@@ -196,7 +196,7 @@ std::unique_ptr<buffer> create_dmabuf_wl_buffer(display *display, const buffer_m
 std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_metadata& metadata, buffer_handle_t handle,
                                                  const wl_buffer_listener *listener, void *listener_data)
 {
-    if (!display->android_wlegl) {
+    if (!display->ctl->android_wlegl) {
         ALOGE("create_android_wl_buffer called without android_wlegl");
         return nullptr;
     }
@@ -210,7 +210,7 @@ std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_
     wl_array_init(&ints);
     int *the_ints = (int *)wl_array_add(&ints, handle->numInts * sizeof(int));
     memcpy(the_ints, handle->data + handle->numFds, handle->numInts * sizeof(int));
-    android_wlegl_handle *wlegl_handle = android_wlegl_create_handle(display->android_wlegl, handle->numFds, &ints);
+    android_wlegl_handle *wlegl_handle = android_wlegl_create_handle(display->ctl->android_wlegl, handle->numFds, &ints);
     wl_array_release(&ints);
     if (!wlegl_handle) {
         ALOGE("android_wlegl_create_handle failed");
@@ -229,7 +229,7 @@ std::unique_ptr<buffer> create_android_wl_buffer(display *display, const buffer_
         android_wlegl_handle_add_fd(wlegl_handle, handle->data[i]);
     }
 
-    buf->wl_buffer = android_wlegl_create_buffer(display->android_wlegl, buf->metadata.width, buf->metadata.height, buf->metadata.pixel_stride, metadata.format, GRALLOC_USAGE_HW_RENDER, wlegl_handle);
+    buf->wl_buffer = android_wlegl_create_buffer(display->ctl->android_wlegl, buf->metadata.width, buf->metadata.height, buf->metadata.pixel_stride, metadata.format, GRALLOC_USAGE_HW_RENDER, wlegl_handle);
     android_wlegl_handle_destroy(wlegl_handle);
     if (!buf->wl_buffer) {
         ALOGE("android_wlegl_create_buffer failed for format=%u stride=%u %ux%u handle=%p",
@@ -438,12 +438,12 @@ gralloc_handler::get_buffer_metadata_func gralloc_handler::select_get_buffer_met
 }
 
 gralloc_handler::create_buffer_func gralloc_handler::select_create_buffer_impl(display *display, GrallocType gralloc_type) {
-    if (gralloc_type == GrallocType::GRALLOC_GBM && display->dmabuf) {
+    if (gralloc_type == GrallocType::GRALLOC_GBM && display->ctl->dmabuf) {
         return create_buffer_gbm;
-    } else if (gralloc_type == GrallocType::GRALLOC_CROS && display->dmabuf) {
+    } else if (gralloc_type == GrallocType::GRALLOC_CROS && display->ctl->dmabuf) {
         return create_buffer_cros;
     } else if (gralloc_type == GrallocType::GRALLOC_ANDROID) {
-        if (display->android_wlegl)
+        if (display->ctl->android_wlegl)
             return create_buffer_android;
         ALOGE("GRALLOC_ANDROID requested, but android_wlegl is unavailable on the Wayland compositor");
         return create_buffer_missing_android_wlegl;

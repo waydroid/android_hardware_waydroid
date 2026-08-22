@@ -202,7 +202,7 @@ attach_pending_stream_buffer(struct window *window)
         if (layer.viewport)
             wp_viewport_set_destination(layer.viewport, display->width, display->height);
         wl_surface_commit(layer.surface);
-        wl_display_flush(display->display);
+        wl_display_flush(display->ctl->display);
     }
 }
 
@@ -262,7 +262,7 @@ finished_calibrating(struct display *d)
 
 void
 do_hotplug(struct display *display) {
-    if (display->touch) {
+    if (display->ctl->touch) {
         char property[PROPERTY_VALUE_MAX];
         int width = floor(display->width * display->scale);
         int height = floor(display->height * display->scale);
@@ -345,7 +345,7 @@ reassert_task_focus(struct display *display, struct wl_surface *surface, const c
     /* Only from the wayland thread. window::create pumps configure events from
      * hwc_set with windowsMutex held, and a binder call under that lock
      * deadlocks against the adapter mutex. */
-    if (!pthread_equal(pthread_self(), display->wayland_thread))
+    if (!pthread_equal(pthread_self(), display->ctl->wayland_thread))
         return;
 
     int task_id;
@@ -495,7 +495,7 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
     if (display->height && display->width) {
         const int32_t old_width = display->width, old_height = display->height;
         choose_width_height(display, width, height);
-        if (display->wm_base)
+        if (display->ctl->wm_base)
             xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width, display->height);
         /* Only a real size change warrants a hotplug. Every window creation
          * lands here with the unchanged display size, and hotplugging then is
@@ -556,10 +556,10 @@ xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
      * (qtmir authorizes clients only at connect time), never presenting our
      * windows again. Kill the socket; hwc_set reconnects. Not needed with
      * shells that keep the session presentable. */
-    if (display->windows.size() == 0 && display->wl_alive.load() &&
+    if (display->windows.size() == 0 && display->ctl->wl_alive.load() &&
             property_get_bool("persist.waydroid.reconnect_on_close", true)) {
         ALOGI("last toplevel closed by compositor, forcing wayland reconnect");
-        shutdown(wl_display_get_fd(display->display), SHUT_RDWR);
+        shutdown(wl_display_get_fd(display->ctl->display), SHUT_RDWR);
     }
 }
 
@@ -696,7 +696,7 @@ void window::set_maximize(bool enabled) {
     } else {
         assert(shell_surface);
         if (enabled) {
-            wl_shell_surface_set_maximized(shell_surface, display->output);
+            wl_shell_surface_set_maximized(shell_surface, display->ctl->output);
         } else {
             ALOGW("wl_shell_surface: does not support un-maximizing");
         }
@@ -730,7 +730,7 @@ void window::minimize() {
     if (xdg_toplevel) {
         xdg_toplevel_set_minimized(xdg_toplevel);
         wl_surface_commit(surface); // unclear if this is required
-        wl_display_flush(display->display);
+        wl_display_flush(display->ctl->display);
     }
 }
 
@@ -760,13 +760,13 @@ window::~window() {
             zwp_locked_pointer_v1_destroy(locked_pointer);
     }
 
-    wl_display_flush(display->display);
+    wl_display_flush(display->ctl->display);
 }
 
 static void fractional_scale_handle_preferred_scale(void *data, struct wp_fractional_scale_v1 *,
             uint32_t scale_times_120) {
     struct display *display = (struct display *)data;
-    if (!display->viewporter) {
+    if (!display->ctl->viewporter) {
         // We should always have the viewporter if we have the fractional scale manager
         // but for debugging purpuses we may decide to disable one
         return;
@@ -819,11 +819,11 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
 
     window->display = display;
     ALOGI("creating toplevel task=%s app=%s", taskID.c_str(), appID.c_str());
-    window->surface = wl_compositor_create_surface(display->compositor);
+    window->surface = wl_compositor_create_surface(display->ctl->compositor);
     wl_surface_set_user_data(window->surface, window.get());
     wl_surface_add_listener(window->surface, &surface_listener, window.get());
-    if (display->viewporter)
-        window->viewport = wp_viewporter_get_viewport(display->viewporter, window->surface);
+    if (display->ctl->viewporter)
+        window->viewport = wp_viewporter_get_viewport(display->ctl->viewporter, window->surface);
     window->taskID = std::move(taskID);
     window->dedicated_background_surface = true;
     window->bg_buffer = nullptr;
@@ -836,15 +836,15 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
         close(fd);
         exit(1);
     }
-    struct wl_shm_pool *pool = wl_shm_create_pool(display->shm, fd, 4);
+    struct wl_shm_pool *pool = wl_shm_create_pool(display->ctl->shm, fd, 4);
     close(fd);
 
     // Is this the first window created?
     bool calibrating = !display->height || !display->width;
 
-    if (display->wm_base) {
+    if (display->ctl->wm_base) {
         window->xdg_surface =
-                xdg_wm_base_get_xdg_surface(display->wm_base, window->surface);
+                xdg_wm_base_get_xdg_surface(display->ctl->wm_base, window->surface);
         assert(window->xdg_surface);
         xdg_surface_add_listener(window->xdg_surface,
                                      &xdg_surface_listener, window.get());
@@ -852,9 +852,9 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
         window->xdg_toplevel = xdg_surface_get_toplevel(window->xdg_surface);
         assert(window->xdg_toplevel);
         xdg_toplevel_add_listener(window->xdg_toplevel, &xdg_toplevel_listener, window.get());
-    } else if (display->shell) {
+    } else if (display->ctl->shell) {
         window->shell_surface =
-            wl_shell_get_shell_surface(display->shell, window->surface);
+            wl_shell_get_shell_surface(display->ctl->shell, window->surface);
         assert(window->shell_surface);
         wl_shell_surface_add_listener(window->shell_surface, &shell_surface_listener, window.get());
         wl_shell_surface_set_toplevel(window->shell_surface);
@@ -887,18 +887,18 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
     if (sync_configure) {
         // Wait for first configure event
         do {
-            wl_display_roundtrip(display->display);
+            wl_display_roundtrip(display->ctl->display);
         } while (!window->configured);
     } else {
-        wl_display_flush(display->display);
+        wl_display_flush(display->ctl->display);
     }
 
     if (calibrating) {
         wp_fractional_scale_v1* fs = nullptr;
-        if (display->fractional_scale_manager) {
+        if (display->ctl->fractional_scale_manager) {
             // We only support one global scale
             fs = wp_fractional_scale_manager_v1_get_fractional_scale(
-                    display->fractional_scale_manager, window->surface);
+                    display->ctl->fractional_scale_manager, window->surface);
             wp_fractional_scale_v1_add_listener(fs, &fractional_scale_listener, display);
         }
 
@@ -911,7 +911,7 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
         if (window->viewport && display->req_width && display->req_height)
             wp_viewport_set_destination(window->viewport, display->req_width, display->req_height);
         wl_surface_commit(window->surface);
-        wl_display_roundtrip(display->display);
+        wl_display_roundtrip(display->ctl->display);
 
         if (fs) {
             wp_fractional_scale_v1_destroy(fs);
@@ -930,10 +930,10 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
             window->set_maximize(false);
     }
 
-    if (display->wm_base)
+    if (display->ctl->wm_base)
         xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width, display->height);
 
-    struct wl_region *region = wl_compositor_create_region(display->compositor);
+    struct wl_region *region = wl_compositor_create_region(display->ctl->compositor);
     if (color.a == 0) {
         wl_surface_set_input_region(window->surface, region);
         if (display->system_version >= 33)
@@ -949,8 +949,8 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
 
     // TODO: Fix background when viewport is not supported
     // No subsurface background for us!
-    if (!display->subcompositor ||
-        !display->viewporter ||
+    if (!display->ctl->subcompositor ||
+        !display->ctl->viewporter ||
         property_get_bool("persist.waydroid.no_background_subsurface", false)) {
         window->dedicated_background_surface = false;
         window->layers.emplace_back(window->surface, window->viewport);
@@ -1054,11 +1054,11 @@ window::layer& window::get_next_layer() {
 }
 
 window::layer& window::create_new_layer() {
-    wl_surface *surface = wl_compositor_create_surface(display->compositor);
-    wl_subsurface *subsurface = wl_subcompositor_get_subsurface(display->subcompositor, surface, this->surface);
+    wl_surface *surface = wl_compositor_create_surface(display->ctl->compositor);
+    wl_subsurface *subsurface = wl_subcompositor_get_subsurface(display->ctl->subcompositor, surface, this->surface);
     wp_viewport *viewport = nullptr;
-    if (display->viewporter)
-        viewport = wp_viewporter_get_viewport(display->viewporter, surface);
+    if (display->ctl->viewporter)
+        viewport = wp_viewporter_get_viewport(display->ctl->viewporter, surface);
 
     return layers.emplace_back(surface, viewport, subsurface);
 }
@@ -1276,7 +1276,7 @@ int post_task_buffer(struct waydroid_hwc_composer_device_1 *pdev, uint32_t taskI
     struct display *display = pdev->display;
     std::scoped_lock lock(display->windowsMutex);
 
-    if (!pdev->task_streams_mode_active || !display->wl_alive)
+    if (!pdev->task_streams_mode_active || !display->ctl->wl_alive)
         return -EAGAIN;
 
     const std::string tid = std::to_string(taskId);
@@ -1376,7 +1376,7 @@ int post_task_buffer(struct waydroid_hwc_composer_device_1 *pdev, uint32_t taskI
         /* xdg-shell forbids attaching before the initial configure is acked;
          * the configure handler (wayland thread) attaches this buffer. */
         w->pending_stream_buffer = sb.buf;
-        wl_display_flush(display->display);
+        wl_display_flush(display->ctl->display);
     } else {
         /* A live attach supersedes any frame stashed while deactivated. */
         w->pending_stream_buffer = nullptr;
@@ -1386,7 +1386,7 @@ int post_task_buffer(struct waydroid_hwc_composer_device_1 *pdev, uint32_t taskI
         if (layer.viewport)
             wp_viewport_set_destination(layer.viewport, display->width, display->height);
         wl_surface_commit(layer.surface);
-        wl_display_flush(display->display);
+        wl_display_flush(display->ctl->display);
     }
 
     sb.busy = true;
@@ -1410,7 +1410,7 @@ int update_task_list(struct waydroid_hwc_composer_device_1 *pdev,
     struct display *display = pdev->display;
     std::scoped_lock lock(display->windowsMutex);
 
-    if (!pdev->task_streams_mode_active || !display->wl_alive)
+    if (!pdev->task_streams_mode_active || !display->ctl->wl_alive)
         return -EAGAIN;
 
     for (uint32_t taskId : tasks) {
@@ -1475,7 +1475,7 @@ keyboard_handle_enter(void *data, struct wl_keyboard *,
     }
 
     struct display *display = (struct display *)data;
-    display->keyboard_enter_serial = serial;
+    display->ctl->keyboard_enter_serial = serial;
 
     std::scoped_lock lock(display->windowsMutex);
     auto window = reinterpret_cast<struct window *>(wl_surface_get_user_data(surface));
@@ -1555,8 +1555,8 @@ pointer_handle_enter(void *data, struct wl_pointer *,
     }
 
     struct display *display = (struct display *)data;
-    display->pointer_surface = surface;
-    display->pointer_enter_serial = serial;
+    display->ctl->pointer_surface = surface;
+    display->ctl->pointer_enter_serial = serial;
     display->cursor_handler->on_cursor_enter(display);
 }
 
@@ -1565,7 +1565,7 @@ pointer_handle_leave(void *data, struct wl_pointer *,
                      uint32_t, struct wl_surface *)
 {
     struct display *display = (struct display *)data;
-    display->pointer_surface = NULL;
+    display->ctl->pointer_surface = NULL;
 }
 
 static void
@@ -1581,7 +1581,7 @@ pointer_handle_motion(void *data, struct wl_pointer *,
     if (ensure_pipe(display, INPUT_POINTER))
         return;
 
-    if (!display->pointer_surface)
+    if (!display->ctl->pointer_surface)
         return;
 
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
@@ -1594,8 +1594,8 @@ pointer_handle_motion(void *data, struct wl_pointer *,
         x = int(x * display->scale);
         y = int(y * display->scale);
     }
-    x += display->layers[display->pointer_surface].x;
-    y += display->layers[display->pointer_surface].y;
+    x += display->ctl->layers[display->ctl->pointer_surface].x;
+    y += display->ctl->layers[display->ctl->pointer_surface].y;
 
     ADD_EVENT(EV_ABS, ABS_X, x);
     ADD_EVENT(EV_ABS, ABS_Y, y);
@@ -1661,11 +1661,11 @@ pointer_handle_button(void *data, struct wl_pointer *,
     if (ensure_pipe(display, INPUT_POINTER))
         return;
 
-    if (!display->pointer_surface)
+    if (!display->ctl->pointer_surface)
         return;
 
     if (state == WL_POINTER_BUTTON_STATE_PRESSED)
-        reassert_task_focus(display, display->pointer_surface, "click");
+        reassert_task_focus(display, display->ctl->pointer_surface, "click");
 
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
         ALOGE("%s:%d error in touch clock_gettime: %s",
@@ -1694,7 +1694,7 @@ pointer_handle_axis(void *data, struct wl_pointer *,
     if (ensure_pipe(display, INPUT_POINTER))
         return;
 
-    if (!display->pointer_surface)
+    if (!display->ctl->pointer_surface)
         return;
 
     if (!display->reverseScroll) {
@@ -1702,22 +1702,22 @@ pointer_handle_axis(void *data, struct wl_pointer *,
     }
 
     if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL) {
-        display->wheelAccumulatorY += fVal;
-        if (std::abs(display->wheelAccumulatorY) < step)
+        display->ctl->wheelAccumulatorY += fVal;
+        if (std::abs(display->ctl->wheelAccumulatorY) < step)
             return;
-        move = (int)(display->wheelAccumulatorY / step);
-        display->wheelAccumulatorY = display->wheelEvtIsDiscrete ? 0 :
-                                     std::fmod(display->wheelAccumulatorY, step);
+        move = (int)(display->ctl->wheelAccumulatorY / step);
+        display->ctl->wheelAccumulatorY = display->ctl->wheelEvtIsDiscrete ? 0 :
+                                     std::fmod(display->ctl->wheelAccumulatorY, step);
     } else {
-        display->wheelAccumulatorX += fVal;
-        if (std::abs(display->wheelAccumulatorX) < step)
+        display->ctl->wheelAccumulatorX += fVal;
+        if (std::abs(display->ctl->wheelAccumulatorX) < step)
             return;
-        move = (int)(display->wheelAccumulatorX / step);
-        display->wheelAccumulatorX = display->wheelEvtIsDiscrete ? 0 :
-                                     std::fmod(display->wheelAccumulatorY, step);
+        move = (int)(display->ctl->wheelAccumulatorX / step);
+        display->ctl->wheelAccumulatorX = display->ctl->wheelEvtIsDiscrete ? 0 :
+                                     std::fmod(display->ctl->wheelAccumulatorY, step);
     }
 
-    if (display->wheelEvtIsTouchpad) {
+    if (display->ctl->wheelEvtIsTouchpad) {
         gesture_swipe_update(display, axis, move);
         return;
     }
@@ -1739,11 +1739,11 @@ static void
 pointer_handle_axis_source(void *data, struct wl_pointer *, uint32_t source)
 {
     struct display* display = (struct display*)data;
-    display->wheelEvtIsDiscrete = (source == WL_POINTER_AXIS_SOURCE_WHEEL);
-    display->wheelEvtIsTouchpad = (source == WL_POINTER_AXIS_SOURCE_FINGER);
+    display->ctl->wheelEvtIsDiscrete = (source == WL_POINTER_AXIS_SOURCE_WHEEL);
+    display->ctl->wheelEvtIsTouchpad = (source == WL_POINTER_AXIS_SOURCE_FINGER);
 
-    if (display->wheelEvtIsTouchpad)
-        gesture_swipe_begin(display, display->pointer_enter_serial);
+    if (display->ctl->wheelEvtIsTouchpad)
+        gesture_swipe_begin(display, display->ctl->pointer_enter_serial);
 }
 
 static void
@@ -1751,7 +1751,7 @@ pointer_handle_axis_stop(void *data, struct wl_pointer *, uint32_t, uint32_t)
 {
     struct display* display = (struct display*)data;
 
-    if (display->wheelEvtIsTouchpad)
+    if (display->ctl->wheelEvtIsTouchpad)
         gesture_swipe_end(display);
 }
 
@@ -1851,7 +1851,7 @@ touch_handle_down(void *data, struct wl_touch *,
     reassert_task_focus(display, surface, "touch");
 
     int touch_id = create_touch_id(display, id);
-    display->touch_surfaces[id] = surface;
+    display->ctl->touch_surfaces[id] = surface;
 
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
        ALOGE("%s:%d error in touch clock_gettime: %s",
@@ -1863,8 +1863,8 @@ touch_handle_down(void *data, struct wl_touch *,
         x = int(x * display->scale);
         y = int(y * display->scale);
     }
-    x += display->layers[surface].x;
-    y += display->layers[surface].y;
+    x += display->ctl->layers[surface].x;
+    y += display->ctl->layers[surface].y;
 
     ADD_EVENT(EV_ABS, ABS_MT_SLOT, touch_id);
     ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, touch_id);
@@ -1897,7 +1897,7 @@ touch_handle_up(void *data, struct wl_touch *,
             ALOGE("%s:%d error in touch clock_gettime: %s",
                   __FILE__, __LINE__, strerror(errno));
         }
-        display->touch_surfaces[id] = NULL;
+        display->ctl->touch_surfaces[id] = NULL;
 
         ADD_EVENT(EV_ABS, ABS_MT_SLOT, touch_id);
         ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, -1);
@@ -1935,8 +1935,8 @@ touch_handle_motion(void *data, struct wl_touch *,
             x = int(x * display->scale);
             y = int(y * display->scale);
         }
-        x += display->layers[display->touch_surfaces[id]].x;
-        y += display->layers[display->touch_surfaces[id]].y;
+        x += display->ctl->layers[display->ctl->touch_surfaces[id]].x;
+        y += display->ctl->layers[display->ctl->touch_surfaces[id]].y;
 
         ADD_EVENT(EV_ABS, ABS_MT_SLOT, touch_id);
         ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, touch_id);
@@ -1978,7 +1978,7 @@ touch_handle_cancel(void *data, struct wl_touch *)
         if (display->touch_id[i] != -1) {
             id = display->touch_id[i];
             display->touch_id[i] = -1;
-            display->touch_surfaces[id] = NULL;
+            display->ctl->touch_surfaces[id] = NULL;
 
             n = 0;
             // Turn finger into palm.
@@ -2267,8 +2267,8 @@ seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t wl_caps)
     struct display *d = (struct display*)data;
     enum wl_seat_capability caps = (enum wl_seat_capability) wl_caps;
 
-    if ((caps & WL_SEAT_CAPABILITY_POINTER) && !d->pointer) {
-        d->pointer = wl_seat_get_pointer(seat);
+    if ((caps & WL_SEAT_CAPABILITY_POINTER) && !d->ctl->pointer) {
+        d->ctl->pointer = wl_seat_get_pointer(seat);
         d->input_fd[INPUT_POINTER] = -1;
         d->ptrPrvX = 0;
         d->ptrPrvY = 0;
@@ -2278,42 +2278,42 @@ seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t wl_caps)
         d->gesturePoints[0] = d->gesturePoints[1] = -1;
         mkfifo(INPUT_PIPE_NAME[INPUT_POINTER], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
         chown(INPUT_PIPE_NAME[INPUT_POINTER], 1000, 1000);
-        wl_pointer_add_listener(d->pointer, &pointer_listener, d);
-    } else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && d->pointer) {
+        wl_pointer_add_listener(d->ctl->pointer, &pointer_listener, d);
+    } else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && d->ctl->pointer) {
         remove(INPUT_PIPE_NAME[INPUT_POINTER]);
-        wl_pointer_destroy(d->pointer);
-        d->pointer = NULL;
+        wl_pointer_destroy(d->ctl->pointer);
+        d->ctl->pointer = NULL;
     }
 
-    if ((caps & WL_SEAT_CAPABILITY_KEYBOARD) && !d->keyboard) {
-        d->keyboard = wl_seat_get_keyboard(seat);
+    if ((caps & WL_SEAT_CAPABILITY_KEYBOARD) && !d->ctl->keyboard) {
+        d->ctl->keyboard = wl_seat_get_keyboard(seat);
         d->input_fd[INPUT_KEYBOARD] = -1;
         mkfifo(INPUT_PIPE_NAME[INPUT_KEYBOARD], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
         chown(INPUT_PIPE_NAME[INPUT_KEYBOARD], 1000, 1000);
-        wl_keyboard_add_listener(d->keyboard, &keyboard_listener, d);
-    } else if (!(caps & WL_SEAT_CAPABILITY_KEYBOARD) && d->keyboard) {
+        wl_keyboard_add_listener(d->ctl->keyboard, &keyboard_listener, d);
+    } else if (!(caps & WL_SEAT_CAPABILITY_KEYBOARD) && d->ctl->keyboard) {
         remove(INPUT_PIPE_NAME[INPUT_KEYBOARD]);
-        wl_keyboard_destroy(d->keyboard);
-        d->keyboard = NULL;
+        wl_keyboard_destroy(d->ctl->keyboard);
+        d->ctl->keyboard = NULL;
     }
 
-    if ((caps & WL_SEAT_CAPABILITY_TOUCH) && !d->touch) {
-        d->touch = wl_seat_get_touch(seat);
+    if ((caps & WL_SEAT_CAPABILITY_TOUCH) && !d->ctl->touch) {
+        d->ctl->touch = wl_seat_get_touch(seat);
         d->input_fd[INPUT_TOUCH] = -1;
         mkfifo(INPUT_PIPE_NAME[INPUT_TOUCH], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
         chown(INPUT_PIPE_NAME[INPUT_TOUCH], 1000, 1000);
         for (int i = 0; i < MAX_TOUCHPOINTS; i++)
             d->touch_id[i] = -1;
-        wl_touch_set_user_data(d->touch, d);
-        wl_touch_add_listener(d->touch, &touch_listener, d);
-    } else if (!(caps & WL_SEAT_CAPABILITY_TOUCH) && d->touch) {
+        wl_touch_set_user_data(d->ctl->touch, d);
+        wl_touch_add_listener(d->ctl->touch, &touch_listener, d);
+    } else if (!(caps & WL_SEAT_CAPABILITY_TOUCH) && d->ctl->touch) {
         remove(INPUT_PIPE_NAME[INPUT_TOUCH]);
-        wl_touch_destroy(d->touch);
-        d->touch = NULL;
+        wl_touch_destroy(d->ctl->touch);
+        d->ctl->touch = NULL;
     }
 
-    if (d->pointer_gestures && d->pointer) {
-        if (!(caps & WL_SEAT_CAPABILITY_TOUCH) && !d->touch) {
+    if (d->ctl->pointer_gestures && d->ctl->pointer) {
+        if (!(caps & WL_SEAT_CAPABILITY_TOUCH) && !d->ctl->touch) {
             d->input_fd[INPUT_TOUCH] = -1;
             mkfifo(INPUT_PIPE_NAME[INPUT_TOUCH], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
             chown(INPUT_PIPE_NAME[INPUT_TOUCH], 1000, 1000);
@@ -2321,8 +2321,8 @@ seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t wl_caps)
                 d->touch_id[i] = -1;
         }
 
-        d->pointer_gesture_pinch = zwp_pointer_gestures_v1_get_pinch_gesture(d->pointer_gestures, d->pointer);
-        zwp_pointer_gesture_pinch_v1_add_listener(d->pointer_gesture_pinch, &pinch_listener, d);
+        d->ctl->pointer_gesture_pinch = zwp_pointer_gestures_v1_get_pinch_gesture(d->ctl->pointer_gestures, d->ctl->pointer);
+        zwp_pointer_gesture_pinch_v1_add_listener(d->ctl->pointer_gesture_pinch, &pinch_listener, d);
     }
 }
 
@@ -2350,20 +2350,20 @@ dmabuf_modifiers(void *data, struct zwp_linux_dmabuf_v1 * dmabuf,
 
     std::stringstream prop_name_stream;
     std::stringstream prop_value_stream;
-    prop_name_stream << "waydroid.modifiers." << std::hex << format << "." << std::dec << d->modifiers[format].size();
+    prop_name_stream << "waydroid.modifiers." << std::hex << format << "." << std::dec << d->ctl->modifiers[format].size();
     prop_value_stream << std::hex << modifier;
     std::string prop_name = prop_name_stream.str();
     std::string prop_value = prop_value_stream.str();
     property_set(prop_name.c_str(), prop_value.c_str());
 
-    d->modifiers[format].push_back(modifier);
+    d->ctl->modifiers[format].push_back(modifier);
 }
 
 static void
 dmabuf_format(void *data, struct zwp_linux_dmabuf_v1 *, uint32_t format)
 {
     struct display *d = (struct display*)data;
-    d->formats.insert(format);
+    d->ctl->formats.insert(format);
 }
 
 static const struct zwp_linux_dmabuf_v1_listener dmabuf_listener = {
@@ -2472,7 +2472,7 @@ tablet_tool_receive_type(void *data, struct zwp_tablet_tool_v2 *tool,
         default:
             evt_code = BTN_DIGI;
     }
-    display->tablet_tools_evt[tool] = evt_code;
+    display->ctl->tablet_tools_evt[tool] = evt_code;
 }
 
 static void
@@ -2515,14 +2515,14 @@ tablet_tool_proximity_in(void *data, struct zwp_tablet_tool_v2 *tool,
     if (ensure_pipe(display, INPUT_TABLET))
         return;
 
-    display->tablet_surface = surface;
+    display->ctl->tablet_surface = surface;
 
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
         ALOGE("%s:%d error in touch clock_gettime: %s",
               __FILE__, __LINE__, strerror(errno));
     }
 
-    ADD_EVENT(EV_KEY, display->tablet_tools_evt[tool], 1);
+    ADD_EVENT(EV_KEY, display->ctl->tablet_tools_evt[tool], 1);
     ADD_EVENT(EV_SYN, SYN_REPORT, 0);
 
     res = write(display->input_fd[INPUT_TABLET], &event, sizeof(event));
@@ -2541,14 +2541,14 @@ tablet_tool_proximity_out(void *data, struct zwp_tablet_tool_v2 *tool)
     if (ensure_pipe(display, INPUT_TABLET))
         return;
 
-    display->tablet_surface = NULL;
+    display->ctl->tablet_surface = NULL;
 
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
         ALOGE("%s:%d error in touch clock_gettime: %s",
               __FILE__, __LINE__, strerror(errno));
     }
 
-    ADD_EVENT(EV_KEY, display->tablet_tools_evt[tool], 0);
+    ADD_EVENT(EV_KEY, display->ctl->tablet_tools_evt[tool], 0);
     ADD_EVENT(EV_SYN, SYN_REPORT, 0);
 
     res = write(display->input_fd[INPUT_TABLET], &event, sizeof(event));
@@ -2614,7 +2614,7 @@ tablet_tool_motion(void *data, struct zwp_tablet_tool_v2 *,
     int x, y;
     unsigned int res, n = 0;
 
-    if (display->tablet_surface) {
+    if (display->ctl->tablet_surface) {
         if (ensure_pipe(display, INPUT_TABLET))
             return;
 
@@ -2628,8 +2628,8 @@ tablet_tool_motion(void *data, struct zwp_tablet_tool_v2 *,
             x = int(x * display->scale);
             y = int(y * display->scale);
         }
-        x += display->layers[display->tablet_surface].x;
-        y += display->layers[display->tablet_surface].y;
+        x += display->ctl->layers[display->ctl->tablet_surface].x;
+        y += display->ctl->layers[display->ctl->tablet_surface].y;
 
         ADD_EVENT(EV_ABS, ABS_X, x);
         ADD_EVENT(EV_ABS, ABS_Y, y);
@@ -2795,7 +2795,7 @@ static void tablet_seat_handle_add_tool(void *data, struct zwp_tablet_seat_v2 *,
     }
 
     struct display *d = (struct display*)data;
-    d->tablet_tools.push_back(tool);
+    d->ctl->tablet_tools.push_back(tool);
     zwp_tablet_tool_v2_add_listener(tool, &tablet_tool_listener, d);
     ALOGI("Added tablet tool");
 }
@@ -2811,99 +2811,99 @@ static void add_tablet_seat(struct display *d) {
     mkfifo(INPUT_PIPE_NAME[INPUT_TABLET], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
     chown(INPUT_PIPE_NAME[INPUT_TABLET], 1000, 1000);
 
-    d->tablet_seat = zwp_tablet_manager_v2_get_tablet_seat(d->tablet_manager, d->seat);
-    zwp_tablet_seat_v2_add_listener(d->tablet_seat, &tablet_seat_listener, d);
+    d->ctl->tablet_seat = zwp_tablet_manager_v2_get_tablet_seat(d->ctl->tablet_manager, d->ctl->seat);
+    zwp_tablet_seat_v2_add_listener(d->ctl->tablet_seat, &tablet_seat_listener, d);
 }
 
 static void
 registry_handle_global(void *data, struct wl_registry *registry,
                uint32_t id, const char *interface, uint32_t version)
 {
-    struct display *d = (struct display*)data;
+    struct wl_conn *conn = (struct wl_conn *)data;
 
     if (strcmp(interface, "wl_compositor") == 0) {
-        d->compositor =
+        conn->compositor =
             (struct wl_compositor*)wl_registry_bind(registry,
                 id, &wl_compositor_interface, std::min(version, 5U));
     } else if (strcmp(interface, "wl_subcompositor") == 0) {
-        d->subcompositor =
+        conn->subcompositor =
         (struct wl_subcompositor*)wl_registry_bind(registry,
                 id, &wl_subcompositor_interface, 1);
     } else if (strcmp(interface, "xdg_wm_base") == 0) {
-        d->wm_base = (struct xdg_wm_base*)wl_registry_bind(registry,
+        conn->wm_base = (struct xdg_wm_base*)wl_registry_bind(registry,
                 id, &xdg_wm_base_interface, 1);
-        xdg_wm_base_add_listener(d->wm_base, &xdg_wm_base_listener, d);
+        xdg_wm_base_add_listener(conn->wm_base, &xdg_wm_base_listener, conn->dpy);
     } else if(strcmp(interface, "wl_shell") == 0) {
-        d->shell = (struct wl_shell *)wl_registry_bind(
+        conn->shell = (struct wl_shell *)wl_registry_bind(
                 registry, id, &wl_shell_interface, 1);
     } else if (strcmp(interface, "wl_seat") == 0) {
-        d->seat = (struct wl_seat*)wl_registry_bind(registry, id,
+        conn->seat = (struct wl_seat*)wl_registry_bind(registry, id,
                 &wl_seat_interface, std::min(version, (uint32_t)WL_POINTER_AXIS_SOURCE_SINCE_VERSION));
-        wl_seat_add_listener(d->seat, &seat_listener, d);
-        if (d->tablet_manager && !d->tablet_seat)
-            add_tablet_seat(d);
-        if (d->data_device_manager && !d->data_device)
-            d->data_device = wl_data_device_manager_get_data_device(d->data_device_manager, d->seat);
+        wl_seat_add_listener(conn->seat, &seat_listener, conn->dpy);
+        if (conn->tablet_manager && !conn->tablet_seat)
+            add_tablet_seat(conn->dpy);
+        if (conn->data_device_manager && !conn->data_device)
+            conn->data_device = wl_data_device_manager_get_data_device(conn->data_device_manager, conn->seat);
     } else if (strcmp(interface, "wl_shm") == 0) {
-		d->shm = (struct wl_shm *)wl_registry_bind(registry, id,
+		conn->shm = (struct wl_shm *)wl_registry_bind(registry, id,
                 &wl_shm_interface, 1);
     } else if (strcmp(interface, "wl_output") == 0) {
-        d->output = (struct wl_output*)wl_registry_bind(registry, id,
+        conn->output = (struct wl_output*)wl_registry_bind(registry, id,
                 &wl_output_interface, std::min(version, 3U));
-        wl_output_add_listener(d->output, &output_listener, d);
-        wl_display_roundtrip(d->display);
+        wl_output_add_listener(conn->output, &output_listener, conn->dpy);
+        wl_display_roundtrip(conn->display);
     } else if (strcmp(interface, "wp_presentation") == 0) {
         bool no_presentation = property_get_bool("persist.waydroid.no_presentation", false);
         if (!no_presentation) {
-            d->presentation = (struct wp_presentation*)wl_registry_bind(registry, id,
+            conn->presentation = (struct wp_presentation*)wl_registry_bind(registry, id,
                     &wp_presentation_interface, 1);
-            wp_presentation_add_listener(d->presentation,
-                    &presentation_listener, d);
+            wp_presentation_add_listener(conn->presentation,
+                    &presentation_listener, conn->dpy);
         }
     } else if (strcmp(interface, "wp_viewporter") == 0) {
-        d->viewporter = (struct wp_viewporter*)wl_registry_bind(registry, id,
+        conn->viewporter = (struct wp_viewporter*)wl_registry_bind(registry, id,
                 &wp_viewporter_interface, 1);
-    } else if ((d->gtype == GrallocType::GRALLOC_ANDROID) &&
+    } else if ((conn->dpy->gtype == GrallocType::GRALLOC_ANDROID) &&
                (strcmp(interface, "android_wlegl") == 0)) {
-        d->android_wlegl = (struct android_wlegl*)wl_registry_bind(registry, id,
+        conn->android_wlegl = (struct android_wlegl*)wl_registry_bind(registry, id,
                 &android_wlegl_interface, 1);
-    } else if ((d->gtype == GrallocType::GRALLOC_GBM || d->gtype == GrallocType::GRALLOC_CROS) &&
+    } else if ((conn->dpy->gtype == GrallocType::GRALLOC_GBM || conn->dpy->gtype == GrallocType::GRALLOC_CROS) &&
                (strcmp(interface, "zwp_linux_dmabuf_v1") == 0)) {
         if (version < 3)
             return;
-        d->dmabuf = (struct zwp_linux_dmabuf_v1*)wl_registry_bind(registry, id,
+        conn->dmabuf = (struct zwp_linux_dmabuf_v1*)wl_registry_bind(registry, id,
                 &zwp_linux_dmabuf_v1_interface, 3);
-        zwp_linux_dmabuf_v1_add_listener(d->dmabuf, &dmabuf_listener, d);
+        zwp_linux_dmabuf_v1_add_listener(conn->dmabuf, &dmabuf_listener, conn->dpy);
     } else if (strcmp(interface, "zwp_tablet_manager_v2") == 0) {
-        d->tablet_manager = (struct zwp_tablet_manager_v2 *)wl_registry_bind(registry, id,
+        conn->tablet_manager = (struct zwp_tablet_manager_v2 *)wl_registry_bind(registry, id,
                 &zwp_tablet_manager_v2_interface, 1);
-        if (d->tablet_manager && d->seat)
-            add_tablet_seat(d);
+        if (conn->tablet_manager && conn->seat)
+            add_tablet_seat(conn->dpy);
     } else if (strcmp(interface, "zwp_pointer_constraints_v1") == 0) {
-        d->pointer_constraints = (struct zwp_pointer_constraints_v1 *)wl_registry_bind(
+        conn->pointer_constraints = (struct zwp_pointer_constraints_v1 *)wl_registry_bind(
                 registry, id, &zwp_pointer_constraints_v1_interface, 1);
     } else if (strcmp(interface, "zwp_pointer_gestures_v1") == 0) {
-        d->pointer_gestures = (struct zwp_pointer_gestures_v1 *)wl_registry_bind(
+        conn->pointer_gestures = (struct zwp_pointer_gestures_v1 *)wl_registry_bind(
                 registry, id, &zwp_pointer_gestures_v1_interface, 1);
     } else if (strcmp(interface, "zwp_relative_pointer_manager_v1") == 0) {
-        d->relative_pointer_manager = (struct zwp_relative_pointer_manager_v1 *)wl_registry_bind(
+        conn->relative_pointer_manager = (struct zwp_relative_pointer_manager_v1 *)wl_registry_bind(
                 registry, id, &zwp_relative_pointer_manager_v1_interface, 1);
     } else if (strcmp(interface, "zwp_idle_inhibit_manager_v1") == 0) {
-        d->idle_manager = (struct zwp_idle_inhibit_manager_v1 *)wl_registry_bind(
+        conn->idle_manager = (struct zwp_idle_inhibit_manager_v1 *)wl_registry_bind(
                 registry, id, &zwp_idle_inhibit_manager_v1_interface, 1);
     } else if (strcmp(interface, wp_fractional_scale_manager_v1_interface.name) == 0) {
-        d->fractional_scale_manager = (struct wp_fractional_scale_manager_v1*)wl_registry_bind(registry, id,
+        conn->fractional_scale_manager = (struct wp_fractional_scale_manager_v1*)wl_registry_bind(registry, id,
                 &wp_fractional_scale_manager_v1_interface, 1);
     } else if (strcmp(interface, wl_data_device_manager_interface.name) == 0) {
-        d->data_device_manager = (struct wl_data_device_manager *)wl_registry_bind(registry, id,
+        conn->data_device_manager = (struct wl_data_device_manager *)wl_registry_bind(registry, id,
                 &wl_data_device_manager_interface, std::min(version,  3U));
-        if (d->data_device_manager && d->seat)
-            d->data_device = wl_data_device_manager_get_data_device(d->data_device_manager, d->seat);
+        if (conn->data_device_manager && conn->seat)
+            conn->data_device = wl_data_device_manager_get_data_device(conn->data_device_manager, conn->seat);
     } else if (strcmp(interface, "gtk_shell1") == 0) {
         if (version < 6)
-            d->supports_cursor_viewport = false;
+            conn->supports_cursor_viewport = false;
     } else if (strcmp(interface, "mir_shell_v1") == 0) {
-        d->supports_cursor_hw_buffer = false;
+        conn->supports_cursor_hw_buffer = false;
     }
 }
 
@@ -3099,37 +3099,37 @@ void open_windows::erase(const key_type& key) {
 /* Null every wayland global proxy pointer. The proxies themselves are freed by
  * wl_display_disconnect(); this just prevents stale use until they are rebound
  * by registry_handle_global() on the next roundtrip. */
-static void reset_wayland_globals(struct display *display) {
-    display->registry = nullptr;
-    display->compositor = nullptr;
-    display->subcompositor = nullptr;
-    display->seat = nullptr;
-    display->shell = nullptr;
-    display->shm = nullptr;
-    display->pointer = nullptr;
-    display->keyboard = nullptr;
-    display->touch = nullptr;
-    display->output = nullptr;
-    display->presentation = nullptr;
-    display->viewporter = nullptr;
-    display->android_wlegl = nullptr;
-    display->dmabuf = nullptr;
-    display->wm_base = nullptr;
-    display->tablet_manager = nullptr;
-    display->tablet_seat = nullptr;
-    display->pointer_constraints = nullptr;
-    display->relative_pointer_manager = nullptr;
-    display->relative_pointer = nullptr;
-    display->idle_manager = nullptr;
-    display->fractional_scale_manager = nullptr;
-    display->data_device_manager = nullptr;
-    display->data_device = nullptr;
+static void reset_wayland_globals(struct wl_conn *conn) {
+    conn->registry = nullptr;
+    conn->compositor = nullptr;
+    conn->subcompositor = nullptr;
+    conn->seat = nullptr;
+    conn->shell = nullptr;
+    conn->shm = nullptr;
+    conn->pointer = nullptr;
+    conn->keyboard = nullptr;
+    conn->touch = nullptr;
+    conn->output = nullptr;
+    conn->presentation = nullptr;
+    conn->viewporter = nullptr;
+    conn->android_wlegl = nullptr;
+    conn->dmabuf = nullptr;
+    conn->wm_base = nullptr;
+    conn->tablet_manager = nullptr;
+    conn->tablet_seat = nullptr;
+    conn->pointer_constraints = nullptr;
+    conn->relative_pointer_manager = nullptr;
+    conn->relative_pointer = nullptr;
+    conn->idle_manager = nullptr;
+    conn->fractional_scale_manager = nullptr;
+    conn->data_device_manager = nullptr;
+    conn->data_device = nullptr;
 }
 
 /* Tear down everything that belongs to the connection and reconnect,
  * rebinding globals. The caller has already dropped the display-side state
  * that references this connection's proxies. */
-static void wl_conn_reconnect(struct display *conn) {
+static void wl_conn_reconnect(struct wl_conn *conn) {
     /* If the previous reconnect was moments ago, the new connection died
      * right away (e.g. a protocol error every frame). Back off so a
      * reconnect loop cannot saturate a core and drown the host compositor
@@ -3184,11 +3184,11 @@ void reconnect_display(struct display *display) {
      * (which has pdev) recreate it after we rebind the compositor. */
     display->cursor_handler.reset();
 
-    wl_conn_reconnect(display);
+    wl_conn_reconnect(display->ctl.get());
 }
 
 static void* wl_conn_thread(void* data) {
-    auto* conn = static_cast<struct display*>(data);
+    auto* conn = static_cast<struct wl_conn *>(data);
 
     setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
 
@@ -3209,7 +3209,7 @@ static void* wl_conn_thread(void* data) {
 
 /* Connect to the host compositor, bind the globals and start dispatching.
  * Returns false with nothing left running on failure. */
-static bool wl_conn_open(struct display *conn) {
+static bool wl_conn_open(struct wl_conn *conn) {
     conn->supports_cursor_viewport = true;
     conn->supports_cursor_hw_buffer = property_get_bool("persist.waydroid.cursor_force_shm", false);
     sem_init(&conn->reconnect_resume, 0, 0);
@@ -3227,7 +3227,7 @@ static bool wl_conn_open(struct display *conn) {
     wl_registry_add_listener(conn->registry, &registry_listener, conn);
     wl_display_roundtrip(conn->display);
 
-    if (conn->gtype == GrallocType::GRALLOC_ANDROID && !conn->android_wlegl)
+    if (conn->dpy->gtype == GrallocType::GRALLOC_ANDROID && !conn->android_wlegl)
         ALOGE("GRALLOC_ANDROID requested, but the Wayland compositor did not advertise android_wlegl");
 
     if (pthread_create(&conn->wayland_thread, nullptr, wl_conn_thread, conn) != 0) {
@@ -3240,7 +3240,7 @@ static bool wl_conn_open(struct display *conn) {
     return true;
 }
 
-static void wl_conn_destroy(struct display *conn) {
+static void wl_conn_destroy(struct wl_conn *conn) {
     pthread_kill(conn->wayland_thread, SIGTERM);
     pthread_join(conn->wayland_thread, nullptr);
 
@@ -3295,7 +3295,9 @@ create_display(const char *gralloc)
     mkdir("/dev/input", S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
     chown("/dev/input", 1000, 1000);
 
-    if (!wl_conn_open(display)) {
+    display->ctl = std::make_unique<wl_conn>();
+    display->ctl->dpy = display;
+    if (!wl_conn_open(display->ctl.get())) {
         sem_destroy(&display->egl_go);
         sem_destroy(&display->egl_done);
         return nullptr;
@@ -3318,7 +3320,7 @@ destroy_display(struct display *display)
         display->deactivate_thread.join();
     }
 
-    wl_conn_destroy(display);
+    wl_conn_destroy(display->ctl.get());
 
     delete display;
 }

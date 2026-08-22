@@ -75,7 +75,7 @@ static void read_selection(struct display *display, struct wl_data_offer *offer,
      * We need to make sure our request is sent to the compositor, otherwise the source client won’t send any data.
      * The blocking read calls stall the Wayland event loop.
      */
-    wl_display_roundtrip(display->display);
+    wl_display_roundtrip(display->ctl->display);
 
     // Read the clipboard contents
     std::string contents;
@@ -165,23 +165,23 @@ namespace vendor::waydroid::clipboard::implementation {
 WaydroidClipboard::WaydroidClipboard(struct display* display)
     : mDisplay(display)
 {
-    if (!mDisplay->data_device)
+    if (!mDisplay->ctl->data_device)
         return;
-    wl_data_device_add_listener(mDisplay->data_device, &data_device_listener, mDisplay);
+    wl_data_device_add_listener(mDisplay->ctl->data_device, &data_device_listener, mDisplay);
 }
 
 // Methods from ::vendor::waydroid::clipboard::V1_0::IWaydroidClipboard follow.
 Return<void> WaydroidClipboard::sendClipboardData(const hidl_string& in) {
     mDisplay->clipboard = in;
 
-    if (!mDisplay->data_device)
+    if (!mDisplay->ctl->data_device)
         return Void();
 
-    struct wl_data_source *source = wl_data_device_manager_create_data_source(mDisplay->data_device_manager);
+    struct wl_data_source *source = wl_data_device_manager_create_data_source(mDisplay->ctl->data_device_manager);
     wl_data_source_add_listener(source, &data_source_listener, strdup(in.c_str()));
     for (auto mime_type : MIME_TYPES)
         wl_data_source_offer(source, mime_type.c_str());
-    wl_data_device_set_selection(mDisplay->data_device, source, mDisplay->keyboard_enter_serial);
+    wl_data_device_set_selection(mDisplay->ctl->data_device, source, mDisplay->ctl->keyboard_enter_serial);
 
     return Void();
 }
