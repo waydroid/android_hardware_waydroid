@@ -196,34 +196,6 @@ namespace {
         }
     };
 
-    /* Leaving task streams, the modes that take over clear display->windows
-     * from the compose thread -- which would destroy task windows under their
-     * own live dispatch threads, and would trip full UI's "one window, named
-     * Waydroid" assertion. This runs from hwc_prepare, so the task windows are
-     * gone before hwc_set reaches any mode cleanup. */
-    void drop_all_task_conns(waydroid_hwc_composer_device_1 *pdev) {
-        auto *display = pdev->display;
-        std::scoped_lock lock(display->windowsMutex);
-
-        std::vector<uint32_t> tasks;
-        for (auto const& [taskId, conn] : display->task_conns) {
-            (void)conn;
-            tasks.push_back(taskId);
-        }
-        for (uint32_t taskId : tasks)
-            detach_task_conn(display, taskId);
-
-        /* Streams of tasks that never got a connection of their own are still
-         * here -- and in the multiplexed build that is all of them, holding
-         * ctl wl_buffers plus busy slots whose release will never come. A
-         * stale busy slot refuses the next post for it with -EBUSY, which is
-         * what earns SurfaceFlinger's 300-frame backoff. */
-        display->task_streams.clear();
-
-        std::scoped_lock requests(display->conn_worker_mutex);
-        display->conn_open_requests.clear();
-    }
-
     /* SF reads this prop each frame and skips physical-display composition
      * while it is set: in task-streams mode the fb target is shown nowhere. */
     void set_task_streams_mode_active(waydroid_hwc_composer_device_1 *pdev, bool active) {
@@ -232,8 +204,13 @@ namespace {
         pdev->display->task_streams_active = active;
         property_set("waydroid.task_streams_active", active ? "1" : "0");
         ALOGI("task streams mode %s", active ? "active" : "inactive");
+        /* The modes that take over clear display->windows from the compose
+         * thread, which would destroy task windows under their own live
+         * dispatch threads and trip full UI's "one window, named Waydroid"
+         * assertion. This runs from hwc_prepare, so they are gone before
+         * hwc_set reaches any mode cleanup. */
         if (!active)
-            drop_all_task_conns(pdev);
+            drop_all_task_conns(pdev->display);
     }
 
     std::unique_ptr<waydroid_mode> select_mode(waydroid_hwc_composer_device_1 *pdev, hwc_display_contents_1_t *contents) {

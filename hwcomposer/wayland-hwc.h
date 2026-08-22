@@ -418,6 +418,7 @@ void request_task_conn(struct display *display, uint32_t taskId);
  * false, having done nothing, for a task that has no connection of its own.
  * Safe to call from the connection's own dispatch thread. */
 bool detach_task_conn(struct display *display, uint32_t taskId);
+void drop_all_task_conns(struct display *display);
 
 /* Recompute host-side visibility and flip Android screen power to match.
  * Defined in wayland-hwc.cpp. */

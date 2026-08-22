@@ -3652,7 +3652,10 @@ static void open_task_conn(struct display *display, uint32_t taskId)
 static void conn_worker(struct display *display)
 {
     std::unique_lock<std::mutex> lock(display->conn_worker_mutex);
-    while (!display->conn_worker_quit) {
+    /* Quitting must drain, not abandon: what is left in the graveyard still
+     * owns dispatch threads and proxies. No new connection is opened once
+     * quit is set. */
+    while (!display->conn_worker_quit || !display->conn_graveyard.empty()) {
         if (display->conn_graveyard.empty() && display->conn_open_requests.empty()) {
             display->conn_worker_cond.wait(lock);
             continue;
@@ -3687,6 +3690,32 @@ void request_task_conn(struct display *display, uint32_t taskId)
             return;
     }
     display->conn_worker_cond.notify_one();
+}
+
+/* Phase A for every task connection at once: the tables are emptied here and
+ * the worker destroys what was in them. Non-blocking, so it is safe on the
+ * compose thread. */
+void drop_all_task_conns(struct display *display)
+{
+    std::scoped_lock lock(display->windowsMutex);
+
+    std::vector<uint32_t> tasks;
+    for (auto const& [taskId, conn] : display->task_conns) {
+        (void)conn;
+        tasks.push_back(taskId);
+    }
+    for (uint32_t taskId : tasks)
+        detach_task_conn(display, taskId);
+
+    /* Streams of tasks that never got a connection of their own are still
+     * here -- and in the multiplexed build that is all of them, holding ctl
+     * wl_buffers plus busy slots whose release will never come. A stale busy
+     * slot refuses the next post for it with -EBUSY, which is what earns
+     * SurfaceFlinger's 300-frame backoff. */
+    display->task_streams.clear();
+
+    std::scoped_lock requests(display->conn_worker_mutex);
+    display->conn_open_requests.clear();
 }
 
 bool detach_task_conn(struct display *display, uint32_t taskId)
@@ -3766,6 +3795,10 @@ destroy_display(struct display *display)
 {
     wl_conn_stop(display->ctl.get());
 
+    /* Every task connection has its own dispatch thread running on its own
+     * proxies; hand them to the worker before it is joined below. */
+    drop_all_task_conns(display);
+
     if (display->deactivate_thread.joinable()) {
         {
             std::scoped_lock lock(display->deactivate_mutex);
@@ -3783,6 +3816,11 @@ destroy_display(struct display *display)
         }
         display->conn_worker_thread.join();
     }
+
+    /* ~window ends in wl_display_flush(conn->display) and every cached buffer
+     * frees a wl_buffer, so both must go while ctl is still connected. */
+    display->windows.clear();
+    display->task_streams.clear();
 
     wl_conn_destroy(display->ctl.get());
 
