@@ -86,9 +86,6 @@ struct waydroid_hwc_composer_device_1 : hwc_composer_device_1_t {
      * ctl. Level 2 of persist.waydroid.task_streams; see
      * PLAN-per-task-connections.md §3.6. */
     bool task_conns_per_task;
-    /* select_mode chose task_streams_mode this frame; gates post_task_buffer
-     * (binder thread) so posts are refused in full-ui/closed modes. */
-    std::atomic<bool> task_streams_mode_active {false};
 
     std::unique_ptr<waydroid_mode> selected_mode;
 };

@@ -1398,7 +1398,7 @@ int post_task_buffer(struct waydroid_hwc_composer_device_1 *pdev, uint32_t taskI
     struct display *display = pdev->display;
     std::scoped_lock lock(display->windowsMutex);
 
-    if (!pdev->task_streams_mode_active ||
+    if (!display->task_streams_active ||
         (!pdev->task_conns_per_task && !display->ctl->wl_alive))
         return -EAGAIN;
 
@@ -1555,7 +1555,7 @@ int update_task_list(struct waydroid_hwc_composer_device_1 *pdev,
     struct display *display = pdev->display;
     std::scoped_lock lock(display->windowsMutex);
 
-    if (!pdev->task_streams_mode_active ||
+    if (!display->task_streams_active ||
         (!pdev->task_conns_per_task && !display->ctl->wl_alive))
         return -EAGAIN;
 

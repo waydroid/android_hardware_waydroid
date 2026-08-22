@@ -617,6 +617,11 @@ struct display {
      * and always present. */
     std::map<uint32_t, std::unique_ptr<wl_conn>> task_conns;
 
+    /* select_mode chose task_streams_mode this frame. Written on the compose
+     * thread, read on the binder threads, the conn worker and vsync -- so it
+     * must stay atomic: a stale read opens a connection into full UI. */
+    std::atomic<bool> task_streams_active {false};
+
     /* Opening a connection blocks on connect plus a registry roundtrip, and
      * reaping one joins a dispatch thread. Neither may happen under
      * windowsMutex or on a binder thread, so both are handed to a worker.

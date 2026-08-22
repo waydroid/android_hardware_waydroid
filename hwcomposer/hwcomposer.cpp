@@ -220,9 +220,9 @@ namespace {
     /* SF reads this prop each frame and skips physical-display composition
      * while it is set: in task-streams mode the fb target is shown nowhere. */
     void set_task_streams_mode_active(waydroid_hwc_composer_device_1 *pdev, bool active) {
-        if (pdev->task_streams_mode_active == active)
+        if (pdev->display->task_streams_active == active)
             return;
-        pdev->task_streams_mode_active = active;
+        pdev->display->task_streams_active = active;
         property_set("waydroid.task_streams_active", active ? "1" : "0");
         ALOGI("task streams mode %s", active ? "active" : "inactive");
         if (!active)
@@ -327,7 +327,7 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
  * the prop and the composition skip with no frame left to clear them. Ask for
  * one frame rather than duplicating the mode policy; select_mode does the rest. */
 static void nudge_stale_task_streams_mode(waydroid_hwc_composer_device_1 *pdev) {
-    if (!pdev->task_streams_mode_active || !pdev->procs || !pdev->procs->invalidate)
+    if (!pdev->display->task_streams_active || !pdev->procs || !pdev->procs->invalidate)
         return;
     const std::string active_apps = property_get_string("waydroid.active_apps", "none");
     if (active_apps == "Waydroid" || active_apps == "none")
@@ -654,7 +654,7 @@ static void maybe_dump_hal_state(waydroid_hwc_composer_device_1 *pdev, hwc_displ
         }
         ALOGI("task_streams=%d per_task_conns=%d ts_active=%d task_conns=%zu open_requests=%zu graveyard=%zu",
               pdev->task_streams, pdev->task_conns_per_task,
-              pdev->task_streams_mode_active.load(),
+              pdev->display->task_streams_active.load(),
               pdev->display->task_conns.size(), open_requests, graveyard);
     }
 
