@@ -848,6 +848,7 @@ static void fractional_scale_handle_preferred_scale(void *data, struct wp_fracti
         return;
     }
     display->scale = scale_times_120 / 120.0;
+    display->scale_is_fractional = true;
 }
 
 static const struct wp_fractional_scale_v1_listener fractional_scale_listener = {
@@ -2580,6 +2581,11 @@ output_handle_mode(void *data, struct wl_output *,
 {
     struct wl_conn *conn = (struct wl_conn *)data;
     struct display *d = conn->dpy;
+    /* One Android display, so only ctl describes it. Every connection binds
+     * wl_output and gets these events, and Lomiri sizes each card
+     * differently. */
+    if (!conn->is_ctl)
+        return;
     d->refresh = std::max(d->refresh, refresh);
 
     // Fallback size
@@ -2611,6 +2617,8 @@ output_handle_scale(void *data, struct wl_output *,
 {
     struct wl_conn *conn = (struct wl_conn *)data;
     struct display *d = conn->dpy;
+    if (!conn->is_ctl || d->scale_is_fractional)
+        return;
     d->scale = std::max((int)d->scale, scale);
 }
 
@@ -3606,7 +3614,22 @@ static void open_task_conn(struct display *display, uint32_t taskId)
 
     {
         std::scoped_lock lock(display->windowsMutex);
-        if (!display->task_conns.count(taskId)) {
+        /* Connecting blocks on a roundtrip with no lock held, so the world can
+         * move underneath us: the mode can end (leaving a live connection with
+         * no toplevel that nothing would ever sweep) or the task can be
+         * forgotten, which already ran its detach and found nothing. */
+        const char *discard = nullptr;
+        if (!display->task_streams_active)
+            discard = "task streams ended while it was connecting";
+        else if (display->task_conns.count(taskId))
+            discard = "another connection won the race";
+        else {
+            auto task = display->tasks.find(std::to_string(taskId));
+            if (task == display->tasks.end() || task->second.closing)
+                discard = "the task went away while it was connecting";
+        }
+
+        if (!discard) {
             display->task_conns[taskId] = std::move(conn);
             ALOGI("task %u: wayland connection open", taskId);
             /* update_task_list withheld this task while the connection was
@@ -3617,9 +3640,9 @@ static void open_task_conn(struct display *display, uint32_t taskId)
                 display->procs->invalidate(display->procs);
             return;
         }
+        ALOGI("task %u: dropping the connection just opened, %s", taskId, discard);
     }
 
-    /* Raced with a detach or another open; drop this one again. */
     struct dying_task_conn spare;
     wl_conn_quiesce(conn.get());
     spare.conn = std::move(conn);

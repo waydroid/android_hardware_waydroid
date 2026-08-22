@@ -584,6 +584,10 @@ struct display {
     int system_version;
     GrallocType gtype;
     double scale;
+    /* Once wp_fractional_scale has spoken, wl_output's integer scale must not
+     * be allowed back in: it only ever truncates. Nothing recalibrates after a
+     * reconnect, so without this one reconnect makes the truncation permanent. */
+    bool scale_is_fractional = false;
 
     int input_fd[INPUT_TOTAL];
     bool reverseScroll;

@@ -213,6 +213,13 @@ namespace {
         for (uint32_t taskId : tasks)
             detach_task_conn(display, taskId);
 
+        /* Streams of tasks that never got a connection of their own are still
+         * here -- and in the multiplexed build that is all of them, holding
+         * ctl wl_buffers plus busy slots whose release will never come. A
+         * stale busy slot refuses the next post for it with -EBUSY, which is
+         * what earns SurfaceFlinger's 300-frame backoff. */
+        display->task_streams.clear();
+
         std::scoped_lock requests(display->conn_worker_mutex);
         display->conn_open_requests.clear();
     }
@@ -640,10 +647,27 @@ static void maybe_dump_hal_state(waydroid_hwc_composer_device_1 *pdev, hwc_displ
 
     std::scoped_lock lock(pdev->display->windowsMutex);
     ALOGI("=== HAL STATE DUMP ===");
-    ALOGI("active_apps=%s multi_windows=%d should_compose=%d wl_alive=%d",
+    ALOGI("active_apps=%s multi_windows=%d should_compose=%d layers=%zu",
           property_get_string("waydroid.active_apps", "none").c_str(),
-          pdev->multi_windows, pdev->should_compose, pdev->display->ctl->wl_alive.load());
-    ALOGI("buffer_map=%zu layers=%zu", pdev->display->ctl->buffer_map.size(), contents->numHwLayers);
+          pdev->multi_windows, pdev->should_compose, contents->numHwLayers);
+
+    {
+        size_t ctl_windows = 0;
+        for (const auto &[id, window] : pdev->display->windows) {
+            (void)id;
+            ctl_windows += window->conn->is_ctl;
+        }
+        ALOGI("ctl: alive=%d fd=%d buffer_map=%zu windows=%zu",
+              pdev->display->ctl->wl_alive.load(),
+              pdev->display->ctl->display ? wl_display_get_fd(pdev->display->ctl->display) : -1,
+              pdev->display->ctl->buffer_map.size(), ctl_windows);
+    }
+
+    /* scale is the wayland->uinput transform, the buffer scale and the Android
+     * pixel size all at once, so a change here is a whole-system change. */
+    ALOGI("geometry: scale=%.4f width=%d height=%d full=%dx%d refresh=%d",
+          pdev->display->scale, pdev->display->width, pdev->display->height,
+          pdev->display->full_width, pdev->display->full_height, pdev->display->refresh);
 
     {
         size_t open_requests, graveyard;
@@ -658,10 +682,17 @@ static void maybe_dump_hal_state(waydroid_hwc_composer_device_1 *pdev, hwc_displ
               pdev->display->task_conns.size(), open_requests, graveyard);
     }
 
-    for (const auto &[taskId, conn] : pdev->display->task_conns)
-        ALOGI("  conn[task %u] fd=%d alive=%d", taskId,
+    for (const auto &[taskId, conn] : pdev->display->task_conns) {
+        /* A connection with no window is the orphan case: opened, published,
+         * and never given a toplevel. */
+        auto win = pdev->display->windows.find(std::to_string(taskId));
+        bool has_window = win != pdev->display->windows.end() &&
+                          win->second->conn == conn.get();
+        ALOGI("  conn[task %u] fd=%d alive=%d window=%s surfaces=%zu", taskId,
               conn->display ? wl_display_get_fd(conn->display) : -1,
-              conn->wl_alive.load());
+              conn->wl_alive.load(), has_window ? win->first.c_str() : "none",
+              has_window ? win->second->layers.size() + 1 : 0);
+    }
 
     for (const auto &[taskId, stream] : pdev->display->task_streams) {
         size_t busy = 0;
@@ -742,6 +773,10 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
      * pdev, hence the cursor handler) before touching any wayland proxy.
      * Defer the reconnect until a frame has a window to map: a bare client
      * connection already makes qtmir spawn a splash-screen application. */
+    static bool parked_logged = false;
+    if (pdev->display->ctl->wl_alive.load())
+        parked_logged = false;
+
     if (!pdev->display->ctl->wl_alive.load()) {
         std::scoped_lock lock(pdev->display->windowsMutex);
         if (!pdev->display->ctl->wl_alive.load()) {
@@ -761,6 +796,16 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
                         property_get_string("waydroid.active_apps", "none") == "none") {
                     for (auto &[tid, task] : pdev->display->tasks)
                         task.closing = false;
+                }
+                /* Task connections outlive ctl, but their sweep lives in the
+                 * mode cleanup below this return, so a task that stopped
+                 * posting would never be reaped while we are parked. Phase A
+                 * does not block. */
+                sweep_dead_task_conns(pdev);
+                if (!parked_logged) {
+                    parked_logged = true;
+                    ALOGI("parked with nothing to map while ctl is down; %zu task connection(s) live",
+                          pdev->display->task_conns.size());
                 }
                 /* Consume the frame without touching wayland. */
                 for (size_t l = 0; l < contents->numHwLayers; l++) {
