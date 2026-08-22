@@ -3126,67 +3126,74 @@ static void reset_wayland_globals(struct display *display) {
     display->data_device = nullptr;
 }
 
-void reconnect_display(struct display *display) {
+/* Tear down everything that belongs to the connection and reconnect,
+ * rebinding globals. The caller has already dropped the display-side state
+ * that references this connection's proxies. */
+static void wl_conn_reconnect(struct display *conn) {
     /* If the previous reconnect was moments ago, the new connection died
      * right away (e.g. a protocol error every frame). Back off so a
      * reconnect loop cannot saturate a core and drown the host compositor
      * in connection churn. */
-    static struct timespec last = {0, 0};
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
-    if (last.tv_sec && now.tv_sec - last.tv_sec < 2) {
-        ALOGE("reconnect_display: reconnecting again within 2s, backing off");
+    if (conn->last_reconnect.tv_sec && now.tv_sec - conn->last_reconnect.tv_sec < 2) {
+        ALOGE("wl_conn_reconnect: reconnecting again within 2s, backing off");
         usleep(500 * 1000);
     }
-    last = now;
+    conn->last_reconnect = now;
 
+    conn->layers.clear();
+    conn->touch_surfaces.clear();
+    conn->tablet_tools.clear();
+    conn->tablet_tools_evt.clear();
+    conn->pointer_surface = nullptr;
+    conn->tablet_surface = nullptr;
+    /* Cached wl_buffers are keyed by gralloc handle, which Android reuses
+     * across the reconnect: a stale hit would attach a freed proxy. */
+    conn->buffer_map.clear();
+    conn->formats.clear();
+    conn->modifiers.clear();
+
+    if (conn->registry)
+        wl_registry_destroy(conn->registry);
+    wl_display_disconnect(conn->display);
+    conn->display = nullptr;
+    reset_wayland_globals(conn);
+
+    /* Reconnect with backoff; the host compositor may not be ready yet. */
+    while (true) {
+        conn->display = wl_display_connect(NULL);
+        if (conn->display)
+            break;
+        ALOGE("wl_conn_reconnect: wl_display_connect failed, retrying");
+        usleep(500 * 1000);
+    }
+
+    conn->registry = wl_display_get_registry(conn->display);
+    wl_registry_add_listener(conn->registry, &registry_listener, conn);
+    wl_display_roundtrip(conn->display);
+    ALOGI("wl_conn_reconnect: rebound wayland globals on new connection");
+}
+
+void reconnect_display(struct display *display) {
     /* Caller holds windowsMutex. Drop everything that references the dead
      * connection's proxies BEFORE wl_display_disconnect() frees them. */
     display->windows.clear();
-    display->layers.clear();
-    display->touch_surfaces.clear();
-    display->tablet_tools.clear();
-    display->tablet_tools_evt.clear();
-    display->pointer_surface = nullptr;
-    display->tablet_surface = nullptr;
-    /* Cached wl_buffers are keyed by gralloc handle, which Android reuses
-     * across the reconnect: a stale hit would attach a freed proxy. */
-    display->buffer_map.clear();
     display->task_streams.clear();
-    display->formats.clear();
-    display->modifiers.clear();
     /* The cursor handler holds wl_surfaces; drop it now and let the caller
      * (which has pdev) recreate it after we rebind the compositor. */
     display->cursor_handler.reset();
 
-    if (display->registry)
-        wl_registry_destroy(display->registry);
-    wl_display_disconnect(display->display);
-    display->display = nullptr;
-    reset_wayland_globals(display);
-
-    /* Reconnect with backoff; the host compositor may not be ready yet. */
-    while (true) {
-        display->display = wl_display_connect(NULL);
-        if (display->display)
-            break;
-        ALOGE("reconnect_display: wl_display_connect failed, retrying");
-        usleep(500 * 1000);
-    }
-
-    display->registry = wl_display_get_registry(display->display);
-    wl_registry_add_listener(display->registry, &registry_listener, display);
-    wl_display_roundtrip(display->display);
-    ALOGI("reconnect_display: rebound wayland globals on new connection");
+    wl_conn_reconnect(display);
 }
 
-static void* hwc_wayland_thread(void* data) {
-    auto* display = static_cast<struct display*>(data);
+static void* wl_conn_thread(void* data) {
+    auto* conn = static_cast<struct display*>(data);
 
     setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
 
     while (true) {
-        if (wl_display_dispatch(display->display) != -1)
+        if (wl_display_dispatch(conn->display) != -1)
             continue;
 
         /* The connection dropped. Rather than aborting the whole HAL, signal
@@ -3194,10 +3201,77 @@ static void* hwc_wayland_thread(void* data) {
          * fresh connection. */
         ALOGE("*** %s: Wayland client was disconnected: %s; awaiting reconnect",
               __PRETTY_FUNCTION__, strerror(errno));
-        display->wl_alive = false;
-        sem_wait(&display->reconnect_resume);
+        conn->wl_alive = false;
+        sem_wait(&conn->reconnect_resume);
         ALOGI("*** %s: resuming dispatch on reconnected display", __PRETTY_FUNCTION__);
     }
+}
+
+/* Connect to the host compositor, bind the globals and start dispatching.
+ * Returns false with nothing left running on failure. */
+static bool wl_conn_open(struct display *conn) {
+    conn->supports_cursor_viewport = true;
+    conn->supports_cursor_hw_buffer = property_get_bool("persist.waydroid.cursor_force_shm", false);
+    sem_init(&conn->reconnect_resume, 0, 0);
+
+    conn->display = wl_display_connect(NULL);
+    ALOGI("WAYLAND_DISPLAY: %s", getenv("WAYLAND_DISPLAY"));
+    ALOGI("XDG_RUNTIME_DIR: %s", getenv("XDG_RUNTIME_DIR"));
+    if (!conn->display) {
+        ALOGE("Couldn't open Wayland display.");
+        sem_destroy(&conn->reconnect_resume);
+        return false;
+    }
+
+    conn->registry = wl_display_get_registry(conn->display);
+    wl_registry_add_listener(conn->registry, &registry_listener, conn);
+    wl_display_roundtrip(conn->display);
+
+    if (conn->gtype == GrallocType::GRALLOC_ANDROID && !conn->android_wlegl)
+        ALOGE("GRALLOC_ANDROID requested, but the Wayland compositor did not advertise android_wlegl");
+
+    if (pthread_create(&conn->wayland_thread, nullptr, wl_conn_thread, conn) != 0) {
+        ALOGE("Couldn't create wayland thread");
+        wl_display_disconnect(conn->display);
+        sem_destroy(&conn->reconnect_resume);
+        return false;
+    }
+
+    return true;
+}
+
+static void wl_conn_destroy(struct display *conn) {
+    pthread_kill(conn->wayland_thread, SIGTERM);
+    pthread_join(conn->wayland_thread, nullptr);
+
+    if (conn->wm_base)
+        xdg_wm_base_destroy(conn->wm_base);
+
+    if (conn->shell)
+        wl_shell_destroy(conn->shell);
+
+    if (conn->compositor)
+        wl_compositor_destroy(conn->compositor);
+
+    if (conn->tablet_manager) {
+        for (struct zwp_tablet_tool_v2 *t : conn->tablet_tools) {
+            zwp_tablet_tool_v2_destroy(t);
+        }
+        zwp_tablet_seat_v2_destroy(conn->tablet_seat);
+        zwp_tablet_manager_v2_destroy(conn->tablet_manager);
+    }
+
+    if (conn->relative_pointer_manager)
+        zwp_relative_pointer_manager_v1_destroy(conn->relative_pointer_manager);
+
+    if (conn->pointer_constraints)
+        zwp_pointer_constraints_v1_destroy(conn->pointer_constraints);
+
+    wl_registry_destroy(conn->registry);
+    wl_display_flush(conn->display);
+    wl_display_disconnect(conn->display);
+
+    sem_destroy(&conn->reconnect_resume);
 }
 
 struct display *
@@ -3213,37 +3287,17 @@ create_display(const char *gralloc)
     display->gtype = get_gralloc_type(gralloc);
     display->refresh = 0;
     display->isMaximized = true;
-    display->supports_cursor_viewport = true;
-    display->supports_cursor_hw_buffer = property_get_bool("persist.waydroid.cursor_force_shm", false);
-    display->display = wl_display_connect(NULL);
-    ALOGI("WAYLAND_DISPLAY: %s", getenv("WAYLAND_DISPLAY"));
-    ALOGI("XDG_RUNTIME_DIR: %s", getenv("XDG_RUNTIME_DIR"));
-    if (!display->display) {
-        ALOGE("Couldn't open Wayland display.");
-        return NULL;
-    }
+
     sem_init(&display->egl_go, 0, 0);
     sem_init(&display->egl_done, 0, 0);
-    sem_init(&display->reconnect_resume, 0, 0);
 
     umask(0);
     mkdir("/dev/input", S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
     chown("/dev/input", 1000, 1000);
 
-    display->registry = wl_display_get_registry(display->display);
-    wl_registry_add_listener(display->registry,
-                 &registry_listener, display);
-    wl_display_roundtrip(display->display);
-
-    if (display->gtype == GrallocType::GRALLOC_ANDROID && !display->android_wlegl)
-        ALOGE("GRALLOC_ANDROID requested, but the Wayland compositor did not advertise android_wlegl");
-
-    if (pthread_create(&display->wayland_thread, nullptr, hwc_wayland_thread, display) != 0) {
-        ALOGE("Couldn't create wayland thread");
-        wl_display_disconnect(display->display);
+    if (!wl_conn_open(display)) {
         sem_destroy(&display->egl_go);
         sem_destroy(&display->egl_done);
-        sem_destroy(&display->reconnect_resume);
         return nullptr;
     }
 
@@ -3255,9 +3309,6 @@ create_display(const char *gralloc)
 void
 destroy_display(struct display *display)
 {
-    pthread_kill(display->wayland_thread, SIGTERM);
-    pthread_join(display->wayland_thread, nullptr);
-
     if (display->deactivate_thread.joinable()) {
         {
             std::scoped_lock lock(display->deactivate_mutex);
@@ -3267,34 +3318,7 @@ destroy_display(struct display *display)
         display->deactivate_thread.join();
     }
 
-    if (display->wm_base)
-        xdg_wm_base_destroy(display->wm_base);
-
-    if (display->shell)
-        wl_shell_destroy(display->shell);
-
-    if (display->compositor)
-        wl_compositor_destroy(display->compositor);
-
-    if (display->tablet_manager) {
-        for (struct zwp_tablet_tool_v2 *t : display->tablet_tools) {
-            zwp_tablet_tool_v2_destroy(t);
-        }
-        zwp_tablet_seat_v2_destroy(display->tablet_seat);
-        zwp_tablet_manager_v2_destroy(display->tablet_manager);
-    }
-
-    if (display->relative_pointer_manager)
-        zwp_relative_pointer_manager_v1_destroy(display->relative_pointer_manager);
-
-    if (display->pointer_constraints)
-        zwp_pointer_constraints_v1_destroy(display->pointer_constraints);
-
-    wl_registry_destroy(display->registry);
-    wl_display_flush(display->display);
-    wl_display_disconnect(display->display);
-
-    sem_destroy(&display->reconnect_resume);
+    wl_conn_destroy(display);
 
     delete display;
 }

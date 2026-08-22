@@ -541,6 +541,8 @@ struct display {
      */
     std::atomic<bool> wl_alive{true};
     sem_t reconnect_resume;
+    /* Last reconnect, for the retry backoff. */
+    struct timespec last_reconnect {};
 
     /* Desired Android screen state, tracked so we only inject a sleep/wake
      * key on an actual on<->off transition driven by host visibility. */
