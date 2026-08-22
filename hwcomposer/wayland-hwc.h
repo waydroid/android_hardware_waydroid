@@ -92,6 +92,14 @@ enum class GrallocType {
 
 #define MAX_TOUCHPOINTS 10
 
+/* One uinput multitouch slot. The wayland touch id is unique only within a
+ * wl_touch, so the connection is part of the key: two connections both start
+ * at id 0 and would otherwise drive each other's slots. */
+struct touch_slot {
+    const struct wl_conn *conn = nullptr;
+    int id = -1;
+};
+
 struct layerFrame {
     int x;
     int y;
@@ -186,6 +194,12 @@ struct wl_conn {
     /* The Android-side state this connection serves. Set before the first
      * event can be dispatched: the registry handler already reads it. */
     struct display *dpy;
+
+    /* display->ctl, the connection that owns the Android display geometry,
+     * the cursor and the clipboard. Everything else is one streamed task,
+     * named by task_id. Constant after init. */
+    bool is_ctl = false;
+    uint32_t task_id = 0;
 
     pthread_t wayland_thread; // constant after init
 
@@ -361,6 +375,13 @@ struct window {
     window() = default;
 };
 
+/* The uinput FIFOs. ensure_input_pipe creates a node once; reset_input_pipe
+ * recreates it, which is how a display geometry change reaches InputFlinger.
+ * Defined in wayland-hwc.cpp. */
+void ensure_input_pipe(int input_type);
+void reset_input_pipe(struct display *display, int input_type);
+void init_input_devices(struct display *display);
+
 /* Recompute host-side visibility and flip Android screen power to match.
  * Defined in wayland-hwc.cpp. */
 void update_screen_power(struct display *display);
@@ -520,7 +541,12 @@ struct display {
     int gesturePosX;
     int gesturePosY;
     int gestureLength;
-    int touch_id[MAX_TOUCHPOINTS];
+    /* Guarded by input_mutex: dispatch threads of different connections
+     * allocate from it, and ensure_pipe's lazy open races the same way. The
+     * uinput writes themselves need no lock -- every batch is well under
+     * PIPE_BUF, so a write cannot be interleaved. */
+    std::array<struct touch_slot, MAX_TOUCHPOINTS> touch_id;
+    std::mutex input_mutex;
 
     open_windows windows;
 

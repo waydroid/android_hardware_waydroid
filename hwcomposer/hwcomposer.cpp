@@ -543,7 +543,7 @@ int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 
                       2*WINDOW_DECORATION_OUTSET + ceil((hwc_layer->displayFrame.bottom - hwc_layer->displayFrame.top) / pdev->display->scale));
     }
 
-    pdev->display->ctl->layers[window_layer.surface] = {
+    window->conn->layers[window_layer.surface] = {
             .x = hwc_layer->displayFrame.left,
             .y = hwc_layer->displayFrame.top };
 

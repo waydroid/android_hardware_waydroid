@@ -260,6 +260,42 @@ finished_calibrating(struct display *d)
     choose_width_height(d, d->req_width, d->req_height);
 }
 
+/* A uinput FIFO is one Android input device for the whole HAL, not a property
+ * of the connection whose seat happened to announce the capability: EventHub
+ * registers a device for every node that exists, and a second connection must
+ * neither disturb the fd another one is writing to nor unlink the node.
+ * mkfifo on an existing path is a harmless EEXIST. */
+void
+ensure_input_pipe(int input_type)
+{
+    mkfifo(INPUT_PIPE_NAME[input_type], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+    chown(INPUT_PIPE_NAME[input_type], 1000, 1000);
+}
+
+/* Recreate the node so InputFlinger reopens it -- that is how a display
+ * geometry change reaches the touchscreen. */
+void
+reset_input_pipe(struct display *display, int input_type)
+{
+    display->input_fd[input_type] = -1;
+    remove(INPUT_PIPE_NAME[input_type]);
+    ensure_input_pipe(input_type);
+}
+
+void
+init_input_devices(struct display *display)
+{
+    /* display is value-initialised, so the fds start at 0 -- a valid
+     * descriptor as far as ensure_pipe is concerned, which would send every
+     * event to stdin. */
+    for (int i = 0; i < INPUT_TOTAL; i++)
+        display->input_fd[i] = -1;
+
+    display->reverseScroll = property_get_bool("persist.waydroid.reverse_scrolling", false);
+    display->scrollSensitivity = property_get_int32("persist.waydroid.scroll_sensitivity", 25);
+    display->zoomSensitivity = property_get_int32("persist.waydroid.zoom_sensitivity", 96);
+}
+
 void
 do_hotplug(struct display *display) {
     if (display->ctl->touch) {
@@ -277,10 +313,7 @@ do_hotplug(struct display *display) {
         std::string height_str = std::to_string(height);
         property_set("waydroid.display_height", height_str.c_str());
 
-        display->input_fd[INPUT_TOUCH] = -1;
-        remove(INPUT_PIPE_NAME[INPUT_TOUCH]);
-        mkfifo(INPUT_PIPE_NAME[INPUT_TOUCH], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
-        chown(INPUT_PIPE_NAME[INPUT_TOUCH], 1000, 1000);
+        reset_input_pipe(display, INPUT_TOUCH);
     }
     if (display->procs && display->procs->invalidate) {
         display->needHotplug = true;
@@ -307,17 +340,37 @@ unfocused_doze_grace()
  * plenty and setFocusedTask is a binder round trip. */
 static constexpr auto kFocusAssertDebounce = std::chrono::milliseconds(500);
 
-/* Input lands on whichever surface the compositor picked: a toplevel (which
- * carries its window as user data) or one of its layer subsurfaces, which
- * carry none. Caller must hold windowsMutex. */
-static struct window *
-window_for_surface(struct display *display, struct wl_surface *surface)
+/* Where a layer surface sits in the Android display, for translating
+ * surface-local input. Only the layer-driven modes record offsets; a task
+ * stream is a full-display canvas on its own toplevel, so {0,0} is its real
+ * offset and not a fallback. Never insert: this runs on the wayland thread
+ * while the compose thread writes the map. */
+static struct layerFrame
+layer_offset(struct wl_conn *conn, struct wl_surface *surface)
 {
-    if (auto *w = reinterpret_cast<struct window *>(wl_surface_get_user_data(surface)))
+    auto it = conn->layers.find(surface);
+    return it == conn->layers.end() ? layerFrame{0, 0} : it->second;
+}
+
+/* Input lands on whichever surface the compositor picked: a toplevel or one of
+ * its layer subsurfaces. Both carry their window as user data, but a freed
+ * proxy's memory can be handed back out by another connection's next
+ * wl_compositor_create_surface, so confirm the window belongs to this
+ * connection before trusting it. Caller must hold windowsMutex. */
+static struct window *
+window_for_surface(struct wl_conn *conn, struct wl_surface *surface)
+{
+    if (!surface)
+        return nullptr;
+
+    auto *w = reinterpret_cast<struct window *>(wl_surface_get_user_data(surface));
+    if (w && w->conn == conn)
         return w;
 
-    for (auto const &[key, window] : display->windows) {
+    for (auto const &[key, window] : conn->dpy->windows) {
         (void)key;
+        if (window->conn != conn)
+            continue;
         if (window->surface == surface)
             return window.get();
         for (auto const &layer : window->layers) {
@@ -355,7 +408,7 @@ reassert_task_focus(struct wl_conn *conn, struct wl_surface *surface, const char
         /* Resolve and read under one lock: hwc_set destroys windows on another
          * thread, so a window pointer must not outlive the lock. */
         std::scoped_lock lock(display->windowsMutex);
-        struct window *window = window_for_surface(display, surface);
+        struct window *window = window_for_surface(conn, surface);
         if (!window)
             return;
 
@@ -1058,6 +1111,9 @@ window::layer& window::get_next_layer() {
 
 window::layer& window::create_new_layer() {
     wl_surface *surface = wl_compositor_create_surface(conn->compositor);
+    /* Input on a task card arrives on the content subsurface; tag it so the
+     * lookup does not have to scan every window. */
+    wl_surface_set_user_data(surface, this);
     wl_subsurface *subsurface = wl_subcompositor_get_subsurface(conn->subcompositor, surface, this->surface);
     wp_viewport *viewport = nullptr;
     if (conn->viewporter)
@@ -1070,6 +1126,11 @@ static int
 ensure_pipe(struct display* display, int input_type)
 {
     if (display->input_fd[input_type] == -1) {
+        /* Two connections' dispatch threads can reach this at once; without
+         * the lock one of the two opens leaks. */
+        std::scoped_lock lock(display->input_mutex);
+        if (display->input_fd[input_type] != -1)
+            return 0;
         display->input_fd[input_type] = open(INPUT_PIPE_NAME[input_type], O_WRONLY | O_NONBLOCK);
         if (display->input_fd[input_type] == -1) {
             ALOGE("Failed to open pipe to InputFlinger: %s", strerror(errno));
@@ -1547,9 +1608,9 @@ static const struct wl_keyboard_listener keyboard_listener = {
     keyboard_handle_repeat_info,
 };
 
-static void gesture_swipe_begin(struct display* display, uint32_t id);
-static void gesture_swipe_update(struct display* display, uint32_t axis, int value);
-static void gesture_swipe_end(struct display* display);
+static void gesture_swipe_begin(struct wl_conn* conn, uint32_t id);
+static void gesture_swipe_update(struct wl_conn* conn, uint32_t axis, int value);
+static void gesture_swipe_end(struct wl_conn* conn);
 
 static void
 pointer_handle_enter(void *data, struct wl_pointer *,
@@ -1604,8 +1665,9 @@ pointer_handle_motion(void *data, struct wl_pointer *,
         x = int(x * display->scale);
         y = int(y * display->scale);
     }
-    x += conn->layers[conn->pointer_surface].x;
-    y += conn->layers[conn->pointer_surface].y;
+    const struct layerFrame off = layer_offset(conn, conn->pointer_surface);
+    x += off.x;
+    y += off.y;
 
     ADD_EVENT(EV_ABS, ABS_X, x);
     ADD_EVENT(EV_ABS, ABS_Y, y);
@@ -1731,7 +1793,7 @@ pointer_handle_axis(void *data, struct wl_pointer *,
     }
 
     if (conn->wheelEvtIsTouchpad) {
-        gesture_swipe_update(display, axis, move);
+        gesture_swipe_update(conn, axis, move);
         return;
     }
 
@@ -1757,7 +1819,7 @@ pointer_handle_axis_source(void *data, struct wl_pointer *, uint32_t source)
     conn->wheelEvtIsTouchpad = (source == WL_POINTER_AXIS_SOURCE_FINGER);
 
     if (conn->wheelEvtIsTouchpad)
-        gesture_swipe_begin(display, conn->pointer_enter_serial);
+        gesture_swipe_begin(conn, conn->pointer_enter_serial);
 }
 
 static void
@@ -1767,7 +1829,7 @@ pointer_handle_axis_stop(void *data, struct wl_pointer *, uint32_t, uint32_t)
     struct display *display = conn->dpy;
 
     if (conn->wheelEvtIsTouchpad)
-        gesture_swipe_end(display);
+        gesture_swipe_end(conn);
 }
 
 static void
@@ -1793,34 +1855,42 @@ static const struct wl_pointer_listener pointer_listener = {
 };
 
 
+/* Slots are a single Android resource, so the array stays global; only the
+ * key is per connection. A free slot has no connection. */
 static bool
-empty_touch_id(struct display *display) {
-    for (int i = 0; i < MAX_TOUCHPOINTS; i++) {
-        if (display->touch_id[i] != -1)
+empty_touch_id(const struct wl_conn *conn) {
+    struct display *display = conn->dpy;
+    std::scoped_lock lock(display->input_mutex);
+    for (auto const &slot : display->touch_id) {
+        if (slot.conn == conn)
             return false;
     }
     return true;
 }
 
 static int
-get_touch_id(struct display *display, int id)
+get_touch_id(const struct wl_conn *conn, int id)
 {
+    struct display *display = conn->dpy;
+    std::scoped_lock lock(display->input_mutex);
     for (int i = 0; i < MAX_TOUCHPOINTS; i++) {
-        if (display->touch_id[i] == id)
+        if (display->touch_id[i].conn == conn && display->touch_id[i].id == id)
             return i;
     }
     return -1;
 }
 
 static int
-create_touch_id(struct display *display, int id) {
-    int i = get_touch_id(display, id);
+create_touch_id(const struct wl_conn *conn, int id) {
+    int i = get_touch_id(conn, id);
     if (i != -1)
         return i;
 
+    struct display *display = conn->dpy;
+    std::scoped_lock lock(display->input_mutex);
     for (i = 0; i < MAX_TOUCHPOINTS; i++) {
-        if (display->touch_id[i] == -1) {
-            display->touch_id[i] = id;
+        if (!display->touch_id[i].conn) {
+            display->touch_id[i] = { conn, id };
             return i;
         }
     }
@@ -1828,17 +1898,30 @@ create_touch_id(struct display *display, int id) {
     return -1;
 }
 
-
 static int
-flush_touch_id(struct display *display, int id)
+flush_touch_id(const struct wl_conn *conn, int id)
 {
+    struct display *display = conn->dpy;
+    std::scoped_lock lock(display->input_mutex);
     for (int i = 0; i < MAX_TOUCHPOINTS; i++) {
-        if (display->touch_id[i] == id) {
-            display->touch_id[i] = -1;
+        if (display->touch_id[i].conn == conn && display->touch_id[i].id == id) {
+            display->touch_id[i] = {};
             return i;
         }
     }
     return -1;
+}
+
+/* Drop this connection's slots without touching anyone else's. */
+static void
+clear_touch_ids(const struct wl_conn *conn)
+{
+    struct display *display = conn->dpy;
+    std::scoped_lock lock(display->input_mutex);
+    for (auto &slot : display->touch_id) {
+        if (slot.conn == conn)
+            slot = {};
+    }
 }
 
 static void
@@ -1866,7 +1949,7 @@ touch_handle_down(void *data, struct wl_touch *,
      * whatever is in front instead. */
     reassert_task_focus(conn, surface, "touch");
 
-    int touch_id = create_touch_id(display, id);
+    int touch_id = create_touch_id(conn, id);
     conn->touch_surfaces[id] = surface;
 
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
@@ -1879,8 +1962,9 @@ touch_handle_down(void *data, struct wl_touch *,
         x = int(x * display->scale);
         y = int(y * display->scale);
     }
-    x += conn->layers[surface].x;
-    y += conn->layers[surface].y;
+    const struct layerFrame off = layer_offset(conn, surface);
+    x += off.x;
+    y += off.y;
 
     ADD_EVENT(EV_ABS, ABS_MT_SLOT, touch_id);
     ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, touch_id);
@@ -1904,7 +1988,7 @@ touch_handle_up(void *data, struct wl_touch *,
     struct timespec rt;
     unsigned int res, n = 0;
 
-    int touch_id = flush_touch_id(display, id);
+    int touch_id = flush_touch_id(conn, id);
     // Might not exist if we discarded the down event due to a NULL surface
     if (touch_id != -1) {
         if (ensure_pipe(display, INPUT_TOUCH))
@@ -1937,7 +2021,7 @@ touch_handle_motion(void *data, struct wl_touch *,
     int x, y;
     unsigned int res, n = 0;
 
-    int touch_id = get_touch_id(display, id);
+    int touch_id = get_touch_id(conn, id);
     // Might not exist if we discarded the down event due to a NULL surface
     if (touch_id != -1) {
         if (ensure_pipe(display, INPUT_TOUCH))
@@ -1953,8 +2037,11 @@ touch_handle_motion(void *data, struct wl_touch *,
             x = int(x * display->scale);
             y = int(y * display->scale);
         }
-        x += conn->layers[conn->touch_surfaces[id]].x;
-        y += conn->layers[conn->touch_surfaces[id]].y;
+        auto ts = conn->touch_surfaces.find(id);
+        const struct layerFrame off =
+            layer_offset(conn, ts == conn->touch_surfaces.end() ? nullptr : ts->second);
+        x += off.x;
+        y += off.y;
 
         ADD_EVENT(EV_ABS, ABS_MT_SLOT, touch_id);
         ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, touch_id);
@@ -1992,11 +2079,14 @@ touch_handle_cancel(void *data, struct wl_touch *)
             __FILE__, __LINE__, strerror(errno));
     }
 
-    // Cancel all touch points.
+    // Cancel this connection's touch points; other connections keep theirs.
     for (i = 0; i < MAX_TOUCHPOINTS; i++) {
-        if (display->touch_id[i] != -1) {
-            id = display->touch_id[i];
-            display->touch_id[i] = -1;
+        if (display->touch_id[i].conn == conn) {
+            id = display->touch_id[i].id;
+            {
+                std::scoped_lock lock(display->input_mutex);
+                display->touch_id[i] = {};
+            }
             conn->touch_surfaces[id] = NULL;
 
             n = 0;
@@ -2025,7 +2115,7 @@ touch_handle_shape(void *data, struct wl_touch *, int32_t id, wl_fixed_t major, 
     struct timespec rt;
     unsigned int res, n = 0;
 
-    int touch_id = get_touch_id(display, id);
+    int touch_id = get_touch_id(conn, id);
     // Might not exist if we discarded the down event due to a NULL surface
     if (touch_id != -1) {
         if (ensure_pipe(display, INPUT_TOUCH))
@@ -2063,19 +2153,21 @@ static const struct wl_touch_listener touch_listener = {
 };
 
 static void
-gesture_swipe_begin(struct display* display, uint32_t id) {
+gesture_swipe_begin(struct wl_conn* conn, uint32_t id) {
+    struct display *display = conn->dpy;
     // Do not interrupt active gestures
-    if (!empty_touch_id(display))
+    if (!empty_touch_id(conn))
         return;
 
-    display->gesturePoints[0] = create_touch_id(display, id);
+    display->gesturePoints[0] = create_touch_id(conn, id);
     display->gesturePosX = display->ptrPrvX;
     display->gesturePosY = display->ptrPrvY;
     display->gestureLength = -1;
 }
 
 static void
-gesture_swipe_update(struct display* display, uint32_t axis, int value) {
+gesture_swipe_update(struct wl_conn* conn, uint32_t axis, int value) {
+    struct display *display = conn->dpy;
     struct input_event event[12];
     struct timespec rt;
     unsigned int res, n = 0;
@@ -2120,7 +2212,8 @@ gesture_swipe_update(struct display* display, uint32_t axis, int value) {
 }
 
 static void
-gesture_swipe_end(struct display* display) {
+gesture_swipe_end(struct wl_conn* conn) {
+    struct display *display = conn->dpy;
     struct input_event event[3];
     struct timespec rt;
     unsigned int res, n = 0;
@@ -2140,7 +2233,7 @@ gesture_swipe_end(struct display* display) {
     ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, -1);
     ADD_EVENT(EV_SYN, SYN_REPORT, 0);
 
-    flush_touch_id(display, display->touch_id[display->gesturePoints[0]]);
+    flush_touch_id(conn, display->touch_id[display->gesturePoints[0]].id);
     display->gesturePoints[0] = -1;
 
     res = write(display->input_fd[INPUT_TOUCH], &event, sizeof(event));
@@ -2155,11 +2248,11 @@ gesture_pinch_begin(void *data, struct zwp_pointer_gesture_pinch_v1 *, uint32_t 
     struct display *display = conn->dpy;
 
     // Do not interrupt active gestures
-    if (!empty_touch_id(display))
+    if (!empty_touch_id(conn))
         return;
 
-    display->gesturePoints[0] = create_touch_id(display, id);
-    display->gesturePoints[1] = create_touch_id(display, id + 1);
+    display->gesturePoints[0] = create_touch_id(conn, id);
+    display->gesturePoints[1] = create_touch_id(conn, id + 1);
     display->gesturePosX = display->ptrPrvX;
     display->gesturePosY = display->ptrPrvY;
     display->gestureLength = -1;
@@ -2259,8 +2352,8 @@ gesture_pinch_end(void *data, struct zwp_pointer_gesture_pinch_v1 *, uint32_t, u
     ADD_EVENT(EV_ABS, ABS_MT_TRACKING_ID, -1);
     ADD_EVENT(EV_SYN, SYN_REPORT, 0);
 
-    flush_touch_id(display, display->touch_id[display->gesturePoints[0]]);
-    flush_touch_id(display, display->touch_id[display->gesturePoints[1]]);
+    flush_touch_id(conn, display->touch_id[display->gesturePoints[0]].id);
+    flush_touch_id(conn, display->touch_id[display->gesturePoints[1]].id);
     display->gesturePoints[0] = display->gesturePoints[1] = -1;
 
     res = write(display->input_fd[INPUT_TOUCH], &event, sizeof(event));
@@ -2291,58 +2384,45 @@ seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t wl_caps)
     struct display *d = conn->dpy;
     enum wl_seat_capability caps = (enum wl_seat_capability) wl_caps;
 
+    /* The FIFOs and the input preferences are set up once in create_display:
+     * they are one Android device set, and unlinking a node here would pull
+     * it out from under every other connection. */
     if ((caps & WL_SEAT_CAPABILITY_POINTER) && !conn->pointer) {
         conn->pointer = wl_seat_get_pointer(seat);
-        d->input_fd[INPUT_POINTER] = -1;
+        ensure_input_pipe(INPUT_POINTER);
         d->ptrPrvX = 0;
         d->ptrPrvY = 0;
-        d->reverseScroll = property_get_bool("persist.waydroid.reverse_scrolling", false);
-        d->scrollSensitivity = property_get_int32("persist.waydroid.scroll_sensitivity", 25);
-        d->zoomSensitivity = property_get_int32("persist.waydroid.zoom_sensitivity", 96);
         d->gesturePoints[0] = d->gesturePoints[1] = -1;
-        mkfifo(INPUT_PIPE_NAME[INPUT_POINTER], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
-        chown(INPUT_PIPE_NAME[INPUT_POINTER], 1000, 1000);
         wl_pointer_add_listener(conn->pointer, &pointer_listener, conn);
     } else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && conn->pointer) {
-        remove(INPUT_PIPE_NAME[INPUT_POINTER]);
         wl_pointer_destroy(conn->pointer);
         conn->pointer = NULL;
     }
 
     if ((caps & WL_SEAT_CAPABILITY_KEYBOARD) && !conn->keyboard) {
         conn->keyboard = wl_seat_get_keyboard(seat);
-        d->input_fd[INPUT_KEYBOARD] = -1;
-        mkfifo(INPUT_PIPE_NAME[INPUT_KEYBOARD], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
-        chown(INPUT_PIPE_NAME[INPUT_KEYBOARD], 1000, 1000);
+        ensure_input_pipe(INPUT_KEYBOARD);
         wl_keyboard_add_listener(conn->keyboard, &keyboard_listener, conn);
     } else if (!(caps & WL_SEAT_CAPABILITY_KEYBOARD) && conn->keyboard) {
-        remove(INPUT_PIPE_NAME[INPUT_KEYBOARD]);
         wl_keyboard_destroy(conn->keyboard);
         conn->keyboard = NULL;
     }
 
     if ((caps & WL_SEAT_CAPABILITY_TOUCH) && !conn->touch) {
         conn->touch = wl_seat_get_touch(seat);
-        d->input_fd[INPUT_TOUCH] = -1;
-        mkfifo(INPUT_PIPE_NAME[INPUT_TOUCH], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
-        chown(INPUT_PIPE_NAME[INPUT_TOUCH], 1000, 1000);
-        for (int i = 0; i < MAX_TOUCHPOINTS; i++)
-            d->touch_id[i] = -1;
+        ensure_input_pipe(INPUT_TOUCH);
+        clear_touch_ids(conn);
         wl_touch_set_user_data(conn->touch, conn);
         wl_touch_add_listener(conn->touch, &touch_listener, conn);
     } else if (!(caps & WL_SEAT_CAPABILITY_TOUCH) && conn->touch) {
-        remove(INPUT_PIPE_NAME[INPUT_TOUCH]);
         wl_touch_destroy(conn->touch);
         conn->touch = NULL;
     }
 
     if (conn->pointer_gestures && conn->pointer) {
         if (!(caps & WL_SEAT_CAPABILITY_TOUCH) && !conn->touch) {
-            d->input_fd[INPUT_TOUCH] = -1;
-            mkfifo(INPUT_PIPE_NAME[INPUT_TOUCH], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
-            chown(INPUT_PIPE_NAME[INPUT_TOUCH], 1000, 1000);
-            for (int i = 0; i < MAX_TOUCHPOINTS; i++)
-                d->touch_id[i] = -1;
+            ensure_input_pipe(INPUT_TOUCH);
+            clear_touch_ids(conn);
         }
 
         conn->pointer_gesture_pinch = zwp_pointer_gestures_v1_get_pinch_gesture(conn->pointer_gestures, conn->pointer);
@@ -2662,8 +2742,9 @@ tablet_tool_motion(void *data, struct zwp_tablet_tool_v2 *,
             x = int(x * display->scale);
             y = int(y * display->scale);
         }
-        x += conn->layers[conn->tablet_surface].x;
-        y += conn->layers[conn->tablet_surface].y;
+        const struct layerFrame off = layer_offset(conn, conn->tablet_surface);
+        x += off.x;
+        y += off.y;
 
         ADD_EVENT(EV_ABS, ABS_X, x);
         ADD_EVENT(EV_ABS, ABS_Y, y);
@@ -2846,10 +2927,7 @@ static const struct zwp_tablet_seat_v2_listener tablet_seat_listener = {
 };
 
 static void add_tablet_seat(struct wl_conn *conn) {
-    conn->dpy->input_fd[INPUT_TABLET] = -1;
-    mkfifo(INPUT_PIPE_NAME[INPUT_TABLET], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
-    chown(INPUT_PIPE_NAME[INPUT_TABLET], 1000, 1000);
-
+    ensure_input_pipe(INPUT_TABLET);
     conn->tablet_seat = zwp_tablet_manager_v2_get_tablet_seat(conn->tablet_manager, conn->seat);
     zwp_tablet_seat_v2_add_listener(conn->tablet_seat, &tablet_seat_listener, conn);
 }
@@ -3342,9 +3420,11 @@ create_display(const char *gralloc)
     umask(0);
     mkdir("/dev/input", S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
     chown("/dev/input", 1000, 1000);
+    init_input_devices(display);
 
     display->ctl = std::make_unique<wl_conn>();
     display->ctl->dpy = display;
+    display->ctl->is_ctl = true;
     if (!wl_conn_open(display->ctl.get())) {
         sem_destroy(&display->egl_go);
         sem_destroy(&display->egl_done);
