@@ -135,6 +135,25 @@ static bool load_task_snapshot_file(struct window *window, struct buffer *buf) {
     return ok;
 }
 
+/* Frames to wait for the platform service to write this task's WMS snapshot
+ * before falling back to a buffer readback. The card keeps its last live
+ * frame meanwhile, so waiting costs nothing visually. */
+static constexpr int kSnapshotFileWaitFrames = 180;
+
+/* A gralloc handle whose fds are closed belongs to a buffer that was already
+ * freed on the other side; reading it back is at best garbage. */
+static bool
+handle_fds_alive(buffer_handle_t handle)
+{
+    if (!handle)
+        return false;
+    for (int i = 0; i < handle->numFds; i++) {
+        if (fcntl(handle->data[i], F_GETFD) == -1)
+            return false;
+    }
+    return true;
+}
+
 // Call me from egl_worker_thread only!
 void snapshot_inactive_app_window(struct display *display, struct window *window) {
     if (!window->layers[0].surface || !window->last_layer_buffer
@@ -156,28 +175,42 @@ void snapshot_inactive_app_window(struct display *display, struct window *window
     // FIXME won't work as expected if there are multiple surfaces
     struct wl_surface *surface = window->layers[0].surface;
 
-    if (display->gtype == GrallocType::GRALLOC_ANDROID) {
-        /* The EGL readback aborts in mapper.pixel here, so prefer the WMS
-         * snapshot file: correct pre-switch content, no gralloc access. The
-         * platform service writes it moments after the task defocuses, so
-         * wait a bounded number of frames for it before falling back to the
-         * CPU readback (refused on grallocs with GPU-only buffers, then the
-         * card keeps its last live buffer as before). */
-        bool from_file = load_task_snapshot_file(window, window->snapshot_buffer.get());
-        if (!from_file && ++window->snapshot_file_attempts < 180) {
-            window->snapshot_buffer = nullptr;
-            return;
+    /* Prefer the WMS snapshot file on every gralloc: it is the content
+     * Android captured at transition start, and it needs no access to the
+     * task's buffers. A readback does: by the time a card is frozen the task
+     * has stopped drawing, SurfaceFlinger has freed its buffers, and the
+     * allocator can hand the same handle to another app -- which is how a
+     * card ends up showing a different app's frame. The platform service
+     * writes the file moments after the task defocuses, so wait for it; the
+     * card shows its last live frame in the meantime. */
+    bool from_file = load_task_snapshot_file(window, window->snapshot_buffer.get());
+    if (!from_file && ++window->snapshot_file_attempts < kSnapshotFileWaitFrames) {
+        window->snapshot_buffer = nullptr;
+        return;
+    }
+    if (!from_file) {
+        /* No snapshot was ever written (no SnapshotController transition, or
+         * the service is not running). Read the last buffer back as a last
+         * resort, and only while its handle is still alive. */
+        bool ok = handle_fds_alive(old_buf->handle);
+        if (ok) {
+            if (display->gtype == GrallocType::GRALLOC_ANDROID) {
+                /* The EGL readback aborts in mapper.pixel on this gralloc. */
+                ok = cpu_render_to_pixels(window->snapshot_buffer.get());
+            } else {
+                egl_render_to_pixels(display, window->snapshot_buffer.get());
+            }
         }
-        if (!from_file && !cpu_render_to_pixels(window->snapshot_buffer.get())) {
+        if (!ok) {
+            /* Leave the card on its last live buffer rather than painting
+             * whatever the readback produced. */
             window->snapshot_buffer = nullptr;
             window->snapshot_unavailable = true;
             return;
         }
-        ALOGI("Frozen card %s#%s from %s", window->appID.c_str(), window->taskID.c_str(),
-              from_file ? "WMS snapshot" : "CPU readback");
-    } else {
-        egl_render_to_pixels(display, window->snapshot_buffer.get());
     }
+    ALOGI("Frozen card %s#%s from %s", window->appID.c_str(), window->taskID.c_str(),
+          from_file ? "WMS snapshot" : "buffer readback");
 
     wl_surface_attach(surface, window->snapshot_buffer->wl_buffer, 0, 0);
     wl_surface_damage(surface, 0, 0, INT32_MAX, INT32_MAX);
@@ -446,6 +479,39 @@ reassert_task_focus(struct wl_conn *conn, struct wl_surface *surface, const char
     display->task->setFocusedTask(task_id);
 }
 
+/* Whether this window's size may be taken as the Android display's size.
+ * A card is not interchangeable with the display: in multi-window mode every
+ * card lives on the ctl connection, so guarding on the connection alone let
+ * *each* of them rewrite the display geometry. The IME toplevel doing that is
+ * the reported keyboard open/close loop -- the host tiles it, every card
+ * shrinks, the display shrinks, the insets change, the IME goes away. Own it
+ * only when the window really is the whole display:
+ *   - the full-UI / bootstrap toplevel (taskID "0");
+ *   - the card the host has focused;
+ *   - any card, while the host has never activated anything (single-window
+ *     mode, and shells that do not use ACTIVATED at all).
+ * Helper windows (taskID "none": InputMethod) never own it. */
+static bool
+window_owns_display_geometry(struct window *window)
+{
+    struct display *display = window->conn->dpy;
+
+    /* Per-task connections: geometry belongs to ctl, as before. */
+    if (!window->conn->is_ctl)
+        return false;
+    if (window->taskID == "none")
+        return false;
+    if (window->taskID == "0")
+        return true;
+    /* Full UI and single-window mode: the one card is the display, whether or
+     * not the host has focused it. */
+    if (!display->per_task_windows.load())
+        return true;
+    if (window->activated)
+        return true;
+    return !display->seen_activation.load();
+}
+
 /* (Re)start the grace timer; deactivate_worker re-checks state once it
  * expires. Safe to call repeatedly -- each call just pushes the deadline. */
 static void
@@ -496,8 +562,13 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
      * becomes a no-op and Android never wakes again. KEY_WAKEUP is not a
      * toggle, so on real engagement force one regardless of belief — and do
      * it BEFORE setFocusedTask so the resume isn't swallowed by sleep. */
-    if (is_activated && !window->activated)
-        force_screen_wakeup(display);
+    if (is_activated) {
+        /* Sticky: once any host has focused a card, an unfocused card is
+         * never the display any more (window_owns_display_geometry). */
+        display->seen_activation.store(true);
+        if (!window->activated)
+            force_screen_wakeup(display);
+    }
 
     if (is_activated && !window->activated && display->task != nullptr
         && window->taskID != "none" && window->taskID != "0") {
@@ -548,10 +619,11 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
 	}
 
     /* A task toplevel's configure describes its card, not the Android
-     * display. Lomiri sizes each card differently in the spread, so letting
-     * every task write the display geometry would have them fight over it and
-     * hotplug on every switch. Geometry belongs to ctl. */
-    if (!window->conn->is_ctl)
+     * display. Lomiri sizes each card differently in the spread, and a tiling
+     * host resizes every card whenever any window appears, so only the window
+     * that stands for the whole display may write the geometry. */
+    window->owns_display_geometry = window_owns_display_geometry(window);
+    if (!window->owns_display_geometry)
         return;
 
     display->req_width = width;
@@ -573,7 +645,7 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
     }
 }
 
-static void
+static bool
 send_key_event(display *data, uint32_t key, wl_keyboard_key_state state);
 
 static void
@@ -652,15 +724,16 @@ shell_surface_configure(void *data, struct wl_shell_surface *, uint32_t, int32_t
     struct window *window = (struct window *)data;
     struct display *display = window->conn->dpy;
 
+    window->configured = true;
+
+    window->owns_display_geometry = window_owns_display_geometry(window);
+    if (!window->owns_display_geometry)
+        return;
+
     if (width > 1 && height > 1) {
         display->req_width = width;
         display->req_height = height;
 	}
-
-    window->configured = true;
-
-    if (!window->conn->is_ctl)
-        return;
 
     if (display->height && display->width) {
         choose_width_height(display, width, height);
@@ -1172,7 +1245,10 @@ ensure_pipe(struct display* display, int input_type)
     event[n].value = value_;                       \
     n++;
 
-static void
+/* Returns whether the event actually reached InputFlinger. Callers that
+ * change Android's power state need to know: an injection lost to a pipe that
+ * is not up leaves Android running while we believe it is asleep. */
+static bool
 send_key_event(display *data, uint32_t key, wl_keyboard_key_state state)
 {
     struct display* display = (struct display*)data;
@@ -1182,11 +1258,11 @@ send_key_event(display *data, uint32_t key, wl_keyboard_key_state state)
 
     if (key >= display->keysDown.size()) {
         ALOGE("Invalid key: %u", key);
-        return;
+        return false;
     }
 
     if (ensure_pipe(display, INPUT_KEYBOARD))
-        return;
+        return false;
 
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
         ALOGE("%s:%d error in touch clock_gettime: %s",
@@ -1195,9 +1271,12 @@ send_key_event(display *data, uint32_t key, wl_keyboard_key_state state)
     ADD_EVENT(EV_KEY, key, state);
 
     res = write(display->input_fd[INPUT_KEYBOARD], &event, sizeof(event));
-    if (res < sizeof(event))
+    if (res < sizeof(event)) {
         ALOGE("Failed to write event for InputFlinger: %s", strerror(errno));
+        return false;
+    }
     display->keysDown[(uint8_t)key] = state;
+    return true;
 }
 
 /* How long a freshly-mapped window keeps the Android display awake while it
@@ -1228,6 +1307,8 @@ static void set_screen_state(struct display *display, bool on) {
     if (display->screen_on == on)
         return;
     display->screen_on = on;
+    /* Before the key, so the screen-off animation is never attached. */
+    display->dozing.store(!on);
     ALOGI("waydroid: host visibility/engagement changed, turning Android screen %s",
           on ? "on" : "off");
     /* Inject KEY_SLEEP/KEY_WAKEUP. Android's PhoneWindowManager routes these
@@ -1237,8 +1318,15 @@ static void set_screen_state(struct display *display, bool on) {
      * are needed. Unlike KEY_POWER these are not toggles, so a lost injection
      * (input pipe not up yet during early boot) cannot invert the state. */
     uint32_t key = on ? KEY_WAKEUP : KEY_SLEEP;
-    send_key_event(display, key, WL_KEYBOARD_KEY_STATE_PRESSED);
-    send_key_event(display, key, WL_KEYBOARD_KEY_STATE_RELEASED);
+    bool sent = send_key_event(display, key, WL_KEYBOARD_KEY_STATE_PRESSED);
+    sent = send_key_event(display, key, WL_KEYBOARD_KEY_STATE_RELEASED) && sent;
+    if (!on && !sent) {
+        /* The sleep never reached Android (input pipe not up). It is still
+         * drawing, so keeping its frames off the cards would freeze them for
+         * good rather than for the doze. */
+        ALOGW("waydroid: KEY_SLEEP was not delivered, not freezing cards");
+        display->dozing.store(false);
+    }
 }
 
 /* Belief-independent wake: KEY_WAKEUP is idempotent, so when the user
@@ -1252,6 +1340,7 @@ void force_screen_wakeup(struct display *display) {
     else
         ALOGI("waydroid: engagement wake (belief=on), sending KEY_WAKEUP anyway");
     display->screen_on = true;
+    display->dozing.store(false);
     send_key_event(display, KEY_WAKEUP, WL_KEYBOARD_KEY_STATE_PRESSED);
     send_key_event(display, KEY_WAKEUP, WL_KEYBOARD_KEY_STATE_RELEASED);
 }
@@ -1259,14 +1348,16 @@ void force_screen_wakeup(struct display *display) {
 /* Whether any window justifies keeping Android resumed: the host has one
  * focused (ACTIVATED), one is too fresh to have been focused yet (mirrors the
  * any_window_visible grace), or Android itself asked to stay awake through
- * a window's idle inhibitor (video playback, PiP). */
+ * a window's screen hold (video playback, PiP). The hold counts even when no
+ * zwp_idle_inhibitor_v1 could be created for it -- Mir offers no such
+ * protocol, so on Lomiri the flag is the only record of the request. */
 static bool any_window_engaged(struct display *display) {
     auto now = std::chrono::steady_clock::now();
     for (auto const& [key, w] : display->windows) {
         (void)key;
         if (!w)
             continue;
-        if (w->activated || w->idle_inhibitor)
+        if (w->activated || w->hold_screen || w->idle_inhibitor)
             return true;
         if (now - w->created_at < kNewWindowAwakeGrace)
             return true;

@@ -241,6 +241,11 @@ namespace {
          */
         pdev->should_compose = pdev->use_subsurface || pdev->multi_windows;
 
+        /* Several cards at once, so no single window stands for the display
+         * (window_owns_display_geometry). Set before the mode is built. */
+        pdev->display->per_task_windows = pdev->multi_windows
+                && active_apps != "none" && active_apps != "Waydroid";
+
         waydroid_mode *mode;
         if (active_apps == "none") {
             mode = new closed_mode();
@@ -554,6 +559,18 @@ out:
 }
 
 int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index, window *window) {
+    /* Dozing: what still arrives is the screen-off animation fading to black.
+     * Attaching it blanks every card, which is what users report as "the
+     * screen turns black after a few seconds". Keep the last real frame
+     * attached until we wake instead. */
+    if (pdev->display->dozing.load()) {
+        hwc_layer->releaseFenceFd = -1;
+        if (hwc_layer->acquireFenceFd != -1) {
+            close(hwc_layer->acquireFenceFd);
+        }
+        return 0;
+    }
+
     std::shared_ptr<buffer> buf = get_wl_buffer(pdev, hwc_layer, hwc_layer_index);
     if (!buf) {
         ALOGE("Failed to get wayland buffer");
@@ -702,10 +719,10 @@ static void maybe_dump_hal_state(waydroid_hwc_composer_device_1 *pdev, hwc_displ
             snprintf(conn_name, sizeof(conn_name), "ctl");
         else
             snprintf(conn_name, sizeof(conn_name), "task %u", window->conn->task_id);
-        ALOGI("  window[%s] conn=%s app=%s task=%s activated=%d outputs=%d suspended=%d shown=%d snapshot=%s live_buf=%d",
+        ALOGI("  window[%s] conn=%s app=%s task=%s activated=%d outputs=%d suspended=%d shown=%d hold=%d geom=%d snapshot=%s live_buf=%d",
               id.c_str(), conn_name, window->appID.c_str(), window->taskID.c_str(),
               window->activated, window->outputs_entered, window->suspended,
-              window->ever_shown,
+              window->ever_shown, window->hold_screen, window->owns_display_geometry,
               window->snapshot_buffer ? "yes" : (window->snapshot_unavailable ? "unavailable" : "no"),
               !!window->last_layer_buffer);
     }

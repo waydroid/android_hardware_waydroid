@@ -325,6 +325,13 @@ struct window {
 
     struct zwp_idle_inhibitor_v1 *idle_inhibitor;
 
+    /* Android asked to keep the screen on for this window
+     * (IWaydroidWindow::setIdleInhibit). Kept even when the host has no
+     * zwp_idle_inhibit_manager_v1 -- Mir has none, so on Lomiri the inhibitor
+     * above is never created and this flag is the only record. Counted by
+     * any_window_engaged(). Guarded by windowsMutex. */
+    bool hold_screen = false;
+
     std::vector<layer> layers;
 
     std::unique_ptr<buffer> snapshot_buffer;
@@ -349,6 +356,10 @@ struct window {
      * Used to detect the rising edge so a Lomiri-driven focus/raise of this
      * toplevel brings the matching Android task to the front exactly once. */
     bool activated = false;
+
+    /* Whether this window's configured size is the Android display's size.
+     * Only ever true for one window at a time; see window_owns_display_geometry. */
+    bool owns_display_geometry = false;
 
     /* Last time engagement on this window re-asserted its Android task focus
      * (see reassert_task_focus); bounds how often a stream of touches can
@@ -627,6 +638,11 @@ struct display {
      * must stay atomic: a stale read opens a connection into full UI. */
     std::atomic<bool> task_streams_active {false};
 
+    /* The current mode gives every task its own window, so no one window is
+     * the Android display. False in full UI and single-window mode, where the
+     * one window *is* the display and its size is the display's size. */
+    std::atomic<bool> per_task_windows {false};
+
     /* Opening a connection blocks on connect plus a registry roundtrip, and
      * reaping one joins a dispatch thread. Neither may happen under
      * windowsMutex or on a binder thread, so both are handed to a worker.
@@ -642,6 +658,18 @@ struct display {
     std::vector<dying_task_conn> conn_graveyard;
     bool conn_worker_quit = false;
     std::thread conn_worker_thread;
+
+    /* Android's display is asleep (or on its way there): our own doze, not
+     * Android's idea of it. Frames still arrive briefly -- the screen-off
+     * animation -- and attaching them would repaint every card black, which
+     * is the blanking the doze is meant to avoid. See apply_hwc_layer_to_window. */
+    std::atomic<bool> dozing {false};
+
+    /* Some window has been ACTIVATED by the host at least once. Until then no
+     * card can be told apart by focus, so the display follows whichever one
+     * configures (single-window mode, and hosts that never activate).
+     * Write-once, read from the wayland thread. */
+    std::atomic<bool> seen_activation {false};
 
     std::recursive_mutex windowsMutex;
 

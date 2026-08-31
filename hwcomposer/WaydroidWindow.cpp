@@ -138,11 +138,15 @@ Return<void> WaydroidWindow::setIdleInhibit(const hidl_string& task, bool enable
     std::scoped_lock lock(mDisplay->windowsMutex);
     for (auto& [id, window] : mDisplay->windows) {
         if (window && (window->taskID == taskID || taskID == "*")) {
+            /* Record the request before anything can bail out: hosts without
+             * the protocol (Mir has none) still get the hold honoured through
+             * any_window_engaged(), which is what stops our own doze. */
+            window->hold_screen = enabled;
+            ALOGI("%sinhibiting sleep for %s#%s", enabled ? "" : "un", window->appID.c_str(), window->taskID.c_str());
             /* Same as the pointer lock: the inhibitor names the window's
              * surface, so it has to be created on that surface's connection. */
             if (!window->conn->idle_manager)
                 continue;
-            ALOGI("%sinhibiting sleep for %s#%s", enabled ? "" : "un", window->appID.c_str(), window->taskID.c_str());
             if (enabled && window->idle_inhibitor == nullptr) {
                 window->idle_inhibitor = zwp_idle_inhibit_manager_v1_create_inhibitor(
                         window->conn->idle_manager,
@@ -153,6 +157,9 @@ Return<void> WaydroidWindow::setIdleInhibit(const hidl_string& task, bool enable
             }
         }
     }
+    /* A hold taken while we were dozing has to wake Android, and dropping the
+     * last one has to re-arm the doze. */
+    update_screen_power(mDisplay);
     return Void();
 }
 
