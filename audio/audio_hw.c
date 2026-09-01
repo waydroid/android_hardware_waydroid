@@ -304,6 +304,8 @@ static inline snd_pcm_format_t pcm_format_from_audio_format(audio_format_t forma
         return SND_PCM_FORMAT_S32_BE;
     case AUDIO_FORMAT_PCM_8_24_BIT:
         return SND_PCM_FORMAT_S24_BE;
+    case AUDIO_FORMAT_PCM_FLOAT:
+        return SND_PCM_FORMAT_FLOAT_BE;
 #else
     case AUDIO_FORMAT_PCM_16_BIT:
         return SND_PCM_FORMAT_S16_LE;
@@ -313,8 +315,9 @@ static inline snd_pcm_format_t pcm_format_from_audio_format(audio_format_t forma
         return SND_PCM_FORMAT_S32_LE;
     case AUDIO_FORMAT_PCM_8_24_BIT:
         return SND_PCM_FORMAT_S24_LE;
+    case AUDIO_FORMAT_PCM_FLOAT:
+        return SND_PCM_FORMAT_FLOAT_LE;
 #endif
-    case AUDIO_FORMAT_PCM_FLOAT:  /* there is no equivalent for float */
     default:
         LOG_ALWAYS_FATAL("pcm_format_from_audio_format: invalid audio format %#x", format);
         return 0;
@@ -339,6 +342,8 @@ static audio_format_t audio_format_from_pcm_format(snd_pcm_format_t format)
         return AUDIO_FORMAT_PCM_8_24_BIT;
     case SND_PCM_FORMAT_S32_BE:
         return AUDIO_FORMAT_PCM_32_BIT;
+    case SND_PCM_FORMAT_FLOAT_BE:
+        return AUDIO_FORMAT_PCM_FLOAT;
 #else
     case SND_PCM_FORMAT_S16_LE:
         return AUDIO_FORMAT_PCM_16_BIT;
@@ -348,6 +353,8 @@ static audio_format_t audio_format_from_pcm_format(snd_pcm_format_t format)
         return AUDIO_FORMAT_PCM_8_24_BIT;
     case SND_PCM_FORMAT_S32_LE:
         return AUDIO_FORMAT_PCM_32_BIT;
+    case SND_PCM_FORMAT_FLOAT_LE:
+        return AUDIO_FORMAT_PCM_FLOAT;
 #endif
     default:
         LOG_ALWAYS_FATAL("audio_format_from_pcm_format: invalid pcm format %#x", format);
