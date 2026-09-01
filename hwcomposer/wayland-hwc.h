@@ -726,6 +726,22 @@ struct display {
     bool deactivate_armed = false;
     bool deactivate_quit = false;
     std::thread deactivate_thread;
+
+    /* A host window drag or maximize walks the display through every
+     * intermediate size, and each one hotplugs the Android display: A16's
+     * SurfaceFlinger mints a fresh display mode id per reload, and the
+     * framework can be handed a mode change naming an id its own table does
+     * not have yet. Coalesce instead -- the card is viewport-scaled while the
+     * drag is in flight, and one hotplug lands once the size settles.
+     * See arm_resize_settle. */
+    std::mutex resize_mutex;
+    std::condition_variable resize_cond;
+    std::chrono::steady_clock::time_point resize_deadline;
+    int32_t resize_width = 0;
+    int32_t resize_height = 0;
+    bool resize_armed = false;
+    bool resize_quit = false;
+    std::thread resize_thread;
 };
 
 void

@@ -310,10 +310,12 @@ ensure_input_pipe(int input_type)
 }
 
 /* Recreate the node so InputFlinger reopens it -- that is how a display
- * geometry change reaches the touchscreen. */
+ * geometry change reaches the touchscreen. Runs on the resize worker while
+ * connection threads write events, so it takes the lock ensure_pipe uses. */
 void
 reset_input_pipe(struct display *display, int input_type)
 {
+    std::scoped_lock lock(display->input_mutex);
     display->input_fd[input_type] = -1;
     remove(INPUT_PIPE_NAME[input_type]);
     ensure_input_pipe(input_type);
@@ -331,6 +333,27 @@ init_input_devices(struct display *display)
     display->reverseScroll = property_get_bool("persist.waydroid.reverse_scrolling", false);
     display->scrollSensitivity = property_get_int32("persist.waydroid.scroll_sensitivity", 25);
     display->zoomSensitivity = property_get_int32("persist.waydroid.zoom_sensitivity", 96);
+}
+
+/* Grace before a settled host window size is pushed to Android. Every
+ * intermediate size of a drag would otherwise hotplug the display; see
+ * display::resize_mutex. 0 pushes it as soon as the worker can run. */
+static constexpr int32_t kResizeSettleDefaultMs = 250;
+
+static void
+arm_resize_settle(struct display *display)
+{
+    auto settle = std::chrono::milliseconds(std::max(0, property_get_int32(
+        "persist.waydroid.resize_settle_ms", kResizeSettleDefaultMs)));
+    std::scoped_lock lock(display->resize_mutex);
+    /* The size the caller just wrote. The worker hotplugs only if it still
+     * stands, so it can never publish a width from one configure and a height
+     * from the next. */
+    display->resize_width = display->width;
+    display->resize_height = display->height;
+    display->resize_deadline = std::chrono::steady_clock::now() + settle;
+    display->resize_armed = true;
+    display->resize_cond.notify_one();
 }
 
 void
@@ -632,16 +655,30 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
     if (display->height && display->width) {
         const int32_t old_width = display->width, old_height = display->height;
         choose_width_height(display, width, height);
-        if (window->conn->wm_base)
-            xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width, display->height);
+        /* Only worth saying when we did NOT take the size we were offered
+         * (persist.waydroid.width/height pin one). Echoing the size back
+         * ratchets the card smaller under Lomiri: it reads the geometry as the
+         * whole window, takes the decoration off again for the content, saves
+         * that in its per-app window store, and starts the next launch from
+         * it -- 480x400 down to 480x103 over a few app starts. */
+        if (window->conn->wm_base
+                && (display->width != width || display->height != height))
+            xdg_surface_set_window_geometry(window->xdg_surface, 0, 0,
+                                            display->width, display->height);
         /* Only a real size change warrants a hotplug. Every window creation
          * lands here with the unchanged display size, and hotplugging then is
          * not just wasted work: hwc1Invalidate takes the adapter mutex, which
          * a presenting hwc_set thread holds while waiting for windowsMutex —
          * deadlock if this handler runs on the wayland thread while
-         * post_task_buffer (windowsMutex held) waits for wayland events. */
-        if (display->width != old_width || display->height != old_height)
-            do_hotplug(display);
+         * post_task_buffer (windowsMutex held) waits for wayland events. That
+         * is also why the hotplug goes through resize_thread and never
+         * straight from here. */
+        if (display->width != old_width || display->height != old_height) {
+            ALOGI("host resized %s#%s to %dx%d: display %dx%d -> %dx%d",
+                  window->appID.c_str(), window->taskID.c_str(), width, height,
+                  old_width, old_height, display->width, display->height);
+            arm_resize_settle(display);
+        }
     }
 }
 
@@ -737,7 +774,7 @@ shell_surface_configure(void *data, struct wl_shell_surface *, uint32_t, int32_t
 
     if (display->height && display->width) {
         choose_width_height(display, width, height);
-        do_hotplug(display);
+        arm_resize_settle(display);
     }
 }
 
@@ -1083,7 +1120,11 @@ window::create(struct wl_conn *conn, bool use_subsurfaces, std::string appID, st
             window->set_maximize(false);
     }
 
-    if (conn->wm_base)
+    /* Only the window that stands for the whole display may describe itself
+     * with the display size; a task card is whatever size the host gave it,
+     * and claiming the display size here is what starts the shrink ratchet
+     * (see xdg_toplevel_handle_configure). */
+    if (conn->wm_base && (calibrating || taskID == "0" || taskID == "none"))
         xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width, display->height);
 
     struct wl_region *region = wl_compositor_create_region(conn->compositor);
@@ -1420,6 +1461,34 @@ deactivate_worker(struct display *display)
         display->deactivate_armed = false;
         lock.unlock();
         deactivate_settled_check(display);
+        lock.lock();
+    }
+}
+
+/* Runs on resize_thread once the size has stopped moving. Sizing itself
+ * already happened in the configure handler, so this only tells Android. */
+static void
+resize_worker(struct display *display)
+{
+    std::unique_lock<std::mutex> lock(display->resize_mutex);
+    while (!display->resize_quit) {
+        if (!display->resize_armed) {
+            display->resize_cond.wait(lock);
+            continue;
+        }
+        display->resize_cond.wait_until(lock, display->resize_deadline);
+        if (display->resize_quit)
+            break;
+        /* The deadline may have been pushed forward while we slept. */
+        if (std::chrono::steady_clock::now() < display->resize_deadline)
+            continue;
+        display->resize_armed = false;
+        bool settled = display->width == display->resize_width
+                && display->height == display->resize_height;
+        lock.unlock();
+        /* A configure that landed after the deadline re-arms; leave it to it. */
+        if (settled)
+            do_hotplug(display);
         lock.lock();
     }
 }
@@ -3891,6 +3960,7 @@ create_display(const char *gralloc)
 
     display->task = IWaydroidTask::getService();
     display->deactivate_thread = std::thread(deactivate_worker, display);
+    display->resize_thread = std::thread(resize_worker, display);
     display->conn_worker_thread = std::thread(conn_worker, display);
     return display;
 }
@@ -3911,6 +3981,15 @@ destroy_display(struct display *display)
             display->deactivate_cond.notify_one();
         }
         display->deactivate_thread.join();
+    }
+
+    if (display->resize_thread.joinable()) {
+        {
+            std::scoped_lock lock(display->resize_mutex);
+            display->resize_quit = true;
+            display->resize_cond.notify_one();
+        }
+        display->resize_thread.join();
     }
 
     if (display->conn_worker_thread.joinable()) {
