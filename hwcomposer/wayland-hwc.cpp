@@ -82,6 +82,7 @@
 #include "relative-pointer-unstable-v1-client-protocol.h"
 #include "idle-inhibit-unstable-v1-client-protocol.h"
 #include "fractional-scale-v1-client-protocol.h"
+#include "xdg-activation-v1-client-protocol.h"
 
 using ::android::hardware::hidl_string;
 
@@ -1383,6 +1384,88 @@ static void set_screen_state(struct display *display, bool on) {
         ALOGW("waydroid: KEY_SLEEP was not delivered, not freezing cards");
         display->dozing.store(false);
     }
+}
+
+/* An activation token is a round trip: the host answers with a string, and
+ * only then can we ask for the raise. The window may be gone by then, so
+ * carry its identity rather than its pointer. */
+struct pending_activation {
+    struct wl_conn *conn;
+    std::string key;
+};
+
+static void
+activation_token_done(void *data, struct xdg_activation_token_v1 *token,
+                      const char *token_str)
+{
+    auto *pending = (struct pending_activation *)data;
+    struct display *display = pending->conn->dpy;
+
+    {
+        std::scoped_lock lock(display->windowsMutex);
+        auto it = display->windows.find(pending->key);
+        if (it != display->windows.end() && it->second->conn == pending->conn
+                && pending->conn->activation) {
+            ALOGI("asking the host to raise %s", pending->key.c_str());
+            xdg_activation_v1_activate(pending->conn->activation, token_str,
+                                       it->second->surface);
+            wl_display_flush(pending->conn->display);
+        }
+    }
+
+    xdg_activation_token_v1_destroy(token);
+    delete pending;
+}
+
+static const struct xdg_activation_token_v1_listener activation_token_listener = {
+    activation_token_done,
+};
+
+/* Android switching tasks by itself (a launch, an intent, a notification tap)
+ * leaves the host card exactly where it was: nothing in xdg-shell lets a
+ * client raise itself, which is what xdg_activation exists for. Mir 1.8 does
+ * not implement it, so this is inert under Lomiri and works on wlroots and
+ * KWin. A serial we were given for a real input event is the compositor's
+ * focus-stealing check; without one a host may only mark the card urgent. */
+/* A launch focuses its task before SurfaceFlinger has composed anything for
+ * it, so there is no card to raise yet. Remember the task and raise its window
+ * when it is created. Caller must hold windowsMutex. */
+void note_pending_raise(struct display *display, const std::string &taskID)
+{
+    display->pending_raise_tid = taskID;
+}
+
+void take_pending_raise(struct display *display, struct window *window)
+{
+    if (display->pending_raise_tid.empty()
+            || display->pending_raise_tid != window->taskID)
+        return;
+    display->pending_raise_tid.clear();
+    request_window_activation(window);
+}
+
+void request_window_activation(struct window *window)
+{
+    struct wl_conn *conn = window->conn;
+
+    if (!conn->activation || !window->xdg_toplevel || window->activated)
+        return;
+
+    /* Keyed as open_windows keys it: a task by its id, anything else by app. */
+    const std::string &key = (window->taskID != "0" && window->taskID != "none")
+            ? window->taskID : window->appID;
+    auto *pending = new pending_activation{conn, key};
+    auto *token = xdg_activation_v1_get_activation_token(conn->activation);
+    xdg_activation_token_v1_add_listener(token, &activation_token_listener, pending);
+    xdg_activation_token_v1_set_surface(token, window->surface);
+    if (conn->seat) {
+        uint32_t serial = conn->keyboard_enter_serial ? conn->keyboard_enter_serial
+                                                     : conn->pointer_enter_serial;
+        if (serial)
+            xdg_activation_token_v1_set_serial(token, serial, conn->seat);
+    }
+    xdg_activation_token_v1_commit(token);
+    wl_display_flush(conn->display);
 }
 
 /* Belief-independent wake: KEY_WAKEUP is idempotent, so when the user
@@ -3297,6 +3380,9 @@ registry_handle_global(void *data, struct wl_registry *registry,
     } else if (strcmp(interface, "zwp_idle_inhibit_manager_v1") == 0) {
         conn->idle_manager = (struct zwp_idle_inhibit_manager_v1 *)wl_registry_bind(
                 registry, id, &zwp_idle_inhibit_manager_v1_interface, 1);
+    } else if (strcmp(interface, "xdg_activation_v1") == 0) {
+        conn->activation = (struct xdg_activation_v1 *)wl_registry_bind(
+                registry, id, &xdg_activation_v1_interface, 1);
     } else if (strcmp(interface, wp_fractional_scale_manager_v1_interface.name) == 0) {
         conn->fractional_scale_manager = (struct wp_fractional_scale_manager_v1*)wl_registry_bind(registry, id,
                 &wp_fractional_scale_manager_v1_interface, 1);
@@ -3425,17 +3511,22 @@ window *open_windows::add(waydroid_hwc_composer_device_1 *pdev, const std::strin
     /* A new toplevel may need the display awake to draw its first frame; if it
      * launched while Android was dozed, wake it now (see any_window_visible). */
     update_screen_power(pdev->display);
+    take_pending_raise(pdev->display, window);
     return window;
 }
 
 void open_windows::add(const std::string& key, std::unique_ptr<window> window) {
+    struct display *display = window->conn->dpy;
+    struct window *added = nullptr;
     update([&](){
         auto res = windows.emplace(
             key,
             std::move(window)
         );
-        assert(res.second); (void)res;
+        assert(res.second);
+        added = res.first->second.get();
     });
+    take_pending_raise(display, added);
 }
 
 void open_windows::clear_for_conn(const struct wl_conn *conn) {
@@ -3564,6 +3655,7 @@ static void reset_wayland_globals(struct wl_conn *conn) {
     conn->relative_pointer_manager = nullptr;
     conn->relative_pointer = nullptr;
     conn->idle_manager = nullptr;
+    conn->activation = nullptr;
     conn->fractional_scale_manager = nullptr;
     conn->data_device_manager = nullptr;
     conn->data_device = nullptr;

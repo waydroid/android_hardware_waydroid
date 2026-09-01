@@ -229,6 +229,7 @@ struct wl_conn {
     struct zwp_relative_pointer_manager_v1 *relative_pointer_manager;
     struct zwp_relative_pointer_v1 *relative_pointer;
     struct zwp_idle_inhibit_manager_v1 *idle_manager;
+    struct xdg_activation_v1 *activation;
     struct wp_fractional_scale_manager_v1 *fractional_scale_manager;
     struct wl_data_device_manager *data_device_manager;
     struct wl_data_device *data_device;
@@ -435,6 +436,14 @@ void drop_all_task_conns(struct display *display);
  * Defined in wayland-hwc.cpp. */
 void update_screen_power(struct display *display);
 void force_screen_wakeup(struct display *display);
+
+/* Ask the host to raise this task's card, for a switch Android made on its
+ * own (a launch, an intent). No-op where the host offers no xdg_activation.
+ * A task that has no card yet is remembered and raised when one is created.
+ * Caller must hold windowsMutex. */
+void request_window_activation(struct window *window);
+void note_pending_raise(struct display *display, const std::string &taskID);
+void take_pending_raise(struct display *display, struct window *window);
 
 /* Post an SF-rendered task frame (IWaydroidDisplay@1.3). Returns 0 on
  * success, -EAGAIN when task streams are inactive, -ENOENT for an unknown or
@@ -748,6 +757,10 @@ struct display {
      * to be requested. Consumed on the vsync thread -- procs->invalidate on
      * the wayland thread can deadlock against a presenting hwc_set. */
     std::atomic<bool> want_frame {false};
+
+    /* Task whose card Android brought to front before the card existed.
+     * Guarded by windowsMutex; see note_pending_raise. */
+    std::string pending_raise_tid;
 };
 
 void
