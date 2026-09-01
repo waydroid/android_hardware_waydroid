@@ -364,6 +364,12 @@ static void* hwc_vsync_thread(void* data) {
         if (++tick % 60 == 0)
             nudge_stale_task_streams_mode(pdev);
 
+        /* A reactivated card asked for a composition (see display::want_frame).
+         * Doing it here keeps procs->invalidate off the wayland thread. */
+        if (pdev->procs && pdev->procs->invalidate
+                && pdev->display->want_frame.exchange(false))
+            pdev->procs->invalidate(pdev->procs);
+
         vsync_enabled = pdev->vsync_callback_enabled;
 
         if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
@@ -719,7 +725,7 @@ static void maybe_dump_hal_state(waydroid_hwc_composer_device_1 *pdev, hwc_displ
             snprintf(conn_name, sizeof(conn_name), "ctl");
         else
             snprintf(conn_name, sizeof(conn_name), "task %u", window->conn->task_id);
-        ALOGI("  window[%s] conn=%s app=%s task=%s activated=%d outputs=%d suspended=%d shown=%d hold=%d geom=%d snapshot=%s live_buf=%d",
+        ALOGI("  window[%s] conn=%s app=%s task=%s activated=%d outputs=%d suspended=%d shown=%d hold=%d geom=%d snapshot=%s freeze_src=%d",
               id.c_str(), conn_name, window->appID.c_str(), window->taskID.c_str(),
               window->activated, window->outputs_entered, window->suspended,
               window->ever_shown, window->hold_screen, window->owns_display_geometry,

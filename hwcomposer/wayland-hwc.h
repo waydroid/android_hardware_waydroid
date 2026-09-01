@@ -742,6 +742,12 @@ struct display {
     bool resize_armed = false;
     bool resize_quit = false;
     std::thread resize_thread;
+
+    /* Set when a card is activated but the HAL has nothing new to show for
+     * it: SurfaceFlinger only asks again when it composites, so a frame has
+     * to be requested. Consumed on the vsync thread -- procs->invalidate on
+     * the wayland thread can deadlock against a presenting hwc_set. */
+    std::atomic<bool> want_frame {false};
 };
 
 void

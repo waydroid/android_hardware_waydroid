@@ -132,6 +132,10 @@ static bool load_task_snapshot_file(struct window *window, struct buffer *buf) {
         }
     }
     close(fd);
+    /* One snapshot per backgrounding: a leftover file is content from an
+     * earlier switch, and showing it is worse than showing nothing. */
+    if (ok)
+        unlink(path.c_str());
     return ok;
 }
 
@@ -598,6 +602,14 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
         ALOGI("ACTIVATED edge for %s#%s -> setFocusedTask",
               window->appID.c_str(), window->taskID.c_str());
         display->task->setFocusedTask(stoi(window->taskID));
+        /* The card is showing a frozen frame and setFocusedTask is a no-op
+         * for a task that is already top and resumed, so nothing here is
+         * guaranteed to produce a frame. Ask for one, and let the next
+         * background freeze again from scratch. The snapshot buffer itself
+         * stays: it is what is on screen until a live layer replaces it. */
+        display->want_frame.store(true);
+        window->snapshot_unavailable = false;
+        window->snapshot_file_attempts = 0;
     } else if (is_activated) {
         /* Already activated, so no edge: the host re-configured a card it
          * still considers focused. Android may have moved on since. */
@@ -865,7 +877,10 @@ void surface_context::set_display_frame(hwc_rect_t rect, double scale) {
 
 void window::reset_per_set_state() {
     lastLayer = 0;
-    last_layer_buffer = nullptr;
+    /* last_layer_buffer is not per-commit state: it is the freeze source, and
+     * dropping it every frame left snapshot_inactive_app_window with nothing
+     * to snapshot from the second frame a card is absent onwards -- so its
+     * wait for the WMS snapshot file could never make progress. */
     if (input_region) {
         wl_region_subtract(input_region, 0, 0, INT_MAX, INT_MAX);
     }
