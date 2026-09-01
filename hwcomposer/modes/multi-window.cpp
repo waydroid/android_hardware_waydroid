@@ -30,6 +30,27 @@
 
 constexpr hwc_color_t color_transparent = {0, 0, 0, 0};
 
+/* The card the keyboard is drawn into: the focused task's, and only while it
+ * is drawing this frame. A card that has no layers here is about to be frozen
+ * to a snapshot, and the keyboard would land on the frozen surface alone. */
+window *multi_window_mode::keyboard_host(waydroid_hwc_composer_device_1 *pdev) {
+    for (const auto &[tid, task] : pdev->display->tasks) {
+        if (!task.focused || task.closing)
+            continue;
+        bool drawing = false;
+        for (const auto &info : layer_infos.container())
+            if (info.type == LayerSplitType::TID && info.tid == tid) {
+                drawing = true;
+                break;
+            }
+        if (!drawing)
+            break;
+        auto card = pdev->display->windows.find(tid);
+        return card == pdev->display->windows.end() ? nullptr : card->second.get();
+    }
+    return nullptr;
+}
+
 window *multi_window_mode::get_window(waydroid_hwc_composer_device_1 *pdev, layer_info &layer_info) {
     auto &windows = pdev->display->windows;
     if (layer_info.type == LayerSplitType::TID) {
@@ -51,6 +72,21 @@ window *multi_window_mode::get_window(waydroid_hwc_composer_device_1 *pdev, laye
         }
     } else if (layer_info.type == LayerSplitType::RawName) {
         if (layer_info.aid == "InputMethod") {
+            /* The keyboard belongs over the app it is typing into, not beside
+             * it: on its own toplevel the host tiles it, moves it and lets it
+             * resize the display, and a staged shell shows it as a card of its
+             * own. As a layer of the focused card it lands at its display
+             * frame, and input already translates surface-local offsets. */
+            if (window *card = keyboard_host(pdev)) {
+                /* A toplevel from an earlier frame would otherwise stay mapped
+                 * showing that frame's keyboard: it is still named in the
+                 * frame, so cleanup_stale_windows keeps it, and it gets no
+                 * layer, so nothing neutralizes its surfaces either. */
+                windows.erase("InputMethod");
+                return card;
+            }
+            /* Nothing to put it on: a toplevel of its own is still better than
+             * dropping the keyboard. */
             auto it = windows.find("InputMethod");
             if (it != windows.end()) {
                 return it->second.get();

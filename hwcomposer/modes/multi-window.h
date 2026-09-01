@@ -30,7 +30,8 @@
 class multi_window_mode : public waydroid_mode {
     split_layer_names_helper layer_infos;
 
-    static window *get_window(waydroid_hwc_composer_device_1 *pdev, layer_info &layer_info);
+    window *get_window(waydroid_hwc_composer_device_1 *pdev, layer_info &layer_info);
+    window *keyboard_host(waydroid_hwc_composer_device_1 *pdev);
     static bool can_handle_layer(const hwc_layer_1& layer);
 
   public:
