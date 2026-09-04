@@ -316,11 +316,11 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
  * the prop and the composition skip with no frame left to clear them. Ask for
  * one frame rather than duplicating the mode policy; select_mode does the rest. */
 static void nudge_stale_task_streams_mode(waydroid_hwc_composer_device_1 *pdev) {
-    if (!pdev->display->task_streams_active || !pdev->procs || !pdev->procs->invalidate)
+    if (!pdev->display->task_streams_active)
         return;
     const std::string active_apps = property_get_string("waydroid.active_apps", "none");
     if (active_apps == "Waydroid" || active_apps == "none")
-        pdev->procs->invalidate(pdev->procs);
+        request_frame(pdev->display);
 }
 
 static long time_to_sleep_to_next_vsync(struct timespec *rt, uint64_t last_vsync_ns, unsigned vsync_period_ns)

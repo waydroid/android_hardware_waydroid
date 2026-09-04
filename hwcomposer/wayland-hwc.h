@@ -432,6 +432,10 @@ void request_task_conn(struct display *display, uint32_t taskId);
 bool detach_task_conn(struct display *display, uint32_t taskId);
 void drop_all_task_conns(struct display *display);
 
+/* Asks SurfaceFlinger for a composition. The only safe way to invalidate off
+ * the vsync thread; see the comment on the implementation. */
+void request_frame(struct display *display);
+
 /* Recompute host-side visibility and flip Android screen power to match.
  * Defined in wayland-hwc.cpp. */
 void update_screen_power(struct display *display);
@@ -680,7 +684,32 @@ struct display {
      * Write-once, read from the wayland thread. */
     std::atomic<bool> seen_activation {false};
 
-    std::recursive_mutex windowsMutex;
+    /* Recursive, plus the owning thread, so request_frame can refuse to call
+     * into the adapter under this lock. */
+    class recursive_mutex_owned {
+    public:
+        void lock() { m.lock(); ++depth; owner = std::this_thread::get_id(); }
+        bool try_lock() {
+            if (!m.try_lock())
+                return false;
+            ++depth;
+            owner = std::this_thread::get_id();
+            return true;
+        }
+        void unlock() {
+            if (--depth == 0)
+                owner = std::thread::id();
+            m.unlock();
+        }
+        /* Only ever true for the thread that holds it, so the read races with
+         * nothing that could change the answer. */
+        bool held_by_caller() const { return owner.load() == std::this_thread::get_id(); }
+    private:
+        std::recursive_mutex m;
+        std::atomic<std::thread::id> owner {};
+        unsigned depth = 0;   /* written under m */
+    };
+    recursive_mutex_owned windowsMutex;
 
     std::string clipboard;
     std::list<std::string> clipboard_offer_mime_types;

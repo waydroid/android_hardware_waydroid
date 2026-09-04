@@ -361,6 +361,21 @@ arm_resize_settle(struct display *display)
     display->resize_cond.notify_one();
 }
 
+/* invalidate takes the adapter's state mutex, and hwc_set runs with that mutex
+ * held while it waits for windowsMutex -- so invalidating under windowsMutex
+ * deadlocks the two. Defer to the vsync thread instead of hanging the display. */
+void
+request_frame(struct display *display)
+{
+    if (display->windowsMutex.held_by_caller()) {
+        ALOGE("request_frame with windowsMutex held; deferring to the vsync thread");
+        display->want_frame.store(true);
+        return;
+    }
+    if (display->procs && display->procs->invalidate)
+        display->procs->invalidate(display->procs);
+}
+
 void
 do_hotplug(struct display *display) {
     if (display->ctl->touch) {
@@ -380,10 +395,8 @@ do_hotplug(struct display *display) {
 
         reset_input_pipe(display, INPUT_TOUCH);
     }
-    if (display->procs && display->procs->invalidate) {
-        display->needHotplug = true;
-        display->procs->invalidate(display->procs);
-    }
+    display->needHotplug = true;
+    request_frame(display);
 }
 
 /* Grace before concluding "no Waydroid toplevel is engaged" and dozing.
@@ -3910,9 +3923,11 @@ static void open_task_conn(struct display *display, uint32_t taskId)
             /* update_task_list withheld this task while the connection was
              * coming up, so SurfaceFlinger rendered nothing for it -- and it
              * only asks again when it composites. Nothing else is going to
-             * change on screen, so ask for the frame that lets it through. */
-            if (display->procs && display->procs->invalidate)
-                display->procs->invalidate(display->procs);
+             * change on screen, so ask for the frame that lets it through.
+             * Through want_frame: invalidate takes the adapter mutex, which a
+             * presenting hwc_set already holds while it waits for
+             * windowsMutex -- calling it here would deadlock both. */
+            display->want_frame.store(true);
             return;
         }
         ALOGI("task %u: dropping the connection just opened, %s", taskId, discard);
