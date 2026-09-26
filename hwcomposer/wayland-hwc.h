@@ -301,6 +301,7 @@ struct cursor_handler {
 
 struct display {
     pthread_t wayland_thread; // constant after init
+    bool wayland_thread_created;
 
     struct wl_display *display;
     struct wl_registry *registry;
