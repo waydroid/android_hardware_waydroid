@@ -286,13 +286,14 @@ static audio_channel_mask_t out_get_channels(const struct audio_stream *stream)
     return audio_channel_out_mask_from_count(out->config.channels);
 }
 
-/* Converts audio_format to pcm_format.
+/* Converts audio_format to pcm_format without aborting.
  * Parameters:
  *  format  the audio_format_t to convert
  *
- * Logs a fatal error if format is not a valid convertible audio_format_t.
+ * Returns SND_PCM_FORMAT_UNKNOWN if format is not a valid convertible
+ * audio_format_t, so a caller can probe a format before committing to it.
  */
-static inline snd_pcm_format_t pcm_format_from_audio_format(audio_format_t format)
+static inline snd_pcm_format_t pcm_format_from_audio_format_safe(audio_format_t format)
 {
     switch (format) {
 #if HAVE_BIG_ENDIAN
@@ -304,6 +305,8 @@ static inline snd_pcm_format_t pcm_format_from_audio_format(audio_format_t forma
         return SND_PCM_FORMAT_S32_BE;
     case AUDIO_FORMAT_PCM_8_24_BIT:
         return SND_PCM_FORMAT_S24_BE;
+    case AUDIO_FORMAT_PCM_FLOAT:
+        return SND_PCM_FORMAT_FLOAT_BE;
 #else
     case AUDIO_FORMAT_PCM_16_BIT:
         return SND_PCM_FORMAT_S16_LE;
@@ -313,12 +316,28 @@ static inline snd_pcm_format_t pcm_format_from_audio_format(audio_format_t forma
         return SND_PCM_FORMAT_S32_LE;
     case AUDIO_FORMAT_PCM_8_24_BIT:
         return SND_PCM_FORMAT_S24_LE;
+    case AUDIO_FORMAT_PCM_FLOAT:
+        return SND_PCM_FORMAT_FLOAT_LE;
 #endif
-    case AUDIO_FORMAT_PCM_FLOAT:  /* there is no equivalent for float */
     default:
+        return SND_PCM_FORMAT_UNKNOWN;
+    }
+}
+
+/* Converts audio_format to pcm_format.
+ * Parameters:
+ *  format  the audio_format_t to convert
+ *
+ * Logs a fatal error if format is not a valid convertible audio_format_t.
+ */
+static inline snd_pcm_format_t pcm_format_from_audio_format(audio_format_t format)
+{
+    snd_pcm_format_t pcm_format = pcm_format_from_audio_format_safe(format);
+    if (pcm_format == SND_PCM_FORMAT_UNKNOWN) {
         LOG_ALWAYS_FATAL("pcm_format_from_audio_format: invalid audio format %#x", format);
         return 0;
     }
+    return pcm_format;
 }
 
 /* Converts pcm_format to audio_format.
@@ -339,6 +358,8 @@ static audio_format_t audio_format_from_pcm_format(snd_pcm_format_t format)
         return AUDIO_FORMAT_PCM_8_24_BIT;
     case SND_PCM_FORMAT_S32_BE:
         return AUDIO_FORMAT_PCM_32_BIT;
+    case SND_PCM_FORMAT_FLOAT_BE:
+        return AUDIO_FORMAT_PCM_FLOAT;
 #else
     case SND_PCM_FORMAT_S16_LE:
         return AUDIO_FORMAT_PCM_16_BIT;
@@ -348,6 +369,8 @@ static audio_format_t audio_format_from_pcm_format(snd_pcm_format_t format)
         return AUDIO_FORMAT_PCM_8_24_BIT;
     case SND_PCM_FORMAT_S32_LE:
         return AUDIO_FORMAT_PCM_32_BIT;
+    case SND_PCM_FORMAT_FLOAT_LE:
+        return AUDIO_FORMAT_PCM_FLOAT;
 #endif
     default:
         LOG_ALWAYS_FATAL("audio_format_from_pcm_format: invalid pcm format %#x", format);
@@ -793,6 +816,7 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
 
     struct alsa_audio_device *ladev = (struct alsa_audio_device *)dev;
     struct alsa_stream_out *out;
+    snd_pcm_format_t req_format;
     int ret = 0;
 
     out = (struct alsa_stream_out *)calloc(1, sizeof(struct alsa_stream_out));
@@ -818,14 +842,23 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
     out->stream.get_next_write_timestamp = out_get_next_write_timestamp;
 
     out->config.channels = CHANNEL_STEREO;
-    out->config.rate = PLAYBACK_CODEC_SAMPLING_RATE;
-    out->config.format = SND_PCM_FORMAT_S16_LE;
     out->config.period_size = PLAYBACK_PERIOD_SIZE;
     out->config.period_count = PLAYBACK_PERIOD_COUNT;
 
-    if (out->config.rate != config->sample_rate ||
+    /* Use the format and rate AudioFlinger asked for instead of forcing every
+     * stream to S16_LE/48000. Probe with the non-fatal converter: a format
+     * outside the table still aborts. A rate of zero means the caller has no
+     * preference, so use the default.
+     */
+    req_format = pcm_format_from_audio_format_safe(config->format);
+    out->config.format = (req_format != SND_PCM_FORMAT_UNKNOWN) ? req_format
+                                                                : SND_PCM_FORMAT_S16_LE;
+    out->config.rate = (config->sample_rate != 0) ? config->sample_rate
+                                                  : PLAYBACK_CODEC_SAMPLING_RATE;
+
+    if (req_format == SND_PCM_FORMAT_UNKNOWN ||
            audio_channel_count_from_out_mask(config->channel_mask) != CHANNEL_STEREO ||
-               out->config.format !=  pcm_format_from_audio_format(config->format) ) {
+               out->config.rate != config->sample_rate) {
         config->sample_rate = out->config.rate;
         config->format = audio_format_from_pcm_format(out->config.format);
         config->channel_mask = audio_channel_out_mask_from_count(CHANNEL_STEREO);
