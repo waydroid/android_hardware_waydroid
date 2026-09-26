@@ -190,6 +190,7 @@ std::unique_ptr<buffer> create_dmabuf_wl_buffer(wl_conn *conn, const buffer_meta
     zwp_linux_buffer_params_v1_add_listener(params, &params_listener, nullptr);
 
     buf->wl_buffer = zwp_linux_buffer_params_v1_create_immed(params, buf->metadata.width, buf->metadata.height, drm_format, 0);
+    zwp_linux_buffer_params_v1_destroy(params);
     wl_buffer_add_listener(buf->wl_buffer, &buffer_listener, nullptr);
 
     return buf;
