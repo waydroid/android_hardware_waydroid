@@ -2047,7 +2047,30 @@ static void* hwc_wayland_thread(void* data) {
     while (ret != -1)
         ret = wl_display_dispatch(display);
 
-    ALOGE("*** %s: Wayland client was disconnected: %s", __PRETTY_FUNCTION__, strerror(ret));
+    /* Report why the connection died, not strerror(-1): for a protocol
+     * error name the interface/object the compositor rejected, otherwise
+     * the socket errno. Also persist it under /data (bind-mounted from
+     * the host) so it survives the container for post-mortem debugging. */
+    int err = wl_display_get_error(display);
+    char msg[256];
+    if (err == EPROTO) {
+        const struct wl_interface *intf = NULL;
+        uint32_t id = 0;
+        uint32_t code = wl_display_get_protocol_error(display, &intf, &id);
+        snprintf(msg, sizeof(msg), "protocol error: interface %s, object id %u, code %u",
+                 intf ? intf->name : "?", id, code);
+    } else {
+        snprintf(msg, sizeof(msg), "socket error: %s", strerror(err));
+    }
+    ALOGE("*** %s: Wayland client was disconnected: %s", __PRETTY_FUNCTION__, msg);
+
+    FILE *f = fopen("/data/waydroid_hwc_wayland_error.txt", "a");
+    if (f) {
+        struct timespec rt;
+        clock_gettime(CLOCK_REALTIME, &rt);
+        fprintf(f, "[%lld] %s\n", (long long)rt.tv_sec, msg);
+        fclose(f);
+    }
 
     abort();
 }
@@ -2061,6 +2084,21 @@ create_display(const char *gralloc)
         return NULL;
     }
     wl_log_set_handler_client(wayland_log_handler);
+
+    /* Buffers arrive over the Wayland socket as fd-carrying messages;
+     * hitting RLIMIT_NOFILE kills the connection (EMFILE) and takes the
+     * whole session down. Run with the hard limit instead of the soft
+     * default. */
+    struct rlimit nofile;
+    if (getrlimit(RLIMIT_NOFILE, &nofile) == 0 &&
+            nofile.rlim_cur < nofile.rlim_max) {
+        ALOGI("Raising RLIMIT_NOFILE %llu -> %llu",
+              (unsigned long long)nofile.rlim_cur,
+              (unsigned long long)nofile.rlim_max);
+        nofile.rlim_cur = nofile.rlim_max;
+        setrlimit(RLIMIT_NOFILE, &nofile);
+    }
+
     display->system_version = property_get_int32("ro.system.build.version.sdk", 0);
     display->gtype = get_gralloc_type(gralloc);
     display->refresh = 0;
