@@ -845,10 +845,8 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
     out->config.period_size = PLAYBACK_PERIOD_SIZE;
     out->config.period_count = PLAYBACK_PERIOD_COUNT;
 
-    /* Use the format and rate AudioFlinger asked for instead of forcing every
-     * stream to S16_LE/48000. Probe with the non-fatal converter: a format
-     * outside the table still aborts. A rate of zero means the caller has no
-     * preference, so use the default.
+    /* Honor the requested format and rate. An unsupported format falls back
+     * to S16_LE, and a rate of zero (no preference) to the default rate.
      */
     req_format = pcm_format_from_audio_format_safe(config->format);
     out->config.format = (req_format != SND_PCM_FORMAT_UNKNOWN) ? req_format
