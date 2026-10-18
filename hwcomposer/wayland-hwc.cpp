@@ -800,16 +800,26 @@ keyboard_handle_enter(void *data, struct wl_keyboard *,
     struct display *display = (struct display *)data;
     display->keyboard_enter_serial = serial;
 
-    std::scoped_lock lock(display->windowsMutex);
-    auto window = reinterpret_cast<struct window *>(wl_surface_get_user_data(surface));
-    if (!window)
-        return; // Window was destroyed in hwc_set
+    // Only the task id is read under windowsMutex; setFocusedTask() is made
+    // after it is released. It is a synchronous call that ends in
+    // ActivityTaskManager.setFocusedTask(), which waits for the window
+    // manager lock - and system_server can be holding that while it waits on
+    // SurfaceFlinger, which waits on this HWC in hwc_set() for windowsMutex.
+    // Holding the mutex across the call closed that cycle and deadlocked the
+    // whole display stack until the watchdog killed system_server.
+    int taskID = -1;
+    {
+        std::scoped_lock lock(display->windowsMutex);
+        auto window = reinterpret_cast<struct window *>(wl_surface_get_user_data(surface));
+        if (!window)
+            return; // Window was destroyed in hwc_set
 
-    if (display->task != nullptr) {
-        if (window->taskID != "none" && window->taskID != "0") {
-            window->display->task->setFocusedTask(stoi(window->taskID));
-        }
+        if (window->taskID != "none" && window->taskID != "0")
+            taskID = stoi(window->taskID);
     }
+
+    if (display->task != nullptr && taskID >= 0)
+        display->task->setFocusedTask(taskID);
 }
 
 static void
