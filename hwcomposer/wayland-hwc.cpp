@@ -216,10 +216,13 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
     display->req_height = height;
 
     if (display->height && display->width) {
+        int old_width = display->width;
+        int old_height = display->height;
         choose_width_height(display, width, height);
         if (display->wm_base)
             xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width, display->height);
-        do_hotplug(display);
+        if (display->width != old_width || display->height != old_height)
+            do_hotplug(display);
     }
 }
 
@@ -282,9 +285,12 @@ shell_surface_configure(void *data, struct wl_shell_surface *, uint32_t, int32_t
 
     window->configured = true;
 
-    if (display->height && display->width) {
+    if (display->height && display->width && width > 1 && height > 1) {
+        int old_width = display->width;
+        int old_height = display->height;
         choose_width_height(display, width, height);
-        do_hotplug(display);
+        if (display->width != old_width || display->height != old_height)
+            do_hotplug(display);
     }
 }
 
