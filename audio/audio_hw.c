@@ -137,8 +137,6 @@ struct alsa_stream_out {
     unsigned int written;
 };
 
-static size_t out_get_buffer_size(const struct audio_stream *stream);
-
 static void select_devices(struct alsa_audio_device *adev)
 {
     int headphones_on;
@@ -224,8 +222,8 @@ static int start_output_stream(struct alsa_stream_out *out)
   	    return -ENODEV;
     }
 
-    snd_pcm_uframes_t num_frames = out_get_buffer_size((struct audio_stream *)out) /
-                                   audio_stream_out_frame_size((struct audio_stream_out *)out);
+    /* Whole ALSA buffer = period_count periods; out_get_latency() reports the same. */
+    snd_pcm_uframes_t num_frames = out->config.period_size * out->config.period_count;
     if (snd_pcm_hw_params_set_buffer_size(out->pcm, hwparams, num_frames) < 0) {
         ALOGE("Error setting buffer size.\n");
         adev->active_output = NULL;
