@@ -32,6 +32,16 @@ bool single_window_mode_base::should_show() const {
     return !target_layer_tid.empty();
 }
 
+// After focus moves to another window, the previous app still renders at the new display size
+// until Android switches tasks. Keep its window on the last frame at its own size meanwhile.
+bool single_window_mode_base::target_has_focus(waydroid_hwc_composer_device_1 *pdev) const {
+    const window *focused = pdev->display->size_window;
+    if (!focused)
+        return true;
+    auto it = pdev->display->windows.find(target_layer_tid);
+    return it == pdev->display->windows.end() || it->second.get() == focused;
+}
+
 window *single_window_mode_base::get_window(waydroid_hwc_composer_device_1 *pdev) const {
     assert(should_show());
 
@@ -71,7 +81,8 @@ int single_window_mode_base::cleanup_stale_windows(waydroid_hwc_composer_device_
     if (should_show()) {
         for (auto const& [layer_tid, window] : pdev->display->windows) {
             // Replace inactive app window buffer with snapshot
-            if (layer_tid != target_layer_tid && !window->snapshot_buffer) {
+            const struct window *focused = pdev->display->size_window;
+            if ((layer_tid != target_layer_tid || (focused && window.get() != focused)) && !window->snapshot_buffer) {
                 pdev->display->egl_work_queue.push_back(std::bind(snapshot_inactive_app_window, pdev->display, window.get()));
             }
         }
@@ -108,7 +119,7 @@ int non_compositing_single_window_mode::setup_set(waydroid_hwc_composer_device_1
 }
 
 int non_compositing_single_window_mode::handle_layer(waydroid_hwc_composer_device_1* pdev, hwc_layer_1* hwc_layer, size_t i) {
-    if (!should_show()) {
+    if (!should_show() || !target_has_focus(pdev)) {
         if (hwc_layer->acquireFenceFd != -1) {
             close(hwc_layer->acquireFenceFd);
         }
@@ -127,7 +138,7 @@ int compositing_single_window_mode::setup_set(waydroid_hwc_composer_device_1* pd
 }
 
 int compositing_single_window_mode::handle_layer(waydroid_hwc_composer_device_1* pdev, hwc_layer_1* hwc_layer, size_t i) {
-    if (!should_show()) {
+    if (!should_show() || !target_has_focus(pdev)) {
         if (hwc_layer->acquireFenceFd != -1) {
             close(hwc_layer->acquireFenceFd);
         }

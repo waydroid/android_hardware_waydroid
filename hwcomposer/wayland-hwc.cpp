@@ -201,7 +201,7 @@ do_hotplug(struct display *display) {
 static void
 xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
                               int32_t width, int32_t height,
-                              struct wl_array *)
+                              struct wl_array *states)
 {
     struct window *window = (struct window *)data;
     struct display *display = window->display;
@@ -211,6 +211,20 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
         /* or invalid during calibration */
 		return;
 	}
+
+    if (!display->multi_windows) {
+        const auto *state = static_cast<const uint32_t *>(states->data);
+        for (size_t i = 0; i < states->size / sizeof(*state); i++) {
+            if (state[i] == XDG_TOPLEVEL_STATE_ACTIVATED) {
+                // A configure can race the window's destruction on the other thread
+                std::scoped_lock lock(display->windowsMutex);
+                if (display->live_windows.count(window))
+                    display->size_window = window;
+            }
+        }
+        if (display->size_window && display->size_window != window)
+            return;
+    }
 
     display->req_width = width;
     display->req_height = height;
@@ -435,6 +449,11 @@ void window::minimize() {
 }
 
 window::~window() {
+    if (display) {
+        struct window *self = this;
+        display->size_window.compare_exchange_strong(self, nullptr);
+        display->live_windows.erase(this);
+    }
     if (xdg_toplevel)
         xdg_toplevel_destroy(xdg_toplevel);
     if (xdg_surface)
@@ -486,6 +505,7 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
         return nullptr;
 
     window->display = display;
+    display->live_windows.insert(window.get());
     window->surface = wl_compositor_create_surface(display->compositor);
     wl_surface_set_user_data(window->surface, window.get());
     if (display->viewporter)
@@ -2106,6 +2126,8 @@ create_display(const char *gralloc)
     display->isMaximized = true;
     display->supports_cursor_viewport = true;
     display->supports_cursor_hw_buffer = property_get_bool("persist.waydroid.cursor_force_shm", false);
+    display->multi_windows = property_get_bool("persist.waydroid.multi_windows", false);
+    display->size_window = nullptr;
     display->display = wl_display_connect(NULL);
     ALOGI("WAYLAND_DISPLAY: %s", getenv("WAYLAND_DISPLAY"));
     ALOGI("XDG_RUNTIME_DIR: %s", getenv("XDG_RUNTIME_DIR"));

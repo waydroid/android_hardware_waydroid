@@ -388,6 +388,12 @@ struct display {
 
     const hwc_procs_t *procs;
     bool needHotplug;
+
+    // In single-window mode every window shares one Android display, sized from the focused window
+    bool multi_windows;
+    std::atomic<struct window *> size_window;
+    // Windows between window::create() and ~window(), guarded by windowsMutex
+    std::unordered_set<struct window *> live_windows;
 };
 
 void
