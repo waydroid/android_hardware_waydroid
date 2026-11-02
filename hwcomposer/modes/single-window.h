@@ -36,6 +36,7 @@ class single_window_mode_base : public virtual waydroid_mode {
 
     bool should_show() const;
     bool target_has_focus(waydroid_hwc_composer_device_1 *pdev) const;
+    void close_left_task_window(waydroid_hwc_composer_device_1 *pdev);
     window *get_window(waydroid_hwc_composer_device_1 *pdev) const;
 
     int setup_set(waydroid_hwc_composer_device_1 *pdev, hwc_display_contents_1_t *contents) override;

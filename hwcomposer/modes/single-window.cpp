@@ -27,6 +27,7 @@
 
 #include <log/log.h>
 #include <cutils/properties.h>
+#include <sys/system_properties.h>
 
 bool single_window_mode_base::should_show() const {
     return !target_layer_tid.empty();
@@ -40,6 +41,43 @@ bool single_window_mode_base::target_has_focus(waydroid_hwc_composer_device_1 *p
         return true;
     auto it = pdev->display->windows.find(target_layer_tid);
     return it == pdev->display->windows.end() || it->second.get() == focused;
+}
+
+// Android returned to a task that already has a window, without a launch or a focus change from
+// us: the focused app finished or moved its task to the back, so close its window. A switch to a
+// task without a window is the app opening another one, and keeps both windows.
+void single_window_mode_base::close_left_task_window(waydroid_hwc_composer_device_1 *pdev) {
+    auto *display = pdev->display;
+    // `waydroid app launch` sets waydroid.active_apps before Android switches tasks. The serial
+    // changes on every set, also when the same package is launched again.
+    uint32_t active_apps_serial = 0;
+    if (const prop_info *active_apps = __system_property_find("waydroid.active_apps")) {
+        __system_property_read_callback(active_apps, [](void *cookie, const char *, const char *, uint32_t serial) {
+            *static_cast<uint32_t *>(cookie) = serial;
+        }, &active_apps_serial);
+    }
+
+    // A setFocusedTask() request is fulfilled once its task is in front, so it cannot later excuse
+    // a Back that returns to the same task
+    int requested = display->requested_task;
+    const bool focus_requested = requested >= 0 && std::to_string(requested) == target_layer_tid;
+    if (focus_requested)
+        display->requested_task.compare_exchange_strong(requested, -1);
+
+    if (display->last_target_tid == target_layer_tid)
+        return;
+
+    const bool launched = active_apps_serial != display->last_active_apps_serial;
+    const std::string left_tid = display->last_target_tid;
+    display->last_target_tid = target_layer_tid;
+    display->last_active_apps_serial = active_apps_serial;
+
+    if (left_tid.empty() || launched || focus_requested
+            || display->windows.find(target_layer_tid) == display->windows.end())
+        return;
+    auto it = display->windows.find(left_tid);
+    if (it != display->windows.end() && it->second.get() == display->size_window)
+        display->windows.erase(it);
 }
 
 window *single_window_mode_base::get_window(waydroid_hwc_composer_device_1 *pdev) const {
@@ -71,6 +109,7 @@ int single_window_mode_base::cleanup_stale_windows(waydroid_hwc_composer_device_
         } else if (pdev->display->ignored_apps.count(first_tid_layer->tid) == 0) {
             target_layer_tid = first_tid_layer->tid;
             target_layer_aid = first_tid_layer->aid;
+            close_left_task_window(pdev);
         }
     }
 

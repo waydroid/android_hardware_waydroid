@@ -248,29 +248,26 @@ xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
 {
     struct window *window = (struct window *)data;
     struct display *display = window->display;
+    // removeTask() waits for Android, and hwc_set() can erase the window meanwhile
+    const std::string taskID = window->taskID;
+    const std::string key = (taskID != "0" && taskID != "none") ? taskID : window->appID;
 
     // simulate user input to restart idle timeout (TODO: find a better way)
-    send_key_event(window->display, 0, WL_KEYBOARD_KEY_STATE_PRESSED);
-    send_key_event(window->display, 0, WL_KEYBOARD_KEY_STATE_RELEASED);
+    send_key_event(display, 0, WL_KEYBOARD_KEY_STATE_PRESSED);
+    send_key_event(display, 0, WL_KEYBOARD_KEY_STATE_RELEASED);
 
     if (display->task != nullptr) {
-        if (window->taskID != "none") {
-            if (window->taskID == "0") {
+        if (taskID != "none") {
+            if (taskID == "0") {
                 property_set("waydroid.active_apps", "none");
                 display->task->removeAllVisibleRecentTasks();
             } else {
-                display->task->removeTask(stoi(window->taskID));
+                display->task->removeTask(stoi(taskID));
             }
         }
     }
 
-    std::scoped_lock lock(window->display->windowsMutex);
-    std::string key;
-    if (window->taskID != "0" && window->taskID != "none") {
-        key = window->taskID;
-    } else {
-        key = window->appID;
-    }
+    std::scoped_lock lock(display->windowsMutex);
     display->ignored_apps.insert(key);
     display->windows.erase(key);
 }
@@ -844,6 +841,8 @@ keyboard_handle_enter(void *data, struct wl_keyboard *,
             taskID = stoi(window->taskID);
     }
 
+    if (taskID >= 0)
+        display->requested_task = taskID;
     if (display->task != nullptr && taskID >= 0)
         display->task->setFocusedTask(taskID);
 }
@@ -2128,6 +2127,8 @@ create_display(const char *gralloc)
     display->supports_cursor_hw_buffer = property_get_bool("persist.waydroid.cursor_force_shm", false);
     display->multi_windows = property_get_bool("persist.waydroid.multi_windows", false);
     display->size_window = nullptr;
+    display->requested_task = -1;
+    display->last_active_apps_serial = 0;
     display->display = wl_display_connect(NULL);
     ALOGI("WAYLAND_DISPLAY: %s", getenv("WAYLAND_DISPLAY"));
     ALOGI("XDG_RUNTIME_DIR: %s", getenv("XDG_RUNTIME_DIR"));
