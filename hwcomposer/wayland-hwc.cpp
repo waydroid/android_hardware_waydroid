@@ -157,6 +157,26 @@ void choose_width_height(struct display* display, int32_t hint_width, int32_t hi
     display->height = height;
 }
 
+static void
+update_window_pixel_size(struct display *display) {
+    display->window_pixel_width = floor(display->width * display->scale)
+            - property_get_int32("persist.waydroid.width_padding", 0);
+    display->window_pixel_height = floor(display->height * display->scale)
+            - property_get_int32("persist.waydroid.height_padding", 0);
+}
+
+void
+effective_scale(struct display *display, double *scale_x, double *scale_y) {
+    *scale_x = *scale_y = display->scale;
+    if (display->resize_interval_ms <= 0)
+        return;
+    std::scoped_lock lock(display->content_scale_mutex);
+    if (display->content_scale_x > 0 && display->content_scale_y > 0) {
+        *scale_x = display->content_scale_x;
+        *scale_y = display->content_scale_y;
+    }
+}
+
 static std::unique_lock<std::mutex> lock_resize(struct display *display);
 
 void
@@ -174,6 +194,7 @@ finished_calibrating(struct display *d)
     // window::create() calibrates on the HWC thread while the Wayland thread handles configures
     auto lock = lock_resize(d);
     choose_width_height(d, d->req_width, d->req_height);
+    update_window_pixel_size(d);
 }
 
 void
@@ -280,8 +301,10 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
         choose_width_height(display, width, height);
         if (display->wm_base)
             xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width, display->height);
-        if (display->width != old_width || display->height != old_height)
+        if (display->width != old_width || display->height != old_height) {
+            update_window_pixel_size(display);
             request_hotplug(display);
+        }
     }
 }
 
@@ -349,8 +372,10 @@ shell_surface_configure(void *data, struct wl_shell_surface *, uint32_t, int32_t
         int old_width = display->width;
         int old_height = display->height;
         choose_width_height(display, width, height);
-        if (display->width != old_width || display->height != old_height)
+        if (display->width != old_width || display->height != old_height) {
+            update_window_pixel_size(display);
             request_hotplug(display);
+        }
     }
 }
 
@@ -427,11 +452,11 @@ void surface_context::set_crop(hwc_frect_t crop) {
                            wl_fixed_from_double(height));
 }
 
-void surface_context::set_display_frame(hwc_rect_t rect, double scale) {
+void surface_context::set_display_frame(hwc_rect_t rect, double scale_x, double scale_y) {
     assert(viewport);
 
-    int width = static_cast<int>(ceil((rect.right - rect.left) / scale));
-    int height = static_cast<int>(ceil((rect.bottom - rect.top) / scale));
+    int width = static_cast<int>(ceil((rect.right - rect.left) / scale_x));
+    int height = static_cast<int>(ceil((rect.bottom - rect.top) / scale_y));
 
     wp_viewport_set_destination(viewport,
                                 std::max(1, width),
@@ -978,10 +1003,10 @@ pointer_handle_motion(void *data, struct wl_pointer *,
     }
     x = wl_fixed_to_int(sx);
     y = wl_fixed_to_int(sy);
-    if (display->scale != 1) {
-        x = int(x * display->scale);
-        y = int(y * display->scale);
-    }
+    double scale_x, scale_y;
+    effective_scale(display, &scale_x, &scale_y);
+    x = int(x * scale_x);
+    y = int(y * scale_y);
     x += display->layers[display->pointer_surface].x;
     y += display->layers[display->pointer_surface].y;
 
@@ -1217,10 +1242,10 @@ touch_handle_down(void *data, struct wl_touch *,
     }
     x = wl_fixed_to_int(x_w);
     y = wl_fixed_to_int(y_w);
-    if (display->scale != 1) {
-        x = int(x * display->scale);
-        y = int(y * display->scale);
-    }
+    double scale_x, scale_y;
+    effective_scale(display, &scale_x, &scale_y);
+    x = int(x * scale_x);
+    y = int(y * scale_y);
     x += display->layers[surface].x;
     y += display->layers[surface].y;
 
@@ -1289,10 +1314,10 @@ touch_handle_motion(void *data, struct wl_touch *,
         }
         x = wl_fixed_to_int(x_w);
         y = wl_fixed_to_int(y_w);
-        if (display->scale != 1) {
-            x = int(x * display->scale);
-            y = int(y * display->scale);
-        }
+        double scale_x, scale_y;
+        effective_scale(display, &scale_x, &scale_y);
+        x = int(x * scale_x);
+        y = int(y * scale_y);
         x += display->layers[display->touch_surfaces[id]].x;
         y += display->layers[display->touch_surfaces[id]].y;
 
@@ -1757,10 +1782,10 @@ tablet_tool_motion(void *data, struct zwp_tablet_tool_v2 *,
         }
         x = wl_fixed_to_int(x_w);
         y = wl_fixed_to_int(y_w);
-        if (display->scale != 1) {
-            x = int(x * display->scale);
-            y = int(y * display->scale);
-        }
+        double scale_x, scale_y;
+        effective_scale(display, &scale_x, &scale_y);
+        x = int(x * scale_x);
+        y = int(y * scale_y);
         x += display->layers[display->tablet_surface].x;
         y += display->layers[display->tablet_surface].y;
 
