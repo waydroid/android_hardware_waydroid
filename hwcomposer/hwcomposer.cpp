@@ -337,7 +337,7 @@ static void apply_surface_damage(hwc_layer_1 *hwc_layer, surface_context &surfac
     });
 }
 
-static int apply_hwc_layer_to_surface_context(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index, surface_context &surface_context, buffer *buf = nullptr) {
+static int apply_hwc_layer_to_surface_context(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index, surface_context &surface_context, double scale_x, double scale_y, buffer *buf = nullptr) {
     constexpr int acquireWarningMS = 100;
     int res = -1;
 
@@ -358,7 +358,7 @@ static int apply_hwc_layer_to_surface_context(waydroid_hwc_composer_device_1 *pd
     // Scaling can only be supported correctly with wp_viewport
     if (surface_context.viewport) {
         surface_context.set_crop(rect_apply_transform(hwc_layer->sourceCropf, hwc_layer->transform));
-        surface_context.set_display_frame(hwc_layer->displayFrame, pdev->display->scale);
+        surface_context.set_display_frame(hwc_layer->displayFrame, scale_x, scale_y);
     } else {
         surface_context.set_buffer_scale(pdev->display->scale);
     }
@@ -395,21 +395,23 @@ int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 
 
     auto &window_layer = window->get_next_layer();
 
-    if (apply_hwc_layer_to_surface_context(pdev, hwc_layer, hwc_layer_index, window_layer, buf) != 0) {
+    double scale_x, scale_y;
+    effective_scale(pdev->display, &scale_x, &scale_y);
+    if (apply_hwc_layer_to_surface_context(pdev, hwc_layer, hwc_layer_index, window_layer, scale_x, scale_y, buf) != 0) {
         return -1;
     }
 
     window_layer.set_position(
-        floor(hwc_layer->displayFrame.left / pdev->display->scale),
-        floor(hwc_layer->displayFrame.top / pdev->display->scale)
+        floor(hwc_layer->displayFrame.left / scale_x),
+        floor(hwc_layer->displayFrame.top / scale_y)
     );
 
     if (window->input_region) {
         wl_region_add(window->input_region,
-                      -WINDOW_DECORATION_OUTSET + floor(hwc_layer->displayFrame.left / pdev->display->scale),
-                      -WINDOW_DECORATION_OUTSET + floor(hwc_layer->displayFrame.top / pdev->display->scale),
-                      2*WINDOW_DECORATION_OUTSET + ceil((hwc_layer->displayFrame.right - hwc_layer->displayFrame.left) / pdev->display->scale),
-                      2*WINDOW_DECORATION_OUTSET + ceil((hwc_layer->displayFrame.bottom - hwc_layer->displayFrame.top) / pdev->display->scale));
+                      -WINDOW_DECORATION_OUTSET + floor(hwc_layer->displayFrame.left / scale_x),
+                      -WINDOW_DECORATION_OUTSET + floor(hwc_layer->displayFrame.top / scale_y),
+                      2*WINDOW_DECORATION_OUTSET + ceil((hwc_layer->displayFrame.right - hwc_layer->displayFrame.left) / scale_x),
+                      2*WINDOW_DECORATION_OUTSET + ceil((hwc_layer->displayFrame.bottom - hwc_layer->displayFrame.top) / scale_y));
     }
 
     pdev->display->layers[window_layer.surface] = {
@@ -427,6 +429,31 @@ int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 
     window->snapshot_buffer = nullptr;
 
     return 0;
+}
+
+// Stretch the last frame over the window until Android reaches the window size
+static void update_content_scale(struct display *display, const hwc_display_contents_1_t *contents) {
+    if (display->resize_interval_ms <= 0)
+        return;
+
+    std::scoped_lock lock(display->content_scale_mutex);
+    const int window_width = display->window_pixel_width;
+    const int window_height = display->window_pixel_height;
+    display->content_scale_x = display->scale;
+    display->content_scale_y = display->scale;
+    if (!display->viewporter || window_width <= 0 || window_height <= 0)
+        return;
+    for (size_t l = 0; l < contents->numHwLayers; l++) {
+        const auto &frame = contents->hwLayers[l].displayFrame;
+        if (contents->hwLayers[l].compositionType == HWC_FRAMEBUFFER_TARGET && frame.right > 0 && frame.bottom > 0) {
+            // A matching size keeps the exact scale; the ratio is off by a rounding step
+            if (frame.right != window_width)
+                display->content_scale_x = display->scale * frame.right / window_width;
+            if (frame.bottom != window_height)
+                display->content_scale_y = display->scale * frame.bottom / window_height;
+            break;
+        }
+    }
 }
 
 static void reset_per_commit_state_window(waydroid_hwc_composer_device_1 *pdev) {
@@ -454,6 +481,9 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
     std::scoped_lock lock(pdev->display->windowsMutex);
     mode->cleanup_stale_windows(pdev, contents);
+    // One display-wide factor would stretch every app window by the resized one's ratio
+    if (!pdev->multi_windows)
+        update_content_scale(pdev->display, contents);
 
     reset_per_commit_state_window(pdev);
 
@@ -921,7 +951,8 @@ void wl_cursor_cursor_handler::set_cursor(display* display) const {
 
 int wl_cursor_cursor_handler::apply_cursor(waydroid_hwc_composer_device_1* pdev, hwc_layer_1* hwc_layer, size_t hwc_layer_index) {
     if (pdev->display->pointer) {
-        if (apply_hwc_layer_to_surface_context(pdev, hwc_layer, hwc_layer_index, cursor_surface_context) != 0) {
+        if (apply_hwc_layer_to_surface_context(pdev, hwc_layer, hwc_layer_index, cursor_surface_context,
+                                               pdev->display->scale, pdev->display->scale) != 0) {
             ALOGE("Failed to prepare cursur surface");
             return -1;
         }
