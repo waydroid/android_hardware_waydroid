@@ -394,6 +394,12 @@ struct display {
     std::atomic<struct window *> size_window;
     // Windows between window::create() and ~window(), guarded by windowsMutex
     std::unordered_set<struct window *> live_windows;
+    // Last task passed to setFocusedTask(), and the task and waydroid.active_apps of the last frame
+    std::atomic<int> requested_task;
+    std::string last_target_tid;
+    uint32_t last_active_apps_serial;
+    // When the user last pressed a key or button that Android takes as Back
+    std::atomic<std::chrono::steady_clock::rep> last_back;
 };
 
 void
