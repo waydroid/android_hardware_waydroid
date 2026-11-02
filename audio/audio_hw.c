@@ -153,6 +153,16 @@ static void select_devices(struct alsa_audio_device *adev)
     ALOGV("hp=%c speaker=%c headset-mic=%c", headphones_on ? 'y' : 'n', speaker_on ? 'y' : 'n', headset_mic_on ? 'y' : 'n');
 }
 
+/* Frames in the whole ALSA playback buffer: period_count periods, scaled for
+ * rates above 48 kHz so the buffer stays about 85 ms long at any rate. */
+static snd_pcm_uframes_t playback_buffer_frames(const struct alsa_stream_out *out)
+{
+    uint64_t frames = (uint64_t)out->config.period_size * out->config.period_count;
+    if (out->config.rate > PLAYBACK_CODEC_SAMPLING_RATE)
+        frames = (frames * out->config.rate + PLAYBACK_CODEC_SAMPLING_RATE - 1) / PLAYBACK_CODEC_SAMPLING_RATE;
+    return frames;
+}
+
 /* must be called with hw device and output stream mutexes locked */
 static int start_output_stream(struct alsa_stream_out *out)
 {
@@ -224,8 +234,7 @@ static int start_output_stream(struct alsa_stream_out *out)
   	    return -ENODEV;
     }
 
-    /* Whole ALSA buffer = period_count periods; out_get_latency() reports the same. */
-    snd_pcm_uframes_t num_frames = out->config.period_size * out->config.period_count;
+    snd_pcm_uframes_t num_frames = playback_buffer_frames(out);
     if (snd_pcm_hw_params_set_buffer_size(out->pcm, hwparams, num_frames) < 0) {
         ALOGE("Error setting buffer size.\n");
         adev->active_output = NULL;
@@ -440,7 +449,7 @@ static uint32_t out_get_latency(const struct audio_stream_out *stream)
 {
     ALOGV("out_get_latency");
     struct alsa_stream_out *out = (struct alsa_stream_out *)stream;
-    return (PLAYBACK_PERIOD_SIZE * PLAYBACK_PERIOD_COUNT * 1000) / out->config.rate;
+    return (playback_buffer_frames(out) * 1000) / out->config.rate;
 }
 
 static int out_set_volume(struct audio_stream_out *stream, float left,
