@@ -203,7 +203,7 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
         if (contents->hwLayers[i].compositionType == HWC_FRAMEBUFFER_TARGET)
             continue;
         const std::string &name = pdev->display->layer_names[i];
-        int task = name.compare(0, 4, "TID:") == 0 ? atoi(name.c_str() + 4) : 0;
+        int task = name.compare(0, 4, "TID:") == 0 ? parse_task_id(name.substr(4, name.find('#') - 4)) : 0;
         if (task > 0 && std::find(tasks.begin(), tasks.end(), task) == tasks.end())
             tasks.push_back(task);
     }
