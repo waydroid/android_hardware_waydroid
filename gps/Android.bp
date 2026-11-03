@@ -1,0 +1,20 @@
+// Copyright (C) 2011 The Android-x86 Open Source Project
+
+cc_library_shared {
+    name: "gps.default",
+    relative_install_path: "hw",
+    proprietary: true,
+    srcs: ["gps.c"],
+    include_dirs: [
+        "hardware/libhardware/include",
+        "system/core/libsystem/include",
+    ],
+    shared_libs: [
+        "libcutils",
+        "liblog",
+    ],
+    cflags: [
+        "-Wno-unused-parameter",
+        "-Wno-unused-variable",
+    ],
+}
