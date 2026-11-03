@@ -79,6 +79,8 @@
 #include "relative-pointer-unstable-v1-client-protocol.h"
 #include "idle-inhibit-unstable-v1-client-protocol.h"
 #include "fractional-scale-v1-client-protocol.h"
+#include "color-management-v1-client-protocol.h"
+#include "hdr.h"
 
 using ::android::hardware::hidl_string;
 
@@ -448,6 +450,7 @@ window::~window() {
     if (idle_inhibitor)
         zwp_idle_inhibitor_v1_destroy(idle_inhibitor);
 
+    hdr_destroy_window(this);
     layers.clear();
     if (dedicated_background_surface) {
         if (viewport)
@@ -1889,6 +1892,17 @@ static void add_tablet_seat(struct display *d) {
 }
 
 static void
+shm_handle_format(void *data, struct wl_shm *, uint32_t format)
+{
+    if (format == WL_SHM_FORMAT_XBGR2101010)
+        static_cast<struct display *>(data)->shm_xbgr2101010 = true;
+}
+
+static const struct wl_shm_listener shm_listener = {
+    shm_handle_format,
+};
+
+static void
 registry_handle_global(void *data, struct wl_registry *registry,
                uint32_t id, const char *interface, uint32_t version)
 {
@@ -1920,10 +1934,12 @@ registry_handle_global(void *data, struct wl_registry *registry,
     } else if (strcmp(interface, "wl_shm") == 0) {
 		d->shm = (struct wl_shm *)wl_registry_bind(registry, id,
                 &wl_shm_interface, 1);
+        wl_shm_add_listener(d->shm, &shm_listener, d);
     } else if (strcmp(interface, "wl_output") == 0) {
         d->output = (struct wl_output*)wl_registry_bind(registry, id,
                 &wl_output_interface, std::min(version, 3U));
         wl_output_add_listener(d->output, &output_listener, d);
+        hdr_output_added(d, id, d->output);
         wl_display_roundtrip(d->display);
     } else if (strcmp(interface, "wp_presentation") == 0) {
         bool no_presentation = property_get_bool("persist.waydroid.no_presentation", false);
@@ -1969,6 +1985,8 @@ registry_handle_global(void *data, struct wl_registry *registry,
                 &wl_data_device_manager_interface, std::min(version,  3U));
         if (d->data_device_manager && d->seat)
             d->data_device = wl_data_device_manager_get_data_device(d->data_device_manager, d->seat);
+    } else if (strcmp(interface, wp_color_manager_v1_interface.name) == 0) {
+        hdr_bind_color_manager(d, registry, id, version);
     } else if (strcmp(interface, "gtk_shell1") == 0) {
         if (version < 6)
             d->supports_cursor_viewport = false;
@@ -1978,8 +1996,9 @@ registry_handle_global(void *data, struct wl_registry *registry,
 }
 
 static void
-registry_handle_global_remove(void *, struct wl_registry *, uint32_t)
+registry_handle_global_remove(void *data, struct wl_registry *, uint32_t name)
 {
+    hdr_output_removed(static_cast<struct display *>(data), name);
 }
 
 static const struct wl_registry_listener registry_listener = {
@@ -2055,13 +2074,17 @@ void open_windows::erase(const key_type& key) {
 }
 
 static void* hwc_wayland_thread(void* data) {
-    auto* display = static_cast<struct wl_display*>(data);
+    auto* d = static_cast<struct display*>(data);
+    auto* display = d->display;
     int ret = 0;
 
     setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
 
-    while (ret != -1)
+    while (ret != -1) {
         ret = wl_display_dispatch(display);
+        // Events that a roundtrip on another thread read wait for the next wakeup here
+        hdr_dispatch_outputs(d);
+    }
 
     /* Report why the connection died, not strerror(-1): for a protocol
      * error name the interface/object the compositor rejected, otherwise
@@ -2124,8 +2147,9 @@ create_display(const char *gralloc)
     wl_registry_add_listener(display->registry,
                  &registry_listener, display);
     wl_display_roundtrip(display->display);
+    hdr_init(display);
 
-    if (pthread_create(&display->wayland_thread, nullptr, hwc_wayland_thread, display->display) != 0) {
+    if (pthread_create(&display->wayland_thread, nullptr, hwc_wayland_thread, display) != 0) {
         ALOGE("Couldn't create wayland thread");
         wl_display_disconnect(display->display);
         sem_destroy(&display->egl_go);
@@ -2166,6 +2190,7 @@ destroy_display(struct display *display)
     if (display->pointer_constraints)
         zwp_pointer_constraints_v1_destroy(display->pointer_constraints);
 
+    hdr_destroy_display(display);
     wl_registry_destroy(display->registry);
     wl_display_flush(display->display);
     wl_display_disconnect(display->display);

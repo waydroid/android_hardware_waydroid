@@ -77,6 +77,8 @@ struct waydroid_hwc_composer_device_1 : hwc_composer_device_1_t {
     int next_sync_point;
     bool should_compose;
     bool multi_windows;
+    // Dataspace of each layer of the frame being prepared, from the HWC2 adapter
+    std::vector<int32_t> layer_dataspaces;
 
     std::unique_ptr<waydroid_mode> selected_mode;
 };
