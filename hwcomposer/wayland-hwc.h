@@ -57,7 +57,9 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 
+#include <chrono>
 #include <functional>
+#include <mutex>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -184,6 +186,8 @@ struct window {
     };
 
     struct display *display;
+    // Listener data of the window's Wayland objects, never reused
+    uintptr_t id;
 
     struct wl_shell_surface *shell_surface;
     struct xdg_surface *xdg_surface;
@@ -390,12 +394,19 @@ struct display {
     bool needHotplug;
 
     // In single-window mode every window shares one Android display, sized from the focused window
-    bool multi_windows;
+    std::atomic<bool> multi_windows;
     std::atomic<struct window *> size_window;
-    // Windows between window::create() and ~window(), guarded by windowsMutex
-    std::unordered_set<struct window *> live_windows;
-    // Last task passed to setFocusedTask(), and the task and waydroid.active_apps of the last frame
-    std::atomic<int> requested_task;
+    // Since when the window of Android's front task has not been the focused window. The pointers
+    // are only compared, and the fields are used by hwc_set() under windowsMutex.
+    struct {
+        const struct window *target = nullptr;
+        const struct window *focused = nullptr;
+        std::chrono::steady_clock::time_point since;
+    } unfocused_target;
+    // Tasks passed to setFocusedTask() that Android has not brought to the front yet, and when
+    std::mutex requested_tasks_mutex;
+    std::unordered_map<std::string, std::chrono::steady_clock::time_point> requested_tasks;
+    // The task and waydroid.active_apps of the last frame
     std::string last_target_tid;
     uint32_t last_active_apps_serial;
 };
