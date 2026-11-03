@@ -1534,12 +1534,17 @@ static const struct zwp_linux_dmabuf_v1_listener dmabuf_listener = {
 };
 
 static void
-output_handle_mode(void *data, struct wl_output *,
-                   uint32_t, int32_t width, int32_t height,
+output_handle_mode(void *data, struct wl_output *output,
+                   uint32_t flags, int32_t width, int32_t height,
                    int32_t refresh)
 {
     struct display *d = (struct display *)data;
-    d->refresh = std::max(d->refresh, refresh);
+    if (flags & WL_OUTPUT_MODE_CURRENT) {
+        refresh_output_mode(d, output, refresh);
+        // wl_output v1 has no done event to end the mode list
+        if (wl_output_get_version(output) < WL_OUTPUT_DONE_SINCE_VERSION)
+            refresh_output_done(d, output);
+    }
 
     // Fallback size
     // We can't do anything meaningful if there's more than one display, just pick one at random
@@ -1560,8 +1565,9 @@ output_handle_geometry(void *, struct wl_output *,
 }
 
 static void
-output_handle_done(void *, struct wl_output *)
+output_handle_done(void *data, struct wl_output *output)
 {
+    refresh_output_done((struct display *)data, output);
 }
 
 static void
@@ -2013,6 +2019,7 @@ registry_handle_global(void *data, struct wl_registry *registry,
         d->output = (struct wl_output*)wl_registry_bind(registry, id,
                 &wl_output_interface, std::min(version, 3U));
         wl_output_add_listener(d->output, &output_listener, d);
+        refresh_add_output(d, id, d->output);
         wl_display_roundtrip(d->display);
     } else if (strcmp(interface, "wp_presentation") == 0) {
         bool no_presentation = property_get_bool("persist.waydroid.no_presentation", false);
@@ -2067,8 +2074,9 @@ registry_handle_global(void *data, struct wl_registry *registry,
 }
 
 static void
-registry_handle_global_remove(void *, struct wl_registry *, uint32_t)
+registry_handle_global_remove(void *data, struct wl_registry *, uint32_t name)
 {
+    refresh_remove_global((struct display *)data, name);
 }
 
 static const struct wl_registry_listener registry_listener = {
@@ -2216,6 +2224,7 @@ create_display(const char *gralloc)
     wl_registry_add_listener(display->registry,
                  &registry_listener, display);
     wl_display_roundtrip(display->display);
+    refresh_start(display);
 
     if (pthread_create(&display->wayland_thread, nullptr, hwc_wayland_thread, display->display) != 0) {
         ALOGE("Couldn't create wayland thread");

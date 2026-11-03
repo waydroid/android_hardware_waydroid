@@ -64,7 +64,6 @@ struct waydroid_hwc_composer_device_1 : hwc_composer_device_1_t {
     pthread_t vsync_thread;          // constant after init
     pthread_t binder_thread;         // constant after init
     pthread_t egl_worker_thread;     // constant after init
-    int32_t vsync_period_ns;         // constant after init
     struct display *display;         // constant after init
     gralloc_handler gralloc_handler; // constant after init
 

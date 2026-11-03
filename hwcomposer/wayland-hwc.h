@@ -372,7 +372,8 @@ struct display {
     int full_height;
     int req_width;
     int req_height;
-    int refresh;
+    // Refresh rate Android runs at, in mHz; see refresh.cpp
+    std::atomic<int> refresh;
 
     std::unordered_set<uint32_t> formats;
 
@@ -421,6 +422,28 @@ handle_relative_motion(void *data, struct zwp_relative_pointer_v1*,
 
 void
 snapshot_inactive_app_window(struct display *display, struct window *window);
+
+// Display configs, one per refresh rate of the host's monitors (refresh.cpp)
+void
+refresh_add_output(struct display *display, uint32_t name, struct wl_output *output);
+void
+refresh_output_mode(struct display *display, struct wl_output *output, int32_t refresh);
+void
+refresh_output_done(struct display *display, struct wl_output *output);
+void
+refresh_remove_global(struct display *display, uint32_t name);
+void
+refresh_start(struct display *display);
+size_t
+refresh_config_count();
+int32_t
+refresh_config_period_ns(size_t config);
+int
+refresh_active_config(const struct display *display);
+bool
+refresh_set_active_config(struct display *display, size_t config);
+int32_t
+refresh_vsync_period_ns(const struct display *display);
 
 struct display *
 create_display(const char* gralloc);
