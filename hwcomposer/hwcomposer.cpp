@@ -27,6 +27,7 @@
 #include <wayland-client.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <algorithm>
 #include <string>
 #include <sstream>
 #include <functional>
@@ -196,6 +197,21 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
     assert(contents);
 
     pdev->selected_mode = select_mode(pdev, contents);
+
+    std::vector<int> tasks;
+    for (size_t i = 0; i < contents->numHwLayers; i++) {
+        if (contents->hwLayers[i].compositionType == HWC_FRAMEBUFFER_TARGET)
+            continue;
+        const std::string &name = pdev->display->layer_names[i];
+        int task = name.compare(0, 4, "TID:") == 0 ? atoi(name.c_str() + 4) : 0;
+        if (task > 0 && std::find(tasks.begin(), tasks.end(), task) == tasks.end())
+            tasks.push_back(task);
+    }
+    {
+        std::scoped_lock lock(pdev->display->primary_tasks_mutex);
+        pdev->display->primary_tasks = std::move(tasks);
+    }
+
     if (pdev->selected_mode->setup_prepare(pdev, contents) != 0) {
         return -1;
     }

@@ -290,8 +290,16 @@ xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
     if (display->task != nullptr) {
         if (taskID != "none") {
             if (taskID == "0") {
+                // Closes what the full UI shows. removeAllVisibleRecentTasks() would also
+                // close apps that other displays show in windows of their own.
                 property_set("waydroid.active_apps", "none");
-                display->task->removeAllVisibleRecentTasks();
+                std::vector<int> tasks;
+                {
+                    std::scoped_lock lock(display->primary_tasks_mutex);
+                    tasks = display->primary_tasks;
+                }
+                for (int task : tasks)
+                    display->task->removeTask(task);
             } else {
                 display->task->removeTask(stoi(taskID));
             }
