@@ -378,6 +378,10 @@ struct display {
 
     std::map<uint32_t, std::vector<uint64_t>> modifiers;
     std::map<uint32_t, std::string> layer_names;
+    // Tasks that had a layer in the full UI since its window opened. Tasks on other
+    // displays, such as per-app virtual displays, never appear here.
+    std::mutex primary_tasks_mutex;
+    std::vector<int> primary_tasks;
     std::map<uint32_t, struct handleExt> layer_handles_ext;
     struct handleExt target_layer_handle_ext;
     std::unordered_map<buffer_handle_t, std::unique_ptr<buffer>> buffer_map;
