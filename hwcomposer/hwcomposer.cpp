@@ -125,8 +125,13 @@ namespace {
             buf = emplace_result.first->second.get();
         }
 
-        if (buf->isShm)
+        if (buf->isShm) {
+            // The copy reads the layer, so it waits for the GPU to finish drawing it.
+            // The wait before the commit comes too late for this.
+            if (layer->acquireFenceFd != -1 && sync_wait(layer->acquireFenceFd, 100) < 0 && errno == ETIME)
+                ALOGE("hwcomposer waited on fence %d for 100 ms before copying", layer->acquireFenceFd);
             gralloc_handler.update_shm_buffer(pdev->display, buf);
+        }
         return buf;
     }
 
