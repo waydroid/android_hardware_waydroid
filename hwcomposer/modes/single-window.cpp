@@ -27,9 +27,78 @@
 
 #include <log/log.h>
 #include <cutils/properties.h>
+#include <sys/system_properties.h>
 
 bool single_window_mode_base::should_show() const {
     return !target_layer_tid.empty();
+}
+
+// Longest wait for Android to bring the focused window's task to the front
+static constexpr std::chrono::seconds kFocusRequestTimeout{2};
+
+// After focus moves to another window, or a launched app's window is not focused yet, the app in
+// front renders at the focused window's size. Keep its window on the last frame at its own size
+// meanwhile, but not for longer than the timeout, so a failed setFocusedTask() cannot freeze it.
+bool single_window_mode_base::target_has_focus(waydroid_hwc_composer_device_1 *pdev) {
+    auto *display = pdev->display;
+    const window *focused = display->size_window;
+    if (!focused)
+        return true;
+    auto it = display->windows.find(target_layer_tid);
+    if (it == display->windows.end() || it->second.get() == focused)
+        return true;
+
+    const auto now = std::chrono::steady_clock::now();
+    auto &unfocused = display->unfocused_target;
+    if (unfocused.target != it->second.get() || unfocused.focused != focused)
+        unfocused = {it->second.get(), focused, now};
+    return now - unfocused.since > kFocusRequestTimeout;
+}
+
+// Android returned to a task that already has a window, without a launch or a focus change from
+// us: the focused app finished or moved its task to the back, so close its window. A switch to a
+// task without a window is the app opening another one, and keeps both windows.
+void single_window_mode_base::close_left_task_window(waydroid_hwc_composer_device_1 *pdev) {
+    auto *display = pdev->display;
+    // `waydroid app launch` sets waydroid.active_apps before Android switches tasks. The serial
+    // changes on every set, also when the same package is launched again.
+    uint32_t active_apps_serial = 0;
+    if (const prop_info *active_apps = __system_property_find("waydroid.active_apps")) {
+        __system_property_read_callback(active_apps, [](void *cookie, const char *, const char *, uint32_t serial) {
+            *static_cast<uint32_t *>(cookie) = serial;
+        }, &active_apps_serial);
+    }
+
+    // A setFocusedTask() request is fulfilled once its task is in front, so it cannot later excuse
+    // a Back that returns to the same task. Several can be pending while focus moves across windows.
+    bool focus_requested;
+    {
+        const auto now = std::chrono::steady_clock::now();
+        std::scoped_lock lock(display->requested_tasks_mutex);
+        auto &requests = display->requested_tasks;
+        for (auto it = requests.begin(); it != requests.end();) {
+            if (now - it->second > kFocusRequestTimeout)
+                it = requests.erase(it);
+            else
+                ++it;
+        }
+        focus_requested = requests.erase(target_layer_tid) > 0;
+    }
+
+    if (display->last_target_tid == target_layer_tid)
+        return;
+
+    const bool launched = active_apps_serial != display->last_active_apps_serial;
+    const std::string left_tid = display->last_target_tid;
+    display->last_target_tid = target_layer_tid;
+    display->last_active_apps_serial = active_apps_serial;
+
+    if (left_tid.empty() || launched || focus_requested
+            || display->windows.find(target_layer_tid) == display->windows.end())
+        return;
+    auto it = display->windows.find(left_tid);
+    if (it != display->windows.end())
+        display->windows.erase(it);
 }
 
 window *single_window_mode_base::get_window(waydroid_hwc_composer_device_1 *pdev) const {
@@ -61,6 +130,7 @@ int single_window_mode_base::cleanup_stale_windows(waydroid_hwc_composer_device_
         } else if (pdev->display->ignored_apps.count(first_tid_layer->tid) == 0) {
             target_layer_tid = first_tid_layer->tid;
             target_layer_aid = first_tid_layer->aid;
+            close_left_task_window(pdev);
         }
     }
 
@@ -69,9 +139,10 @@ int single_window_mode_base::cleanup_stale_windows(waydroid_hwc_composer_device_
 
     // Snapshot non-active windows
     if (should_show()) {
+        target_shown = target_has_focus(pdev);
         for (auto const& [layer_tid, window] : pdev->display->windows) {
             // Replace inactive app window buffer with snapshot
-            if (layer_tid != target_layer_tid && !window->snapshot_buffer) {
+            if ((layer_tid != target_layer_tid || !target_shown) && !window->snapshot_buffer) {
                 pdev->display->egl_work_queue.push_back(std::bind(snapshot_inactive_app_window, pdev->display, window.get()));
             }
         }
@@ -108,7 +179,7 @@ int non_compositing_single_window_mode::setup_set(waydroid_hwc_composer_device_1
 }
 
 int non_compositing_single_window_mode::handle_layer(waydroid_hwc_composer_device_1* pdev, hwc_layer_1* hwc_layer, size_t i) {
-    if (!should_show()) {
+    if (!should_show() || !target_shown) {
         if (hwc_layer->acquireFenceFd != -1) {
             close(hwc_layer->acquireFenceFd);
         }
@@ -127,7 +198,7 @@ int compositing_single_window_mode::setup_set(waydroid_hwc_composer_device_1* pd
 }
 
 int compositing_single_window_mode::handle_layer(waydroid_hwc_composer_device_1* pdev, hwc_layer_1* hwc_layer, size_t i) {
-    if (!should_show()) {
+    if (!should_show() || !target_shown) {
         if (hwc_layer->acquireFenceFd != -1) {
             close(hwc_layer->acquireFenceFd);
         }

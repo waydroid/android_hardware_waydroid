@@ -27,6 +27,7 @@
 #include <wayland-client.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <algorithm>
 #include <string>
 #include <sstream>
 #include <functional>
@@ -196,6 +197,21 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
     assert(contents);
 
     pdev->selected_mode = select_mode(pdev, contents);
+
+    std::vector<int> tasks;
+    for (size_t i = 0; i < contents->numHwLayers; i++) {
+        if (contents->hwLayers[i].compositionType == HWC_FRAMEBUFFER_TARGET)
+            continue;
+        const std::string &name = pdev->display->layer_names[i];
+        int task = name.compare(0, 4, "TID:") == 0 ? parse_task_id(name.substr(4, name.find('#') - 4)) : 0;
+        if (task > 0 && std::find(tasks.begin(), tasks.end(), task) == tasks.end())
+            tasks.push_back(task);
+    }
+    {
+        std::scoped_lock lock(pdev->display->primary_tasks_mutex);
+        pdev->display->primary_tasks = std::move(tasks);
+    }
+
     if (pdev->selected_mode->setup_prepare(pdev, contents) != 0) {
         return -1;
     }
@@ -240,7 +256,7 @@ static void* hwc_vsync_thread(void* data) {
 
     struct timespec wait_time;
     wait_time.tv_sec = 0;
-    wait_time.tv_nsec = time_to_sleep_to_next_vsync(&rt, pdev->last_vsync_ns, pdev->vsync_period_ns);
+    wait_time.tv_nsec = time_to_sleep_to_next_vsync(&rt, pdev->last_vsync_ns, refresh_vsync_period_ns(pdev->display));
 
     while (true) {
         ATRACE_BEGIN("hwc_vsync_thread");
@@ -261,7 +277,7 @@ static void* hwc_vsync_thread(void* data) {
                   __FILE__, __LINE__, strerror(errno));
         }
 
-        wait_time.tv_nsec = time_to_sleep_to_next_vsync(&rt, pdev->last_vsync_ns, pdev->vsync_period_ns);
+        wait_time.tv_nsec = time_to_sleep_to_next_vsync(&rt, pdev->last_vsync_ns, refresh_vsync_period_ns(pdev->display));
 
         if (!vsync_enabled || !pdev->procs || !pdev->procs->vsync) {
             ATRACE_END();
@@ -552,15 +568,17 @@ static int hwc_get_display_configs(struct hwc_composer_device_1* dev __unused,
     }
 
     if (disp == HWC_DISPLAY_PRIMARY) {
-        configs[0] = 0;
-        *numConfigs = 1;
+        size_t count = std::min(refresh_config_count(), *numConfigs);
+        for (size_t i = 0; i < count; i++)
+            configs[i] = uint32_t(i);
+        *numConfigs = count;
         return 0;
     }
 
     return -EINVAL;
 }
 
-static int32_t hwc_attribute(struct waydroid_hwc_composer_device_1* pdev,
+static int32_t hwc_attribute(struct waydroid_hwc_composer_device_1* pdev, uint32_t config,
                              const uint32_t attribute) {
     char property[PROPERTY_VALUE_MAX];
     int width = floor(pdev->display->width * pdev->display->scale);
@@ -569,7 +587,7 @@ static int32_t hwc_attribute(struct waydroid_hwc_composer_device_1* pdev,
 
     switch(attribute) {
         case HWC_DISPLAY_VSYNC_PERIOD:
-            return pdev->vsync_period_ns;
+            return refresh_config_period_ns(config);
         case HWC_DISPLAY_WIDTH: {
             if (property_get("persist.waydroid.width_padding", property, nullptr) > 0)
                 width -= atoi(property);
@@ -598,12 +616,12 @@ static int32_t hwc_attribute(struct waydroid_hwc_composer_device_1* pdev,
 }
 
 static int hwc_get_display_attributes(struct hwc_composer_device_1* dev,
-                                      int disp, uint32_t config __unused,
+                                      int disp, uint32_t config,
                                       const uint32_t* attributes, int32_t* values) {
     auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(dev);
     for (int i = 0; attributes[i] != HWC_DISPLAY_NO_ATTRIBUTE; i++) {
         if (disp == HWC_DISPLAY_PRIMARY) {
-            values[i] = hwc_attribute(pdev, attributes[i]);
+            values[i] = hwc_attribute(pdev, config, attributes[i]);
             if (values[i] == -EINVAL) {
                 return -EINVAL;
             }
@@ -616,14 +634,16 @@ static int hwc_get_display_attributes(struct hwc_composer_device_1* dev,
     return 0;
 }
 
-static int hwc_get_active_config(struct hwc_composer_device_1* dev __unused, int disp) {
+static int hwc_get_active_config(struct hwc_composer_device_1* dev, int disp) {
+    auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(dev);
     if (disp == HWC_DISPLAY_PRIMARY)
-        return 0;
+        return refresh_active_config(pdev->display);
     return -EINVAL;
 }
 
-static int hwc_set_active_config(struct hwc_composer_device_1* dev __unused, int disp, int index) {
-    if (disp == HWC_DISPLAY_PRIMARY && index == 0)
+static int hwc_set_active_config(struct hwc_composer_device_1* dev, int disp, int index) {
+    auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(dev);
+    if (disp == HWC_DISPLAY_PRIMARY && index >= 0 && refresh_set_active_config(pdev->display, size_t(index)))
         return 0;
     return -EINVAL;
 }
@@ -731,8 +751,6 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     pdev->setActiveConfig = hwc_set_active_config;
     pdev->setCursorPositionAsync = hwc_set_cursor_position_async;
 
-    pdev->vsync_period_ns = 1000*1000*1000/60; // vsync is 60 hz
-
     pdev->timeline_fd = sw_sync_timeline_create();
     pdev->next_sync_point = 1;
 
@@ -769,6 +787,7 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     if (pdev->multi_windows && !pdev->display->subcompositor) {
         ALOGW("multi window mode requested but wl_subcompositor is not supported. Disabling it.");
         pdev->multi_windows = false;
+        pdev->display->multi_windows = false;
     }
     pdev->should_compose = property_get_bool("persist.waydroid.use_subsurface", false) || pdev->multi_windows;
     if (pdev->should_compose && !pdev->display->subcompositor) {
@@ -782,17 +801,19 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
         pdev->display->cursor_handler.reset(new subsurface_cursor_handler());
     }
 
-    auto first_window = window::create(pdev->display, pdev->should_compose, "Waydroid", "0", {0, 0, 0, 255});
-    if (!property_get_bool("waydroid.background_start", true)) {
-        pdev->display->windows.add("Waydroid", std::move(first_window));
-        property_set("waydroid.active_apps", "Waydroid");
-    } else {
-        first_window.reset();
+    {
+        // The Wayland thread is already running
+        std::scoped_lock lock(pdev->display->windowsMutex);
+        auto first_window = window::create(pdev->display, pdev->should_compose, "Waydroid", "0", {0, 0, 0, 255});
+        if (!property_get_bool("waydroid.background_start", true)) {
+            pdev->display->windows.add("Waydroid", std::move(first_window));
+            property_set("waydroid.active_apps", "Waydroid");
+        } else {
+            first_window.reset();
+        }
     }
 
     pdev->vsync_callback_enabled = true;
-    if (pdev->display->refresh > 1000 && pdev->display->refresh < 1000000)
-        pdev->vsync_period_ns = 1000 * 1000 * 1000 / (pdev->display->refresh / 1000);
 
     struct timespec rt;
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {

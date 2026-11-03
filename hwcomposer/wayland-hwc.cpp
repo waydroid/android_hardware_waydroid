@@ -120,11 +120,32 @@ void snapshot_inactive_app_window(struct display *display, struct window *window
     window->last_layer_buffer = nullptr;
 }
 
+// Wayland handlers run without a lock, so hwc_set() can destroy a window while one of them runs.
+// They get the window's id and use the window and its Wayland objects only while holding
+// liveWindowsMutex, which ~window() takes before it destroys them. Do not take windowsMutex or
+// block while holding it: window::create() waits for these handlers with windowsMutex held.
+static std::mutex liveWindowsMutex;
+static std::unordered_map<uintptr_t, struct window *> liveWindows;
+static uintptr_t nextWindowId = 1;
+
+static void *window_listener_data(const struct window *window) {
+    return reinterpret_cast<void *>(window->id);
+}
+
+// Requires liveWindowsMutex
+static struct window *live_window(void *data) {
+    auto it = liveWindows.find(reinterpret_cast<uintptr_t>(data));
+    return it != liveWindows.end() ? it->second : nullptr;
+}
+
 static void
 xdg_surface_handle_configure(void *data, struct xdg_surface *surface,
                  uint32_t serial)
 {
-    auto window = static_cast<struct window *>(data);
+    std::scoped_lock lock(liveWindowsMutex);
+    struct window *window = live_window(data);
+    if (!window)
+        return;
 
     xdg_surface_ack_configure(surface, serial);
 
@@ -201,10 +222,24 @@ do_hotplug(struct display *display) {
 static void
 xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
                               int32_t width, int32_t height,
-                              struct wl_array *)
+                              struct wl_array *states)
 {
-    struct window *window = (struct window *)data;
+    std::unique_lock lock(liveWindowsMutex);
+    struct window *window = live_window(data);
+    if (!window)
+        return;
     struct display *display = window->display;
+
+    // A 0x0 configure still carries the activated state
+    if (!display->multi_windows) {
+        const auto *state = static_cast<const uint32_t *>(states->data);
+        for (size_t i = 0; i < states->size / sizeof(*state); i++) {
+            if (state[i] == XDG_TOPLEVEL_STATE_ACTIVATED)
+                display->size_window = window;
+        }
+        if (display->size_window && display->size_window != window)
+            return;
+    }
 
     if (width <= 1 || height <= 1) {
 		/* Compositor is deferring to us */
@@ -221,6 +256,7 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
         choose_width_height(display, width, height);
         if (display->wm_base)
             xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width, display->height);
+        lock.unlock();
         if (display->width != old_width || display->height != old_height)
             do_hotplug(display);
     }
@@ -229,36 +265,68 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
 static void
 send_key_event(display *data, uint32_t key, wl_keyboard_key_state state);
 
+// Returns the decimal task id in ID, or -1. Ids come from layer names, and
+// std::stoi would abort the composer, which is built without exceptions.
+int
+parse_task_id(const std::string &id)
+{
+    if (id.empty() || id.size() > 10 || id.find_first_not_of("0123456789") != std::string::npos)
+        return -1;
+    long long task = strtoll(id.c_str(), nullptr, 10);
+    return task <= INT32_MAX ? static_cast<int>(task) : -1;
+}
+
 static void
 xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
 {
-    struct window *window = (struct window *)data;
-    struct display *display = window->display;
+    struct display *display;
+    std::string taskID;
+    std::string appID;
+    {
+        std::scoped_lock lock(liveWindowsMutex);
+        struct window *window = live_window(data);
+        if (!window)
+            return;
+        display = window->display;
+        taskID = window->taskID;
+        appID = window->appID;
+    }
+    // removeTask() waits for Android, and hwc_set() can destroy the window meanwhile
+    const std::string key = (taskID != "0" && taskID != "none") ? taskID : appID;
 
     // simulate user input to restart idle timeout (TODO: find a better way)
-    send_key_event(window->display, 0, WL_KEYBOARD_KEY_STATE_PRESSED);
-    send_key_event(window->display, 0, WL_KEYBOARD_KEY_STATE_RELEASED);
+    send_key_event(display, 0, WL_KEYBOARD_KEY_STATE_PRESSED);
+    send_key_event(display, 0, WL_KEYBOARD_KEY_STATE_RELEASED);
 
     if (display->task != nullptr) {
-        if (window->taskID != "none") {
-            if (window->taskID == "0") {
+        if (taskID != "none") {
+            if (taskID == "0") {
+                // Closes what the full UI shows. removeAllVisibleRecentTasks() would also
+                // close apps that other displays show in windows of their own.
                 property_set("waydroid.active_apps", "none");
-                display->task->removeAllVisibleRecentTasks();
+                std::vector<int> tasks;
+                {
+                    std::scoped_lock lock(display->primary_tasks_mutex);
+                    tasks = display->primary_tasks;
+                }
+                for (int task : tasks)
+                    display->task->removeTask(task);
             } else {
-                display->task->removeTask(stoi(window->taskID));
+                int task = parse_task_id(taskID);
+                if (task >= 0)
+                    display->task->removeTask(task);
             }
         }
     }
 
-    std::scoped_lock lock(window->display->windowsMutex);
-    std::string key;
-    if (window->taskID != "0" && window->taskID != "none") {
-        key = window->taskID;
-    } else {
-        key = window->appID;
-    }
+    std::scoped_lock lock(display->windowsMutex);
+    auto it = display->windows.find(key);
+    // Leave alone a window that replaced this one under the same key meanwhile
+    if (it != display->windows.end() && it->second->id != reinterpret_cast<uintptr_t>(data))
+        return;
     display->ignored_apps.insert(key);
-    display->windows.erase(key);
+    if (it != display->windows.end())
+        display->windows.erase(it);
 }
 
 static const struct xdg_toplevel_listener xdg_toplevel_listener = {
@@ -267,23 +335,29 @@ static const struct xdg_toplevel_listener xdg_toplevel_listener = {
 };
 
 void
-shell_surface_ping(void *, struct wl_shell_surface *shell_surface, uint32_t serial)
+shell_surface_ping(void *data, struct wl_shell_surface *shell_surface, uint32_t serial)
 {
-    wl_shell_surface_pong(shell_surface, serial);
+    std::scoped_lock lock(liveWindowsMutex);
+    if (live_window(data))
+        wl_shell_surface_pong(shell_surface, serial);
 }
 
 void
 shell_surface_configure(void *data, struct wl_shell_surface *, uint32_t, int32_t width, int32_t height)
 {
-    struct window *window = (struct window *)data;
-    struct display *display = window->display;
-
-    if (width > 1 && height > 1) {
-        display->req_width = width;
-        display->req_height = height;
-	}
-
-    window->configured = true;
+    struct display *display;
+    {
+        std::scoped_lock lock(liveWindowsMutex);
+        struct window *window = live_window(data);
+        if (!window)
+            return;
+        display = window->display;
+        if (width > 1 && height > 1) {
+            display->req_width = width;
+            display->req_height = height;
+        }
+        window->configured = true;
+    }
 
     if (display->height && display->width && width > 1 && height > 1) {
         int old_width = display->width;
@@ -435,6 +509,12 @@ void window::minimize() {
 }
 
 window::~window() {
+    if (display) {
+        std::scoped_lock lock(liveWindowsMutex);
+        liveWindows.erase(id);
+        struct window *self = this;
+        display->size_window.compare_exchange_strong(self, nullptr);
+    }
     if (xdg_toplevel)
         xdg_toplevel_destroy(xdg_toplevel);
     if (xdg_surface)
@@ -486,6 +566,11 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
         return nullptr;
 
     window->display = display;
+    {
+        std::scoped_lock lock(liveWindowsMutex);
+        window->id = nextWindowId++;
+        liveWindows.emplace(window->id, window.get());
+    }
     window->surface = wl_compositor_create_surface(display->compositor);
     wl_surface_set_user_data(window->surface, window.get());
     if (display->viewporter)
@@ -513,16 +598,16 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
                 xdg_wm_base_get_xdg_surface(display->wm_base, window->surface);
         assert(window->xdg_surface);
         xdg_surface_add_listener(window->xdg_surface,
-                                     &xdg_surface_listener, window.get());
+                                     &xdg_surface_listener, window_listener_data(window.get()));
 
         window->xdg_toplevel = xdg_surface_get_toplevel(window->xdg_surface);
         assert(window->xdg_toplevel);
-        xdg_toplevel_add_listener(window->xdg_toplevel, &xdg_toplevel_listener, window.get());
+        xdg_toplevel_add_listener(window->xdg_toplevel, &xdg_toplevel_listener, window_listener_data(window.get()));
     } else if (display->shell) {
         window->shell_surface =
             wl_shell_get_shell_surface(display->shell, window->surface);
         assert(window->shell_surface);
-        wl_shell_surface_add_listener(window->shell_surface, &shell_surface_listener, window.get());
+        wl_shell_surface_add_listener(window->shell_surface, &shell_surface_listener, window_listener_data(window.get()));
         wl_shell_surface_set_toplevel(window->shell_surface);
     } else {
         abort();
@@ -821,9 +906,13 @@ keyboard_handle_enter(void *data, struct wl_keyboard *,
             return; // Window was destroyed in hwc_set
 
         if (window->taskID != "none" && window->taskID != "0")
-            taskID = stoi(window->taskID);
+            taskID = parse_task_id(window->taskID);
     }
 
+    if (taskID >= 0) {
+        std::scoped_lock lock(display->requested_tasks_mutex);
+        display->requested_tasks[std::to_string(taskID)] = std::chrono::steady_clock::now();
+    }
     if (display->task != nullptr && taskID >= 0)
         display->task->setFocusedTask(taskID);
 }
@@ -1445,12 +1534,17 @@ static const struct zwp_linux_dmabuf_v1_listener dmabuf_listener = {
 };
 
 static void
-output_handle_mode(void *data, struct wl_output *,
-                   uint32_t, int32_t width, int32_t height,
+output_handle_mode(void *data, struct wl_output *output,
+                   uint32_t flags, int32_t width, int32_t height,
                    int32_t refresh)
 {
     struct display *d = (struct display *)data;
-    d->refresh = std::max(d->refresh, refresh);
+    if (flags & WL_OUTPUT_MODE_CURRENT) {
+        refresh_output_mode(d, output, refresh);
+        // wl_output v1 has no done event to end the mode list
+        if (wl_output_get_version(output) < WL_OUTPUT_DONE_SINCE_VERSION)
+            refresh_output_done(d, output);
+    }
 
     // Fallback size
     // We can't do anything meaningful if there's more than one display, just pick one at random
@@ -1471,8 +1565,9 @@ output_handle_geometry(void *, struct wl_output *,
 }
 
 static void
-output_handle_done(void *, struct wl_output *)
+output_handle_done(void *data, struct wl_output *output)
 {
+    refresh_output_done((struct display *)data, output);
 }
 
 static void
@@ -1924,6 +2019,7 @@ registry_handle_global(void *data, struct wl_registry *registry,
         d->output = (struct wl_output*)wl_registry_bind(registry, id,
                 &wl_output_interface, std::min(version, 3U));
         wl_output_add_listener(d->output, &output_listener, d);
+        refresh_add_output(d, id, d->output);
         wl_display_roundtrip(d->display);
     } else if (strcmp(interface, "wp_presentation") == 0) {
         bool no_presentation = property_get_bool("persist.waydroid.no_presentation", false);
@@ -1978,8 +2074,9 @@ registry_handle_global(void *data, struct wl_registry *registry,
 }
 
 static void
-registry_handle_global_remove(void *, struct wl_registry *, uint32_t)
+registry_handle_global_remove(void *data, struct wl_registry *, uint32_t name)
 {
+    refresh_remove_global((struct display *)data, name);
 }
 
 static const struct wl_registry_listener registry_listener = {
@@ -2106,6 +2203,9 @@ create_display(const char *gralloc)
     display->isMaximized = true;
     display->supports_cursor_viewport = true;
     display->supports_cursor_hw_buffer = property_get_bool("persist.waydroid.cursor_force_shm", false);
+    display->multi_windows = property_get_bool("persist.waydroid.multi_windows", false);
+    display->size_window = nullptr;
+    display->last_active_apps_serial = 0;
     display->display = wl_display_connect(NULL);
     ALOGI("WAYLAND_DISPLAY: %s", getenv("WAYLAND_DISPLAY"));
     ALOGI("XDG_RUNTIME_DIR: %s", getenv("XDG_RUNTIME_DIR"));
@@ -2124,6 +2224,7 @@ create_display(const char *gralloc)
     wl_registry_add_listener(display->registry,
                  &registry_listener, display);
     wl_display_roundtrip(display->display);
+    refresh_start(display);
 
     if (pthread_create(&display->wayland_thread, nullptr, hwc_wayland_thread, display->display) != 0) {
         ALOGE("Couldn't create wayland thread");

@@ -57,7 +57,9 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 
+#include <chrono>
 #include <functional>
+#include <mutex>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -184,6 +186,8 @@ struct window {
     };
 
     struct display *display;
+    // Listener data of the window's Wayland objects, never reused
+    uintptr_t id;
 
     struct wl_shell_surface *shell_surface;
     struct xdg_surface *xdg_surface;
@@ -368,12 +372,17 @@ struct display {
     int full_height;
     int req_width;
     int req_height;
-    int refresh;
+    // Refresh rate Android runs at, in mHz; see refresh.cpp
+    std::atomic<int> refresh;
 
     std::unordered_set<uint32_t> formats;
 
     std::map<uint32_t, std::vector<uint64_t>> modifiers;
     std::map<uint32_t, std::string> layer_names;
+    // Tasks with a layer in the primary display's latest frame. Tasks on other
+    // displays, such as per-app virtual displays, never appear here.
+    std::mutex primary_tasks_mutex;
+    std::vector<int> primary_tasks;
     std::map<uint32_t, struct handleExt> layer_handles_ext;
     struct handleExt target_layer_handle_ext;
     std::unordered_map<buffer_handle_t, std::unique_ptr<buffer>> buffer_map;
@@ -388,6 +397,23 @@ struct display {
 
     const hwc_procs_t *procs;
     bool needHotplug;
+
+    // In single-window mode every window shares one Android display, sized from the focused window
+    std::atomic<bool> multi_windows;
+    std::atomic<struct window *> size_window;
+    // Since when the window of Android's front task has not been the focused window. The pointers
+    // are only compared, and the fields are used by hwc_set() under windowsMutex.
+    struct {
+        const struct window *target = nullptr;
+        const struct window *focused = nullptr;
+        std::chrono::steady_clock::time_point since;
+    } unfocused_target;
+    // Tasks passed to setFocusedTask() that Android has not brought to the front yet, and when
+    std::mutex requested_tasks_mutex;
+    std::unordered_map<std::string, std::chrono::steady_clock::time_point> requested_tasks;
+    // The task and waydroid.active_apps of the last frame
+    std::string last_target_tid;
+    uint32_t last_active_apps_serial;
 };
 
 void
@@ -397,7 +423,31 @@ handle_relative_motion(void *data, struct zwp_relative_pointer_v1*,
 void
 snapshot_inactive_app_window(struct display *display, struct window *window);
 
+// Display configs, one per refresh rate of the host's monitors (refresh.cpp)
+void
+refresh_add_output(struct display *display, uint32_t name, struct wl_output *output);
+void
+refresh_output_mode(struct display *display, struct wl_output *output, int32_t refresh);
+void
+refresh_output_done(struct display *display, struct wl_output *output);
+void
+refresh_remove_global(struct display *display, uint32_t name);
+void
+refresh_start(struct display *display);
+size_t
+refresh_config_count();
+int32_t
+refresh_config_period_ns(size_t config);
+int
+refresh_active_config(const struct display *display);
+bool
+refresh_set_active_config(struct display *display, size_t config);
+int32_t
+refresh_vsync_period_ns(const struct display *display);
+
 struct display *
 create_display(const char* gralloc);
 void
 destroy_display(struct display *display);
+int
+parse_task_id(const std::string &id);
