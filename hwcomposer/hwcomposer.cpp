@@ -943,16 +943,23 @@ std::unique_ptr<buffer> wl_cursor_cursor_handler::create_buffer(waydroid_hwc_com
 
 void wl_cursor_cursor_handler::set_cursor(display* display) const {
     assert(display->pointer);
+    // Without a viewport the cursor buffer keeps the display scale, so its hotspot does too
+    double scale_x = display->scale, scale_y = display->scale;
+    if (cursor_surface_context.viewport)
+        effective_scale(display, &scale_x, &scale_y);
     wl_pointer_set_cursor (display->pointer, display->pointer_enter_serial,
                           cursor_surface_context.surface,
-                          round(display->cursor_hotspot.x / display->scale),
-                          round(display->cursor_hotspot.y / display->scale));
+                          round(display->cursor_hotspot.x / scale_x),
+                          round(display->cursor_hotspot.y / scale_y));
 }
 
 int wl_cursor_cursor_handler::apply_cursor(waydroid_hwc_composer_device_1* pdev, hwc_layer_1* hwc_layer, size_t hwc_layer_index) {
     if (pdev->display->pointer) {
+        // The same scale as the other layers, which stretch while a resize is pending
+        double scale_x, scale_y;
+        effective_scale(pdev->display, &scale_x, &scale_y);
         if (apply_hwc_layer_to_surface_context(pdev, hwc_layer, hwc_layer_index, cursor_surface_context,
-                                               pdev->display->scale, pdev->display->scale) != 0) {
+                                               scale_x, scale_y) != 0) {
             ALOGE("Failed to prepare cursur surface");
             return -1;
         }
