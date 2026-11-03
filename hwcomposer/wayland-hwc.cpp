@@ -79,6 +79,8 @@
 #include "relative-pointer-unstable-v1-client-protocol.h"
 #include "idle-inhibit-unstable-v1-client-protocol.h"
 #include "fractional-scale-v1-client-protocol.h"
+#include "color-management-v1-client-protocol.h"
+#include "hdr.h"
 
 using ::android::hardware::hidl_string;
 
@@ -448,6 +450,7 @@ window::~window() {
     if (idle_inhibitor)
         zwp_idle_inhibitor_v1_destroy(idle_inhibitor);
 
+    hdr_destroy_window(this);
     layers.clear();
     if (dedicated_background_surface) {
         if (viewport)
@@ -1889,6 +1892,17 @@ static void add_tablet_seat(struct display *d) {
 }
 
 static void
+shm_handle_format(void *data, struct wl_shm *, uint32_t format)
+{
+    if (format == WL_SHM_FORMAT_XBGR2101010)
+        static_cast<struct display *>(data)->shm_xbgr2101010 = true;
+}
+
+static const struct wl_shm_listener shm_listener = {
+    shm_handle_format,
+};
+
+static void
 registry_handle_global(void *data, struct wl_registry *registry,
                uint32_t id, const char *interface, uint32_t version)
 {
@@ -1920,6 +1934,7 @@ registry_handle_global(void *data, struct wl_registry *registry,
     } else if (strcmp(interface, "wl_shm") == 0) {
 		d->shm = (struct wl_shm *)wl_registry_bind(registry, id,
                 &wl_shm_interface, 1);
+        wl_shm_add_listener(d->shm, &shm_listener, d);
     } else if (strcmp(interface, "wl_output") == 0) {
         d->output = (struct wl_output*)wl_registry_bind(registry, id,
                 &wl_output_interface, std::min(version, 3U));
@@ -1969,6 +1984,8 @@ registry_handle_global(void *data, struct wl_registry *registry,
                 &wl_data_device_manager_interface, std::min(version,  3U));
         if (d->data_device_manager && d->seat)
             d->data_device = wl_data_device_manager_get_data_device(d->data_device_manager, d->seat);
+    } else if (strcmp(interface, wp_color_manager_v1_interface.name) == 0) {
+        hdr_bind_color_manager(d, registry, id, version);
     } else if (strcmp(interface, "gtk_shell1") == 0) {
         if (version < 6)
             d->supports_cursor_viewport = false;
@@ -2124,6 +2141,7 @@ create_display(const char *gralloc)
     wl_registry_add_listener(display->registry,
                  &registry_listener, display);
     wl_display_roundtrip(display->display);
+    hdr_init(display);
 
     if (pthread_create(&display->wayland_thread, nullptr, hwc_wayland_thread, display->display) != 0) {
         ALOGE("Couldn't create wayland thread");

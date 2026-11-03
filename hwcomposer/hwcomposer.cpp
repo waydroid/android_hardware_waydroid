@@ -51,6 +51,7 @@
 #include "gralloc_handler.h"
 #include "egl-tools.h"
 #include "extension.h"
+#include "hdr.h"
 
 #include "modes/closed.h"
 #include "modes/full-ui.h"
@@ -474,6 +475,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     mode->post_processing(pdev, contents);
 
     for (auto& [key, window] : pdev->display->windows) {
+        hdr_finish_window_frame(window.get());
         if (window->input_region) {
             wl_surface_set_input_region(window->surface, window->input_region);
         }

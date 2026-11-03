@@ -26,6 +26,7 @@
 #pragma once
 
 #include "waydroid_mode.h"
+#include "hdr.h"
 
 template<class T>
 class compositing_window_mode : public virtual waydroid_mode {
@@ -36,8 +37,12 @@ class compositing_window_mode : public virtual waydroid_mode {
     }
 
   public:
-    int setup_prepare(waydroid_hwc_composer_device_1 *, hwc_display_contents_1_t *contents) override {
+    int setup_prepare(waydroid_hwc_composer_device_1 *pdev, hwc_display_contents_1_t *contents) override {
         for (size_t i = 0; i < contents->numHwLayers; ++i) {
+            // wl_shm cannot take 10-bit YUV, so SurfaceFlinger composites it
+            if (hdr_is_video_layer(pdev, contents->hwLayers[i], i)) {
+                contents->hwLayers[i].flags |= HWC_SKIP_LAYER;
+            }
             skipped_layers.setup_for_each_layer(i, contents->hwLayers[i]);
         }
         return 0;
@@ -125,19 +130,56 @@ class non_compositing_window_mode : public virtual waydroid_mode {
     hwc_layer_1 *m_framebuffer_target {};
     size_t m_framebuffer_target_index {UNSET_VALUE};
 
+    // HDR video layer drawn below the framebuffer, which SurfaceFlinger clears there
+    size_t m_hdr_layer_index {UNSET_VALUE};
+    hwc_layer_1 *m_hdr_layer {};
+    bool m_has_framebuffer_layers {};
+
     T *derived() {
         return static_cast<T *>(this);
     }
 
+    static bool can_draw_below_framebuffer(const hwc_layer_1 &layer) {
+        return layer.compositionType == HWC_FRAMEBUFFER && !(layer.flags & HWC_SKIP_LAYER)
+            && layer.blending == HWC_BLENDING_NONE && layer.planeAlpha == 0xFF && layer.transform == 0;
+    }
+
   public:
-    int prepare(hwc_layer_1 *hwc_layer, size_t) override {
-        hwc_layer->compositionType = HWC_FRAMEBUFFER;
+    int setup_prepare(waydroid_hwc_composer_device_1 *pdev, hwc_display_contents_1_t *contents) override {
+        // SurfaceFlinger only offers HDR layers when HDR is reported, and tone-maps them itself otherwise
+        if (hdr_get_capabilities(pdev->display).types.empty())
+            return 0;
+        for (size_t i = 0; i < contents->numHwLayers; ++i) {
+            const auto &layer = contents->hwLayers[i];
+            if (hdr_is_video_layer(pdev, layer, i) && can_draw_below_framebuffer(layer)) {
+                m_hdr_layer_index = i;
+                break;
+            }
+        }
+        return 0;
+    }
+    int prepare(hwc_layer_1 *hwc_layer, size_t i) override {
+        if (i == m_hdr_layer_index) {
+            hwc_layer->compositionType = HWC_OVERLAY;
+            hwc_layer->hints |= HWC_HINT_CLEAR_FB;
+        } else {
+            hwc_layer->compositionType = HWC_FRAMEBUFFER;
+        }
         return 0;
     }
 
     int setup_set(waydroid_hwc_composer_device_1 *, hwc_display_contents_1_t *contents) override {
+        if (m_hdr_layer_index < contents->numHwLayers
+            && contents->hwLayers[m_hdr_layer_index].compositionType == HWC_OVERLAY) {
+            m_hdr_layer = &contents->hwLayers[m_hdr_layer_index];
+        } else {
+            m_hdr_layer_index = UNSET_VALUE;
+        }
         for (size_t i = 0; i < contents->numHwLayers; ++i) {
             auto& layer = contents->hwLayers[i];
+            if (layer.compositionType == HWC_FRAMEBUFFER) {
+                m_has_framebuffer_layers = true;
+            }
             if (m_draw_framebuffer_at == UNSET_VALUE
                 && (layer.compositionType == HWC_FRAMEBUFFER || layer.compositionType == HWC_FRAMEBUFFER_TARGET)) {
                 m_draw_framebuffer_at = i;
@@ -157,11 +199,30 @@ class non_compositing_window_mode : public virtual waydroid_mode {
          * at the first occurrence of a HWC_FRAMEBUFFER or HWC_FRAMEBUFFER_TARGET layer
          */
         int res = 0;
+        // Drawn with the framebuffer, wherever the two are in the layer list
+        if (i == m_hdr_layer_index) {
+            return 0;
+        }
         if (i == m_draw_framebuffer_at) {
-            assert(m_framebuffer_target->handle);
             window *window = derived()->get_window(pdev);
 
-            res = apply_hwc_layer_to_window(pdev, m_framebuffer_target, m_framebuffer_target_index, window);
+            if (m_hdr_layer) {
+                res = hdr_apply_layer_to_window(pdev, m_hdr_layer, m_hdr_layer_index, window);
+            }
+            if (m_hdr_layer && !m_has_framebuffer_layers) {
+                // SurfaceFlinger composited nothing, so the framebuffer holds an old frame
+                auto &window_layer = window->get_next_layer();
+                wl_surface_attach(window_layer.surface, nullptr, 0, 0);
+                wl_surface_commit(window_layer.surface);
+                if (m_framebuffer_target->acquireFenceFd != -1) {
+                    close(m_framebuffer_target->acquireFenceFd);
+                }
+            } else {
+                assert(m_framebuffer_target->handle);
+                int framebuffer_res = apply_hwc_layer_to_window(pdev, m_framebuffer_target, m_framebuffer_target_index, window);
+                if (framebuffer_res != 0)
+                    res = framebuffer_res;
+            }
         }
 
         // The acquireFenceFd of HWC_FRAMEBUFFER_TARGET is closed in apply_hwc_layer_to_window

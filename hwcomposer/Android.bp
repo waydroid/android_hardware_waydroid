@@ -52,6 +52,7 @@ cc_library_shared {
         "WaydroidClipboard.cpp",
         "WaydroidWindow.cpp",
         "egl-tools.cpp",
+        "hdr.cpp",
         "modes/waydroid_mode.cpp",
         "modes/closed.cpp",
         "modes/full-ui.cpp",
@@ -72,8 +73,30 @@ cc_library_shared {
         "-Wall",
         "-Werror",
     ],
-    generated_sources: ["wayland_android_client_protocol_sources"],
-    generated_headers: ["wayland_android_client_protocol_headers"],
+    generated_sources: [
+        "wayland_android_client_protocol_sources",
+        "color_management_v1_client_protocol_sources",
+    ],
+    generated_headers: [
+        "wayland_android_client_protocol_headers",
+        "color_management_v1_client_protocol_headers",
+    ],
+}
+
+// color-management-v1 from wayland-protocols 1.50 (staging), newer than external/wayland-protocols
+genrule {
+    name: "color_management_v1_client_protocol_sources",
+    srcs: ["color-management-v1.xml"],
+    tools: ["wayland_scanner"],
+    cmd: "$(location wayland_scanner) private-code < $(in) > $(out)",
+    out: ["color-management-v1-protocol.c"],
+}
+genrule {
+    name: "color_management_v1_client_protocol_headers",
+    srcs: ["color-management-v1.xml"],
+    tools: ["wayland_scanner"],
+    cmd: "$(location wayland_scanner) client-header < $(in) > $(out)",
+    out: ["color-management-v1-client-protocol.h"],
 }
 
 // Generate wayland-android protocol source file
