@@ -428,3 +428,5 @@ struct display *
 create_display(const char* gralloc);
 void
 destroy_display(struct display *display);
+int
+parse_task_id(const std::string &id);
