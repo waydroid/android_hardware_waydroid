@@ -97,6 +97,48 @@ Return<void> WaydroidDisplay::postTaskBuffer(uint32_t taskId, uint32_t slot,
     return Void();
 }
 
+Return<void> WaydroidDisplay::updateTaskGroups(const hidl_vec<uint32_t> &tasks,
+        const hidl_vec<uint32_t> &cards) {
+    if (tasks.size() != cards.size()) return Void();
+    auto *display = mPdev->display;
+    std::scoped_lock lock(display->windowsMutex);
+    if (!display->task_streams_active) return Void();
+    const auto previous = display->task_cards;
+    // Missing scene roots may be backgrounded; taskRemoved retires them.
+    for (size_t i = 0; i < tasks.size(); ++i) {
+        const auto tid = std::to_string(tasks[i]);
+        if (tasks[i] == cards[i]) display->task_cards.erase(tid);
+        else display->task_cards[tid] = std::to_string(cards[i]);
+    }
+    for (size_t i = 0; i < tasks.size(); ++i) {
+        if (tasks[i] == cards[i]) continue;
+        const auto tid = std::to_string(tasks[i]);
+        const auto card = std::to_string(cards[i]);
+        if (!detach_task_conn(display, tasks[i]))
+            display->windows.erase(tid);
+        auto task = display->tasks.find(tid);
+        if (task != display->tasks.end() && task->second.focused) {
+            display->card_focus_tasks[card] = tid;
+            auto old = previous.find(tid);
+            if (old == previous.end() || old->second != card) {
+                auto window = display->windows.find(card);
+                if (window != display->windows.end())
+                    request_window_activation(window->second.get());
+                else
+                    note_pending_raise(display, card);
+            }
+        }
+    }
+    for (auto it = display->card_focus_tasks.begin(); it != display->card_focus_tasks.end();) {
+        auto group = display->task_cards.find(it->second);
+        if (group == display->task_cards.end() || group->second != it->first)
+            it = display->card_focus_tasks.erase(it);
+        else
+            ++it;
+    }
+    return Void();
+}
+
 Return<void> WaydroidDisplay::updateTaskList(const hidl_vec<uint32_t> &tasks,
         updateTaskList_cb _hidl_cb) {
     std::vector<uint32_t> wanted;

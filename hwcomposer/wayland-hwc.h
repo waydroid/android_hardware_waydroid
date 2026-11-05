@@ -631,6 +631,30 @@ struct display {
      * pushes any @1.3 task event; until then consumers fall back to the old
      * prop/layer heuristics so an unpatched platform jar keeps working. */
     std::map<std::string, task_info> tasks;
+    std::map<std::string, std::string> task_cards;
+    std::map<std::string, std::string> card_focus_tasks;
+    bool card_focused(const std::string& card) {
+        std::scoped_lock lock(windowsMutex);
+        for (const auto& [tid, task] : tasks) {
+            auto group = task_cards.find(tid);
+            if (task.focused && !task.closing
+                    && (group == task_cards.end() ? tid : group->second) == card)
+                return true;
+        }
+        return false;
+    }
+    int card_focus_target(const std::string& card) {
+        std::scoped_lock lock(windowsMutex);
+        auto target = card_focus_tasks.find(card);
+        if (target != card_focus_tasks.end()) {
+            auto group = task_cards.find(target->second);
+            auto task = tasks.find(target->second);
+            if (group != task_cards.end() && group->second == card
+                    && task != tasks.end() && !task->second.closing)
+                return std::stoi(target->second);
+        }
+        return std::stoi(card);
+    }
     bool task_events_seen = false;
     /* Sequence number of the last taskListSnapshot; for the dump only. */
     uint32_t task_generation = 0;
@@ -778,6 +802,8 @@ struct display {
     int32_t resize_width = 0;
     int32_t resize_height = 0;
     bool resize_armed = false;
+    std::atomic<int> card_display_orientation {-1};
+    std::atomic<bool> card_resize_pending {false};
     bool resize_quit = false;
     std::thread resize_thread;
 

@@ -209,8 +209,14 @@ namespace {
          * dispatch threads and trip full UI's "one window, named Waydroid"
          * assertion. This runs from hwc_prepare, so they are gone before
          * hwc_set reaches any mode cleanup. */
-        if (!active)
+        if (!active) {
             drop_all_task_conns(pdev->display);
+            std::scoped_lock lock(pdev->display->windowsMutex);
+            pdev->display->task_cards.clear();
+            pdev->display->card_focus_tasks.clear();
+            pdev->display->card_resize_pending.store(false);
+            pdev->display->card_display_orientation.store(-1);
+        }
     }
 
     std::unique_ptr<waydroid_mode> select_mode(waydroid_hwc_composer_device_1 *pdev, hwc_display_contents_1_t *contents) {

@@ -30,10 +30,11 @@
 
 constexpr hwc_color_t color_transparent = {0, 0, 0, 0};
 
-/* The card the keyboard is drawn into: the focused task's, and only while it
- * is drawing this frame. A card that has no layers here is about to be frozen
- * to a snapshot, and the keyboard would land on the frozen surface alone. */
-window *multi_window_mode::keyboard_host(waydroid_hwc_composer_device_1 *pdev) {
+/* The card that the keyboard and system dialogs are drawn into: the focused
+ * task's, and only while it is drawing this frame. A card that has no layers
+ * here is about to be frozen to a snapshot, and they would land on the frozen
+ * surface alone. */
+window *multi_window_mode::focused_card(waydroid_hwc_composer_device_1 *pdev) {
     for (const auto &[tid, task] : pdev->display->tasks) {
         if (!task.focused || task.closing)
             continue;
@@ -77,7 +78,7 @@ window *multi_window_mode::get_window(waydroid_hwc_composer_device_1 *pdev, laye
              * resize the display, and a staged shell shows it as a card of its
              * own. As a layer of the focused card it lands at its display
              * frame, and input already translates surface-local offsets. */
-            if (window *card = keyboard_host(pdev)) {
+            if (window *card = focused_card(pdev)) {
                 /* A toplevel from an earlier frame would otherwise stay mapped
                  * showing that frame's keyboard: it is still named in the
                  * frame, so cleanup_stale_windows keeps it, and it gets no
@@ -92,6 +93,20 @@ window *multi_window_mode::get_window(waydroid_hwc_composer_device_1 *pdev, laye
                 return it->second.get();
             } else {
                 return windows.add(pdev, "InputMethod", "InputMethod", "none", color_transparent);
+            }
+        } else if (layer_info.aid == "SystemDialog") {
+            /* Crash, ANR and other system dialogs have no task, so no card of
+             * their own, yet they take input focus: dropped, they left every
+             * app ignoring input behind a dialog nobody could see. */
+            if (window *card = focused_card(pdev)) {
+                windows.erase("SystemDialog");
+                return card;
+            }
+            auto it = windows.find("SystemDialog");
+            if (it != windows.end()) {
+                return it->second.get();
+            } else {
+                return windows.add(pdev, "SystemDialog", "SystemDialog", "none", color_transparent);
             }
         }
     }

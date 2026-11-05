@@ -44,4 +44,7 @@ interface IWaydroidDisplay extends @1.2::IWaydroidDisplay {
      */
     updateTaskList(vec<uint32_t> tasks)
         generates (Error error, vec<uint32_t> wantedTasks);
+    /* Task-to-card mappings for scene roots, before updateTaskList.
+     * Omitted roots may be backgrounded; taskRemoved retires their mapping. */
+    updateTaskGroups(vec<uint32_t> tasks, vec<uint32_t> cards);
 };

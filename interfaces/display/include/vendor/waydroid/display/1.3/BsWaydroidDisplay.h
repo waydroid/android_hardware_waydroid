@@ -297,6 +297,35 @@ struct BsWaydroidDisplay : IWaydroidDisplay, ::android::hardware::details::HidlI
         if (!_hidl_error.isOk()) return _hidl_error;
         return _hidl_return;
     }
+    ::android::hardware::Return<void> updateTaskGroups(const ::android::hardware::hidl_vec<uint32_t>& tasks, const ::android::hardware::hidl_vec<uint32_t>& cards) override {
+        atrace_begin(ATRACE_TAG_HAL, "HIDL::IWaydroidDisplay::updateTaskGroups::passthrough");
+        #ifdef __ANDROID_DEBUGGABLE__
+        if (UNLIKELY(mEnableInstrumentation)) {
+            std::vector<void *> _hidl_args;
+            _hidl_args.push_back((void *)&tasks);
+            _hidl_args.push_back((void *)&cards);
+            for (const auto &callback: mInstrumentationCallbacks) {
+                callback(InstrumentationEvent::PASSTHROUGH_ENTRY, "vendor.waydroid.display", "1.3", "IWaydroidDisplay", "updateTaskGroups", &_hidl_args);
+            }
+        }
+        #endif // __ANDROID_DEBUGGABLE__
+
+        ::android::hardware::Status _hidl_error = ::android::hardware::Status::ok();
+        auto _hidl_return = mImpl->updateTaskGroups(tasks, cards);
+
+        atrace_end(ATRACE_TAG_HAL);
+        #ifdef __ANDROID_DEBUGGABLE__
+        if (UNLIKELY(mEnableInstrumentation)) {
+            std::vector<void *> _hidl_args;
+            for (const auto &callback: mInstrumentationCallbacks) {
+                callback(InstrumentationEvent::PASSTHROUGH_EXIT, "vendor.waydroid.display", "1.3", "IWaydroidDisplay", "updateTaskGroups", &_hidl_args);
+            }
+        }
+        #endif // __ANDROID_DEBUGGABLE__
+
+        if (!_hidl_error.isOk()) return _hidl_error;
+        return _hidl_return;
+    }
 
     // Methods from ::android::hidl::base::V1_0::IBase follow.
     ::android::hardware::Return<void> interfaceChain(interfaceChain_cb _hidl_cb) override {

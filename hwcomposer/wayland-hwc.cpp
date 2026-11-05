@@ -496,7 +496,7 @@ reassert_task_focus(struct wl_conn *conn, struct wl_surface *surface, const char
 
         auto it = display->tasks.find(tid);
         if (it != display->tasks.end()) {
-            if (it->second.focused || it->second.closing)
+            if (display->card_focused(tid) || it->second.closing)
                 return;
         } else if (display->task_events_seen) {
             // The control plane is live and knows no such task: nothing to raise.
@@ -508,7 +508,7 @@ reassert_task_focus(struct wl_conn *conn, struct wl_surface *surface, const char
             return;
         window->last_focus_assert = now;
 
-        task_id = stoi(tid);
+        task_id = display->card_focus_target(tid);
         appID = window->appID;
     }
 
@@ -537,9 +537,9 @@ window_owns_display_geometry(struct window *window)
 {
     struct display *display = window->conn->dpy;
 
-    /* Per-task connections: geometry belongs to ctl, as before. */
+    /* Task connections only report orientation changes of the active card. */
     if (!window->conn->is_ctl)
-        return false;
+        return display->task_streams_active && window->activated;
     if (window->taskID == "none")
         return false;
     if (window->taskID == "0")
@@ -551,6 +551,20 @@ window_owns_display_geometry(struct window *window)
     if (window->activated)
         return true;
     return !display->seen_activation.load();
+}
+
+static bool accept_card_geometry(struct window *window, int32_t width, int32_t height)
+{
+    if (window->conn->is_ctl) return true;
+    auto *display = window->conn->dpy;
+    int orientation = display->card_display_orientation.load();
+    if (orientation < 0) {
+        orientation = display->width > display->height;
+        display->card_display_orientation.store(orientation);
+    }
+    if ((width > height) == orientation && !display->card_resize_pending.load())
+        return false;
+    return true;
 }
 
 /* (Re)start the grace timer; deactivate_worker re-checks state once it
@@ -615,7 +629,7 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
         && window->taskID != "none" && window->taskID != "0") {
         ALOGI("ACTIVATED edge for %s#%s -> setFocusedTask",
               window->appID.c_str(), window->taskID.c_str());
-        display->task->setFocusedTask(stoi(window->taskID));
+        display->task->setFocusedTask(display->card_focus_target(window->taskID));
         /* The card is showing a frozen frame and setFocusedTask is a no-op
          * for a task that is already top and resumed, so nothing here is
          * guaranteed to produce a frame. Ask for one, and let the next
@@ -674,6 +688,8 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
     window->owns_display_geometry = window_owns_display_geometry(window);
     if (!window->owns_display_geometry)
         return;
+    if (!accept_card_geometry(window, width, height))
+        return;
 
     display->req_width = width;
     display->req_height = height;
@@ -703,6 +719,7 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
             ALOGI("host resized %s#%s to %dx%d: display %dx%d -> %dx%d",
                   window->appID.c_str(), window->taskID.c_str(), width, height,
                   old_width, old_height, display->width, display->height);
+            if (!window->conn->is_ctl) display->card_resize_pending.store(true);
             arm_resize_settle(display);
         }
     }
@@ -730,6 +747,20 @@ xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
                 property_set("waydroid.active_apps", "none");
                 display->task->removeAllVisibleRecentTasks();
             } else {
+                std::vector<int> members;
+                {
+                    std::scoped_lock lock(display->windowsMutex);
+                    for (const auto& [tid, card] : display->task_cards) {
+                        if (card != window->taskID) continue;
+                        auto task = display->tasks.find(tid);
+                        if (task != display->tasks.end()) {
+                            task->second.closing = true;
+                            task->second.closing_since = std::chrono::steady_clock::now();
+                        }
+                        members.push_back(std::stoi(tid));
+                    }
+                }
+                for (int task : members) display->task->removeTask(task);
                 display->task->removeTask(stoi(window->taskID));
             }
         }
@@ -793,6 +824,9 @@ shell_surface_configure(void *data, struct wl_shell_surface *, uint32_t, int32_t
     if (!window->owns_display_geometry)
         return;
 
+    if (!accept_card_geometry(window, width, height))
+        return;
+
     if (width > 1 && height > 1) {
         display->req_width = width;
         display->req_height = height;
@@ -800,6 +834,7 @@ shell_surface_configure(void *data, struct wl_shell_surface *, uint32_t, int32_t
 
     if (display->height && display->width) {
         choose_width_height(display, width, height);
+        if (!window->conn->is_ctl) display->card_resize_pending.store(true);
         arm_resize_settle(display);
     }
 }
@@ -1598,8 +1633,11 @@ resize_worker(struct display *display)
                 && display->height == display->resize_height;
         lock.unlock();
         /* A configure that landed after the deadline re-arms; leave it to it. */
-        if (settled)
+        if (settled) {
+            display->card_display_orientation.store(display->width > display->height);
+            display->card_resize_pending.store(false);
             do_hotplug(display);
+        }
         lock.lock();
     }
 }
@@ -1726,7 +1764,7 @@ int post_task_buffer(struct waydroid_hwc_composer_device_1 *pdev, uint32_t taskI
          * thread, windowsMutex held) deadlocks against the configure
          * handler's do_hotplug (adapter mutex, held by hwc_set's thread,
          * which itself waits on windowsMutex). */
-        auto win = window::create(conn, false, task->second.appID, tid, {0, 0, 0, 255},
+        auto win = window::create(conn, false, task->second.appID, tid, {0, 0, 0, 0},
                                   false /*sync_configure*/);
         if (!win)
             return -ENOENT;
@@ -1783,7 +1821,7 @@ int post_task_buffer(struct waydroid_hwc_composer_device_1 *pdev, uint32_t taskI
      * snaps to current content. Only once the card has content: a fresh
      * launch posts before the activation/focus signals land. */
     if (stream.attached_slot != UINT32_MAX &&
-        (!w->activated || !task->second.focused)) {
+        (!w->activated || !display->card_focused(tid))) {
         w->pending_stream_buffer = sb.buf;
         stream.released.push_back(slot);
         return 0;
@@ -1848,9 +1886,9 @@ int update_task_list(struct waydroid_hwc_composer_device_1 *pdev,
         if (has_content) {
             auto it = display->windows.find(tid);
             if (it != display->windows.end() &&
-                (!it->second->activated || !task->second.focused))
+                (!it->second->activated || !display->card_focused(tid)))
                 continue;
-        } else if (display->task_events_seen && !task->second.focused) {
+        } else if (display->task_events_seen && !display->card_focused(tid)) {
             /* Nothing to show and not the task in front: SurfaceFlinger has
              * no content to render for it, so wanting it only buys a
              * connection that waits for a frame that never comes. It becomes
@@ -3473,6 +3511,16 @@ void display::expire_closing_marks() {
  * Returns whether a card was closed, so the caller can flush wayland once. */
 bool display::forget_task(const std::string &tid) {
     tasks.erase(tid);
+    task_cards.erase(tid);
+    card_focus_tasks.erase(tid);
+    for (auto it = task_cards.begin(); it != task_cards.end();) {
+        if (it->second == tid) it = task_cards.erase(it);
+        else ++it;
+    }
+    for (auto it = card_focus_tasks.begin(); it != card_focus_tasks.end();) {
+        if (it->second == tid) it = card_focus_tasks.erase(it);
+        else ++it;
+    }
 
     /* task_streams is keyed by the numeric ID; entries self-healed from a
      * layer name are decimal too, but parse defensively. */
@@ -3909,6 +3957,8 @@ static void open_task_conn(struct display *display, uint32_t taskId)
         const char *discard = nullptr;
         if (!display->task_streams_active)
             discard = "task streams ended while it was connecting";
+        else if (display->task_cards.count(std::to_string(taskId)))
+            discard = "the task was folded into another card";
         else if (display->task_conns.count(taskId))
             discard = "another connection won the race";
         else {

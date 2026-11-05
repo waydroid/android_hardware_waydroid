@@ -75,6 +75,12 @@ struct IWaydroidDisplay : public ::vendor::waydroid::display::V1_2::IWaydroidDis
      */
     virtual ::android::hardware::Return<void> updateTaskList(const ::android::hardware::hidl_vec<uint32_t>& tasks, updateTaskList_cb _hidl_cb) = 0;
 
+    /*
+     * Task-to-card mappings for scene roots, before updateTaskList.
+     * Omitted roots may be backgrounded; taskRemoved retires their mapping.
+     */
+    virtual ::android::hardware::Return<void> updateTaskGroups(const ::android::hardware::hidl_vec<uint32_t>& tasks, const ::android::hardware::hidl_vec<uint32_t>& cards) = 0;
+
     /**
      * Return callback for interfaceChain
      */

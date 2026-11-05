@@ -226,13 +226,19 @@ Return<void> WaydroidWindow::taskFocusChanged(uint32_t taskID, bool focused) {
         for (auto &[other_tid, task] : mDisplay->tasks)
             task.focused = (other_tid == tid);
 
+        mDisplay->want_frame.store(true);
+
         /* WMS moved this task to the front on its own; the host card is still
          * wherever the user left it, so ask for the raise too. */
-        auto win = mDisplay->windows.find(tid);
+        auto group = mDisplay->task_cards.find(tid);
+        const auto& card = group == mDisplay->task_cards.end() ? tid : group->second;
+        if (group != mDisplay->task_cards.end())
+            mDisplay->card_focus_tasks[card] = tid;
+        auto win = mDisplay->windows.find(card);
         if (win != mDisplay->windows.end())
             request_window_activation(win->second.get());
         else
-            note_pending_raise(mDisplay, tid);
+            note_pending_raise(mDisplay, card);
     } else {
         it->second.focused = false;
     }
