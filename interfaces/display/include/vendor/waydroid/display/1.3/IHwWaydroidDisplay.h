@@ -15,6 +15,18 @@ namespace vendor {
 namespace waydroid {
 namespace display {
 namespace V1_3 {
+::android::status_t readEmbeddedFromParcel(
+        const ::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer &obj,
+        const ::android::hardware::Parcel &parcel,
+        size_t parentHandle,
+        size_t parentOffset);
+
+::android::status_t writeEmbeddedToParcel(
+        const ::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer &obj,
+        ::android::hardware::Parcel *parcel,
+        size_t parentHandle,
+        size_t parentOffset);
+
 }  // namespace V1_3
 }  // namespace display
 }  // namespace waydroid

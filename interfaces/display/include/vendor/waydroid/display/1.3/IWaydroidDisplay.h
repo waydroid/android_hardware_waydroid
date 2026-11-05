@@ -28,6 +28,66 @@ struct IWaydroidDisplay : public ::vendor::waydroid::display::V1_2::IWaydroidDis
      */
     static const char* descriptor;
 
+    // Forward declaration for forward reference support:
+    struct TaskLayer;
+
+    /**
+     * One layer of a task scene, in display pixels. bufferId 0 is a solid
+     * color layer. The buffer handle is sent only while the HAL does not
+     * know bufferId yet; forgetBuffers drops it from the HAL's cache.
+     */
+    struct TaskLayer final {
+        uint32_t layerId __attribute__ ((aligned(4)));
+        uint64_t bufferId __attribute__ ((aligned(8)));
+        uint64_t frameNumber __attribute__ ((aligned(8)));
+        ::android::hardware::hidl_handle buffer __attribute__ ((aligned(8)));
+        uint32_t width __attribute__ ((aligned(4)));
+        uint32_t height __attribute__ ((aligned(4)));
+        uint32_t stride __attribute__ ((aligned(4)));
+        int32_t format __attribute__ ((aligned(4)));
+        int32_t dstLeft __attribute__ ((aligned(4)));
+        int32_t dstTop __attribute__ ((aligned(4)));
+        int32_t dstRight __attribute__ ((aligned(4)));
+        int32_t dstBottom __attribute__ ((aligned(4)));
+        float srcLeft __attribute__ ((aligned(4)));
+        float srcTop __attribute__ ((aligned(4)));
+        float srcRight __attribute__ ((aligned(4)));
+        float srcBottom __attribute__ ((aligned(4)));
+        /*
+         * HWC transform bits
+         */
+        uint32_t transform __attribute__ ((aligned(4)));
+        /*
+         * ARGB8888, solid color layers only
+         */
+        uint32_t color __attribute__ ((aligned(4)));
+        bool opaque __attribute__ ((aligned(1)));
+        ::android::hardware::hidl_handle acquireFence __attribute__ ((aligned(8)));
+    };
+
+    static_assert(offsetof(::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer, layerId) == 0, "wrong offset");
+    static_assert(offsetof(::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer, bufferId) == 8, "wrong offset");
+    static_assert(offsetof(::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer, frameNumber) == 16, "wrong offset");
+    static_assert(offsetof(::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer, buffer) == 24, "wrong offset");
+    static_assert(offsetof(::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer, width) == 40, "wrong offset");
+    static_assert(offsetof(::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer, height) == 44, "wrong offset");
+    static_assert(offsetof(::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer, stride) == 48, "wrong offset");
+    static_assert(offsetof(::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer, format) == 52, "wrong offset");
+    static_assert(offsetof(::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer, dstLeft) == 56, "wrong offset");
+    static_assert(offsetof(::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer, dstTop) == 60, "wrong offset");
+    static_assert(offsetof(::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer, dstRight) == 64, "wrong offset");
+    static_assert(offsetof(::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer, dstBottom) == 68, "wrong offset");
+    static_assert(offsetof(::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer, srcLeft) == 72, "wrong offset");
+    static_assert(offsetof(::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer, srcTop) == 76, "wrong offset");
+    static_assert(offsetof(::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer, srcRight) == 80, "wrong offset");
+    static_assert(offsetof(::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer, srcBottom) == 84, "wrong offset");
+    static_assert(offsetof(::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer, transform) == 88, "wrong offset");
+    static_assert(offsetof(::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer, color) == 92, "wrong offset");
+    static_assert(offsetof(::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer, opaque) == 96, "wrong offset");
+    static_assert(offsetof(::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer, acquireFence) == 104, "wrong offset");
+    static_assert(sizeof(::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer) == 120, "wrong size");
+    static_assert(__alignof(::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer) == 8, "wrong alignment");
+
     /**
      * Returns whether this object's implementation is outside of the current process.
      */
@@ -44,6 +104,24 @@ struct IWaydroidDisplay : public ::vendor::waydroid::display::V1_2::IWaydroidDis
     virtual ::android::hardware::Return<::android::hardware::graphics::composer::V2_1::Error> setTargetLayerSize(uint32_t width, uint32_t height) override = 0;
 
     virtual ::android::hardware::Return<::android::hardware::graphics::composer::V2_1::Error> setMouseMetadata(uint32_t layer, int32_t style, float hotspotX, float hotspotY) override = 0;
+
+    /**
+     * Return callback for postTaskScene
+     */
+    using postTaskScene_cb = std::function<void(::android::hardware::graphics::composer::V2_1::Error error, const ::android::hardware::hidl_vec<::android::hardware::hidl_handle>& releaseFences)>;
+    /**
+     * Show a task as a stack of subsurfaces, bottom first, using the
+     * producers' own buffers. Returns one release fence per layer: it
+     * signals once the host compositor can no longer read that layer's
+     * buffer. Attaching happens asynchronously, after the acquire fences.
+     *
+     * Errors: BAD_DISPLAY task streams inactive; BAD_LAYER unknown or
+     * closing task; NOT_VALIDATED no configured window yet (use
+     * postTaskBuffer); BAD_PARAMETER bufferId unknown and no handle given;
+     * UNSUPPORTED a layer cannot be shown directly; NO_RESOURCES too many
+     * layers or buffers.
+     */
+    virtual ::android::hardware::Return<void> postTaskScene(uint32_t taskId, uint32_t displayWidth, uint32_t displayHeight, const ::android::hardware::hidl_vec<::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer>& layers, const ::android::hardware::hidl_vec<uint64_t>& forgetBuffers, postTaskScene_cb _hidl_cb) = 0;
 
     /**
      * Return callback for postTaskBuffer
@@ -292,11 +370,68 @@ struct IWaydroidDisplay : public ::vendor::waydroid::display::V1_2::IWaydroidDis
 // type declarations for package
 //
 
+static inline std::string toString(const ::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer& o);
+static inline void PrintTo(const ::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer& o, ::std::ostream*);
+// operator== and operator!= are not generated for TaskLayer
+
 static inline std::string toString(const ::android::sp<::vendor::waydroid::display::V1_3::IWaydroidDisplay>& o);
 
 //
 // type header definitions for package
 //
+
+static inline std::string toString(const ::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer& o) {
+    using ::android::hardware::toString;
+    std::string os;
+    os += "{";
+    os += ".layerId = ";
+    os += ::android::hardware::toString(o.layerId);
+    os += ", .bufferId = ";
+    os += ::android::hardware::toString(o.bufferId);
+    os += ", .frameNumber = ";
+    os += ::android::hardware::toString(o.frameNumber);
+    os += ", .buffer = ";
+    os += ::android::hardware::toString(o.buffer);
+    os += ", .width = ";
+    os += ::android::hardware::toString(o.width);
+    os += ", .height = ";
+    os += ::android::hardware::toString(o.height);
+    os += ", .stride = ";
+    os += ::android::hardware::toString(o.stride);
+    os += ", .format = ";
+    os += ::android::hardware::toString(o.format);
+    os += ", .dstLeft = ";
+    os += ::android::hardware::toString(o.dstLeft);
+    os += ", .dstTop = ";
+    os += ::android::hardware::toString(o.dstTop);
+    os += ", .dstRight = ";
+    os += ::android::hardware::toString(o.dstRight);
+    os += ", .dstBottom = ";
+    os += ::android::hardware::toString(o.dstBottom);
+    os += ", .srcLeft = ";
+    os += ::android::hardware::toString(o.srcLeft);
+    os += ", .srcTop = ";
+    os += ::android::hardware::toString(o.srcTop);
+    os += ", .srcRight = ";
+    os += ::android::hardware::toString(o.srcRight);
+    os += ", .srcBottom = ";
+    os += ::android::hardware::toString(o.srcBottom);
+    os += ", .transform = ";
+    os += ::android::hardware::toString(o.transform);
+    os += ", .color = ";
+    os += ::android::hardware::toString(o.color);
+    os += ", .opaque = ";
+    os += ::android::hardware::toString(o.opaque);
+    os += ", .acquireFence = ";
+    os += ::android::hardware::toString(o.acquireFence);
+    os += "}"; return os;
+}
+
+static inline void PrintTo(const ::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer& o, ::std::ostream* os) {
+    *os << toString(o);
+}
+
+// operator== and operator!= are not generated for TaskLayer
 
 static inline std::string toString(const ::android::sp<::vendor::waydroid::display::V1_3::IWaydroidDisplay>& o) {
     std::string os = "[class or subclass of ";

@@ -29,6 +29,7 @@ struct BpHwWaydroidDisplay : public ::android::hardware::BpInterface<IWaydroidDi
     void onLastStrongRef(const void* id) override;
 
     // Methods from ::vendor::waydroid::display::V1_3::IWaydroidDisplay follow.
+    static ::android::hardware::Return<void>  _hidl_postTaskScene(::android::hardware::IInterface* _hidl_this, ::android::hardware::details::HidlInstrumentor *_hidl_this_instrumentor, uint32_t taskId, uint32_t displayWidth, uint32_t displayHeight, const ::android::hardware::hidl_vec<::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer>& layers, const ::android::hardware::hidl_vec<uint64_t>& forgetBuffers, postTaskScene_cb _hidl_cb);
     static ::android::hardware::Return<void>  _hidl_postTaskBuffer(::android::hardware::IInterface* _hidl_this, ::android::hardware::details::HidlInstrumentor *_hidl_this_instrumentor, uint32_t taskId, uint32_t slot, const ::android::hardware::hidl_handle& buffer, uint32_t width, uint32_t height, uint32_t stride, int32_t format, const ::android::hardware::hidl_handle& acquireFence, postTaskBuffer_cb _hidl_cb);
     static ::android::hardware::Return<void>  _hidl_updateTaskList(::android::hardware::IInterface* _hidl_this, ::android::hardware::details::HidlInstrumentor *_hidl_this_instrumentor, const ::android::hardware::hidl_vec<uint32_t>& tasks, updateTaskList_cb _hidl_cb);
     static ::android::hardware::Return<void>  _hidl_updateTaskGroups(::android::hardware::IInterface* _hidl_this, ::android::hardware::details::HidlInstrumentor *_hidl_this_instrumentor, const ::android::hardware::hidl_vec<uint32_t>& tasks, const ::android::hardware::hidl_vec<uint32_t>& cards);
@@ -46,6 +47,7 @@ struct BpHwWaydroidDisplay : public ::android::hardware::BpInterface<IWaydroidDi
     ::android::hardware::Return<::android::hardware::graphics::composer::V2_1::Error> setMouseMetadata(uint32_t layer, int32_t style, float hotspotX, float hotspotY) override;
 
     // Methods from ::vendor::waydroid::display::V1_3::IWaydroidDisplay follow.
+    ::android::hardware::Return<void> postTaskScene(uint32_t taskId, uint32_t displayWidth, uint32_t displayHeight, const ::android::hardware::hidl_vec<::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer>& layers, const ::android::hardware::hidl_vec<uint64_t>& forgetBuffers, postTaskScene_cb _hidl_cb) override;
     ::android::hardware::Return<void> postTaskBuffer(uint32_t taskId, uint32_t slot, const ::android::hardware::hidl_handle& buffer, uint32_t width, uint32_t height, uint32_t stride, int32_t format, const ::android::hardware::hidl_handle& acquireFence, postTaskBuffer_cb _hidl_cb) override;
     ::android::hardware::Return<void> updateTaskList(const ::android::hardware::hidl_vec<uint32_t>& tasks, updateTaskList_cb _hidl_cb) override;
     ::android::hardware::Return<void> updateTaskGroups(const ::android::hardware::hidl_vec<uint32_t>& tasks, const ::android::hardware::hidl_vec<uint32_t>& cards) override;

@@ -20,6 +20,52 @@ import android.hardware.graphics.composer@2.1::types;
 
 interface IWaydroidDisplay extends @1.2::IWaydroidDisplay {
     /**
+     * One layer of a task scene, in display pixels. bufferId 0 is a solid
+     * color layer. The buffer handle is sent only while the HAL does not
+     * know bufferId yet; forgetBuffers drops it from the HAL's cache.
+     */
+    struct TaskLayer {
+        uint32_t layerId;
+        uint64_t bufferId;
+        uint64_t frameNumber;
+        handle buffer;
+        uint32_t width;
+        uint32_t height;
+        uint32_t stride;
+        int32_t format;
+        int32_t dstLeft;
+        int32_t dstTop;
+        int32_t dstRight;
+        int32_t dstBottom;
+        float srcLeft;
+        float srcTop;
+        float srcRight;
+        float srcBottom;
+        /* HWC transform bits */
+        uint32_t transform;
+        /* ARGB8888, solid color layers only */
+        uint32_t color;
+        bool opaque;
+        handle acquireFence;
+    };
+
+    /**
+     * Show a task as a stack of subsurfaces, bottom first, using the
+     * producers' own buffers. Returns one release fence per layer: it
+     * signals once the host compositor can no longer read that layer's
+     * buffer. Attaching happens asynchronously, after the acquire fences.
+     *
+     * Errors: BAD_DISPLAY task streams inactive; BAD_LAYER unknown or
+     * closing task; NOT_VALIDATED no configured window yet (use
+     * postTaskBuffer); BAD_PARAMETER bufferId unknown and no handle given;
+     * UNSUPPORTED a layer cannot be shown directly; NO_RESOURCES too many
+     * layers or buffers.
+     */
+    postTaskScene(uint32_t taskId, uint32_t displayWidth, uint32_t displayHeight,
+                  vec<TaskLayer> layers, vec<uint64_t> forgetBuffers)
+        generates (Error error, vec<handle> releaseFences);
+
+    /**
      * Post a rendered frame for an Android task. The HAL creates the task's
      * toplevel on the first post and keeps one imported wl_buffer per
      * (taskId, slot), re-importing when the metadata changes. Returns the

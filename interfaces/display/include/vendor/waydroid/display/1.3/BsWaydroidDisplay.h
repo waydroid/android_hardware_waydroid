@@ -226,6 +226,42 @@ struct BsWaydroidDisplay : IWaydroidDisplay, ::android::hardware::details::HidlI
     }
 
     // Methods from ::vendor::waydroid::display::V1_3::IWaydroidDisplay follow.
+    ::android::hardware::Return<void> postTaskScene(uint32_t taskId, uint32_t displayWidth, uint32_t displayHeight, const ::android::hardware::hidl_vec<::vendor::waydroid::display::V1_3::IWaydroidDisplay::TaskLayer>& layers, const ::android::hardware::hidl_vec<uint64_t>& forgetBuffers, postTaskScene_cb _hidl_cb) override {
+        atrace_begin(ATRACE_TAG_HAL, "HIDL::IWaydroidDisplay::postTaskScene::passthrough");
+        #ifdef __ANDROID_DEBUGGABLE__
+        if (UNLIKELY(mEnableInstrumentation)) {
+            std::vector<void *> _hidl_args;
+            _hidl_args.push_back((void *)&taskId);
+            _hidl_args.push_back((void *)&displayWidth);
+            _hidl_args.push_back((void *)&displayHeight);
+            _hidl_args.push_back((void *)&layers);
+            _hidl_args.push_back((void *)&forgetBuffers);
+            for (const auto &callback: mInstrumentationCallbacks) {
+                callback(InstrumentationEvent::PASSTHROUGH_ENTRY, "vendor.waydroid.display", "1.3", "IWaydroidDisplay", "postTaskScene", &_hidl_args);
+            }
+        }
+        #endif // __ANDROID_DEBUGGABLE__
+
+        ::android::hardware::Status _hidl_error = ::android::hardware::Status::ok();
+        auto _hidl_return = mImpl->postTaskScene(taskId, displayWidth, displayHeight, layers, forgetBuffers, [&](const auto &_hidl_out_error, const auto &_hidl_out_releaseFences) {
+            atrace_end(ATRACE_TAG_HAL);
+            #ifdef __ANDROID_DEBUGGABLE__
+            if (UNLIKELY(mEnableInstrumentation)) {
+                std::vector<void *> _hidl_args;
+                _hidl_args.push_back((void *)&_hidl_out_error);
+                _hidl_args.push_back((void *)&_hidl_out_releaseFences);
+                for (const auto &callback: mInstrumentationCallbacks) {
+                    callback(InstrumentationEvent::PASSTHROUGH_EXIT, "vendor.waydroid.display", "1.3", "IWaydroidDisplay", "postTaskScene", &_hidl_args);
+                }
+            }
+            #endif // __ANDROID_DEBUGGABLE__
+
+            _hidl_cb(_hidl_out_error, _hidl_out_releaseFences);
+        });
+
+        if (!_hidl_error.isOk()) return _hidl_error;
+        return _hidl_return;
+    }
     ::android::hardware::Return<void> postTaskBuffer(uint32_t taskId, uint32_t slot, const ::android::hardware::hidl_handle& buffer, uint32_t width, uint32_t height, uint32_t stride, int32_t format, const ::android::hardware::hidl_handle& acquireFence, postTaskBuffer_cb _hidl_cb) override {
         atrace_begin(ATRACE_TAG_HAL, "HIDL::IWaydroidDisplay::postTaskBuffer::passthrough");
         #ifdef __ANDROID_DEBUGGABLE__

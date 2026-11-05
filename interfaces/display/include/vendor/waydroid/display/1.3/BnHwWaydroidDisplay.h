@@ -34,6 +34,13 @@ struct BnHwWaydroidDisplay : public ::android::hidl::base::V1_0::BnHwBase {
 
     ::android::sp<IWaydroidDisplay> getImpl() { return _hidl_mImpl; }
     // Methods from ::vendor::waydroid::display::V1_3::IWaydroidDisplay follow.
+    static ::android::status_t _hidl_postTaskScene(
+            ::android::hidl::base::V1_0::BnHwBase* _hidl_this,
+            const ::android::hardware::Parcel &_hidl_data,
+            ::android::hardware::Parcel *_hidl_reply,
+            TransactCallback _hidl_cb);
+
+
     static ::android::status_t _hidl_postTaskBuffer(
             ::android::hidl::base::V1_0::BnHwBase* _hidl_this,
             const ::android::hardware::Parcel &_hidl_data,
