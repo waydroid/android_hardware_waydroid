@@ -60,6 +60,10 @@ class WaydroidDisplay : public IWaydroidDisplay {
                                 uint32_t width, uint32_t height, uint32_t stride,
                                 int32_t format, const hidl_handle &acquireFence,
                                 postTaskBuffer_cb _hidl_cb) override;
+    Return<void> postTaskScene(uint32_t taskId, uint32_t displayWidth, uint32_t displayHeight,
+                               const hidl_vec<IWaydroidDisplay::TaskLayer> &layers,
+                               const hidl_vec<uint64_t> &forgetBuffers,
+                               postTaskScene_cb _hidl_cb) override;
     Return<void> updateTaskGroups(const hidl_vec<uint32_t> &tasks,
                                   const hidl_vec<uint32_t> &cards) override;
     Return<void> updateTaskList(const hidl_vec<uint32_t> &tasks,

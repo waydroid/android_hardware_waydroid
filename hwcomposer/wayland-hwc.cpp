@@ -997,6 +997,8 @@ window::~window() {
     if (idle_inhibitor)
         zwp_idle_inhibitor_v1_destroy(idle_inhibitor);
 
+    /* Children go before the surfaces they are attached to. */
+    scene.clear();
     layers.clear();
     if (dedicated_background_surface) {
         if (viewport)
@@ -1723,6 +1725,12 @@ int post_task_buffer(struct waydroid_hwc_composer_device_1 *pdev, uint32_t taskI
         return -ENOENT;
 
     auto &stream = display->task_streams[taskId];
+    if (stream.scene_active) {
+        /* Back from scenes: the stream buffer replaces the subsurfaces. */
+        auto win = display->windows.find(tid);
+        leave_task_scene(display, stream, win == display->windows.end() ? nullptr
+                                                                        : win->second.get());
+    }
     *releasedSlots = std::move(stream.released);
     stream.released.clear();
 
@@ -1882,7 +1890,8 @@ int update_task_list(struct waydroid_hwc_composer_device_1 *pdev,
          * so its posts would be withheld anyway. */
         auto stream = display->task_streams.find(taskId);
         const bool has_content = stream != display->task_streams.end() &&
-                                 stream->second.attached_slot != UINT32_MAX;
+                                 (stream->second.attached_slot != UINT32_MAX ||
+                                  stream->second.scene_active);
         if (has_content) {
             auto it = display->windows.find(tid);
             if (it != display->windows.end() &&

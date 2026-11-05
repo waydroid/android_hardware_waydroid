@@ -97,6 +97,68 @@ Return<void> WaydroidDisplay::postTaskBuffer(uint32_t taskId, uint32_t slot,
     return Void();
 }
 
+Return<void> WaydroidDisplay::postTaskScene(uint32_t taskId, uint32_t displayWidth,
+        uint32_t displayHeight, const hidl_vec<IWaydroidDisplay::TaskLayer> &layers,
+        const hidl_vec<uint64_t> &forgetBuffers, postTaskScene_cb _hidl_cb) {
+    std::vector<scene_post_layer> scene(layers.size());
+    for (size_t i = 0; i < layers.size(); i++) {
+        const auto &l = layers[i];
+        const native_handle_t *fence = l.acquireFence.getNativeHandle();
+        scene[i] = {
+            .layer_id = l.layerId,
+            .buffer_id = l.bufferId,
+            .frame = l.frameNumber,
+            .handle = l.buffer.getNativeHandle(),
+            .width = l.width,
+            .height = l.height,
+            .stride = l.stride,
+            .format = l.format,
+            .dst_left = l.dstLeft,
+            .dst_top = l.dstTop,
+            .dst_right = l.dstRight,
+            .dst_bottom = l.dstBottom,
+            .src_left = l.srcLeft,
+            .src_top = l.srcTop,
+            .src_right = l.srcRight,
+            .src_bottom = l.srcBottom,
+            .transform = l.transform,
+            .color = l.color,
+            .opaque = l.opaque,
+            .acquire_fd = fence && fence->numFds > 0 ? fence->data[0] : -1,
+        };
+    }
+    std::vector<uint64_t> forget(forgetBuffers.begin(), forgetBuffers.end());
+    std::vector<int> fences;
+    int ret = post_task_scene(mPdev, taskId, displayWidth, displayHeight, scene, forget, &fences);
+    Error error;
+    switch (ret) {
+        case 0:            error = Error::NONE; break;
+        case -EAGAIN:      error = Error::BAD_DISPLAY; break;
+        case -ENOENT:      error = Error::BAD_LAYER; break;
+        case -EINPROGRESS: error = Error::NOT_VALIDATED; break;
+        case -ENOKEY:      error = Error::BAD_PARAMETER; break;
+        case -ENOTSUP:     error = Error::UNSUPPORTED; break;
+        default:           error = Error::NO_RESOURCES; break;
+    }
+    /* Fences are owned by the handles and closed once the reply is sent. */
+    std::vector<native_handle_t *> owned;
+    hidl_vec<hidl_handle> releases(fences.size());
+    for (size_t i = 0; i < fences.size(); i++) {
+        if (fences[i] < 0)
+            continue;
+        native_handle_t *h = native_handle_create(1, 0);
+        h->data[0] = fences[i];
+        owned.push_back(h);
+        releases[i].setTo(h, false /*shouldOwn*/);
+    }
+    _hidl_cb(error, releases);
+    for (auto *h : owned) {
+        native_handle_close(h);
+        native_handle_delete(h);
+    }
+    return Void();
+}
+
 Return<void> WaydroidDisplay::updateTaskGroups(const hidl_vec<uint32_t> &tasks,
         const hidl_vec<uint32_t> &cards) {
     if (tasks.size() != cards.size()) return Void();

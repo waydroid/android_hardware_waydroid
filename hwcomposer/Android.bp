@@ -51,6 +51,7 @@ cc_library_shared {
         "gralloc_handler.cpp",
         "hwcomposer.cpp",
         "wayland-hwc.cpp",
+        "task-scene.cpp",
         "WaydroidClipboard.cpp",
         "WaydroidWindow.cpp",
         "egl-tools.cpp",

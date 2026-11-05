@@ -44,6 +44,7 @@
 #include <errno.h>
 #include <chrono>
 #include <map>
+#include <tuple>
 #include <list>
 #include <set>
 #include <pthread.h>
@@ -353,6 +354,17 @@ struct window {
      * earlier). Guarded by windowsMutex. */
     std::shared_ptr<buffer> pending_stream_buffer;
 
+    /* Scene subsurfaces, bottom first, keyed by Android layer id. Only the
+     * scene worker changes them, under windowsMutex. While a scene is shown
+     * layers[0] holds scene_backing instead of a stream buffer. */
+    struct scene_layer : public layer {
+        uint32_t id = 0;
+        scene_layer(layer &&l, uint32_t id) : layer(std::move(l)), id(id) {}
+    };
+    std::vector<scene_layer> scene;
+    std::shared_ptr<buffer> scene_backing;
+    bool scene_shown = false;
+
     /* Last XDG_TOPLEVEL_STATE_ACTIVATED state seen from the host compositor.
      * Used to detect the rising edge so a Lomiri-driven focus/raise of this
      * toplevel brings the matching Android task to the front exactly once. */
@@ -462,6 +474,37 @@ int post_task_buffer(struct waydroid_hwc_composer_device_1 *pdev, uint32_t taskI
 /* Filter the caller's streamable tasks down to those the HAL wants content
  * for (IWaydroidDisplay@1.3 updateTaskList). Returns -EAGAIN when task
  * streams are inactive. */
+struct task_stream;
+
+/* One layer of a posted scene; see IWaydroidDisplay::TaskLayer. The handle
+ * and fence belong to the caller. */
+struct scene_post_layer {
+    uint32_t layer_id;
+    uint64_t buffer_id;
+    uint64_t frame;
+    const native_handle_t *handle;
+    uint32_t width, height, stride;
+    int32_t format;
+    int32_t dst_left, dst_top, dst_right, dst_bottom;
+    float src_left, src_top, src_right, src_bottom;
+    uint32_t transform;
+    uint32_t color;
+    bool opaque;
+    int acquire_fd;
+};
+
+/* Returns 0, or -EAGAIN streams inactive, -ENOENT task refused, -EINPROGRESS
+ * no configured window yet, -ENOKEY unknown buffer without handle, -ENOTSUP
+ * not showable, -ENOSPC too many layers/buffers. On success fences holds one
+ * owned fd (or -1) per layer. */
+int post_task_scene(struct waydroid_hwc_composer_device_1 *pdev, uint32_t taskId,
+                    uint32_t width, uint32_t height,
+                    const std::vector<scene_post_layer> &layers,
+                    const std::vector<uint64_t> &forget, std::vector<int> *fences);
+
+/* Drop a task's scene and release everything it showed. windowsMutex held. */
+void leave_task_scene(struct display *display, struct task_stream &stream, struct window *w);
+
 int update_task_list(struct waydroid_hwc_composer_device_1 *pdev,
                      const std::vector<uint32_t> &tasks, std::vector<uint32_t> *wanted);
 
@@ -581,6 +624,29 @@ struct task_stream_slot {
     ino_t ino = 0;
     bool busy = false;
 };
+/* Scenes (postTaskScene): a task shown as a stack of subsurfaces holding the
+ * producers' own buffers. Each Android layer has a sw_sync timeline with one
+ * point per attached buffer. Mir never sends wl_buffer.release, so a point
+ * signals a grace period after a later commit replaced its buffer. */
+struct scene_timeline {
+    int fd = -1;
+    /* Last point handed out. Binder side, under windowsMutex. */
+    uint32_t created = 0;
+    /* Last point signaled. Scene worker only. */
+    uint32_t signaled = 0;
+    ~scene_timeline();
+};
+
+struct scene_track {
+    std::shared_ptr<scene_timeline> timeline;
+    uint64_t buffer_id = 0;
+    uint64_t frame = 0;
+    /* Point of the attach currently on screen, 0 if none. */
+    uint32_t point = 0;
+    /* Fence of that point, handed out (dup'ed) until the buffer changes. */
+    std::shared_ptr<int> fence;
+};
+
 struct task_stream {
     std::map<uint32_t, task_stream_slot> slots;
     std::vector<uint32_t> released;
@@ -588,6 +654,16 @@ struct task_stream {
      * wl_buffer.release, so the release of the previous slot is synthesized
      * when a new one is attached. */
     uint32_t attached_slot = UINT32_MAX;
+
+    /* Scenes, guarded by windowsMutex. A generation bump makes queued scene
+     * work for this task stale. */
+    std::map<uint32_t, scene_track> tracks;
+    std::map<uint64_t, std::shared_ptr<buffer>> scene_buffers;
+    /* Keyed by color, width, height: without wp_viewporter a solid layer
+     * needs a buffer of its real size. */
+    std::map<std::tuple<uint32_t, int32_t, int32_t>, std::shared_ptr<buffer>> solid_buffers;
+    uint64_t scene_generation = 0;
+    bool scene_active = false;
 };
 
 /* A task connection detached from every table but not yet destroyed. Its
@@ -816,6 +892,10 @@ struct display {
     /* Task whose card Android brought to front before the card existed.
      * Guarded by windowsMutex; see note_pending_raise. */
     std::string pending_raise_tid;
+
+    /* Applies posted scenes in order and signals scene release points.
+     * Created on the first scene; lives as long as the process. */
+    struct scene_worker *scene_worker = nullptr;
 };
 
 void
