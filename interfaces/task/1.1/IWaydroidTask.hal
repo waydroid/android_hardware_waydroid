@@ -34,4 +34,11 @@ interface IWaydroidTask extends @1.0::IWaydroidTask {
      */
     injectTaskTouch(uint32_t taskID, int32_t action, int64_t downTime, int64_t eventTime,
                     vec<TouchPoint> pointers) generates (bool delivered);
+
+    /**
+     * Send device key events to the window of this task, the one the host
+     * keyboard is on, instead of Android's focused window. 0 goes back to
+     * Android's focus. Takes effect for keys written after it returns.
+     */
+    setKeyTarget(uint32_t taskID);
 };
