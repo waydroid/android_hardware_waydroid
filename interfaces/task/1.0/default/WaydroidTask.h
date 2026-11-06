@@ -18,9 +18,13 @@
 
 #include <binder/IBinder.h>
 #include <binder/IServiceManager.h>
-#include <vendor/waydroid/task/1.0/IWaydroidTask.h>
+#include <vendor/waydroid/task/1.1/IWaydroidTask.h>
 #include <hidl/MQDescriptor.h>
 #include <hidl/Status.h>
+
+#include <mutex>
+#include <unordered_map>
+#include <unordered_set>
 
 #include <android/app/IActivityTaskManager.h>
 #include <lineageos/waydroid/IPlatform.h>
@@ -43,18 +47,31 @@ using ::android::IBinder;
 using ::android::app::IActivityTaskManager;
 using ::lineageos::waydroid::IPlatform;
 
-struct WaydroidTask : public IWaydroidTask {
+using TouchPoint = ::vendor::waydroid::task::V1_1::IWaydroidTask::TouchPoint;
+
+struct WaydroidTask : public ::vendor::waydroid::task::V1_1::IWaydroidTask {
     // Methods from ::vendor::waydroid::task::V1_0::IWaydroidTask follow.
     Return<void> setFocusedTask(uint32_t taskID) override;
     Return<void> removeTask(uint32_t taskID) override;
     Return<void> removeAllVisibleRecentTasks() override;
     Return<void> getAppName(const hidl_string& packageName, getAppName_cb _hidl_cb) override;
+    // Methods from ::vendor::waydroid::task::V1_1::IWaydroidTask follow.
+    Return<bool> injectTaskTouch(uint32_t taskID, int32_t action, int64_t downTime,
+                                 int64_t eventTime, const hidl_vec<TouchPoint>& pointers) override;
   private:
     sp<IActivityTaskManager> getActivityTaskManager();
     sp<IPlatform> getPlatform();
 
     sp<IActivityTaskManager> mActivityTaskManager;
     sp<IPlatform> mPlatform;
+
+    sp<IBinder> getService(sp<IBinder>& cache, const char* name);
+    std::mutex mInputMutex;
+    sp<IBinder> mSurfaceFlinger;
+    sp<IBinder> mInputFlinger;
+    // Application token per task, refreshed on each gesture's first touch.
+    std::unordered_map<uint32_t, sp<IBinder>> mInputTokens;
+    std::unordered_set<uint32_t> mLoggedTasks;
 };
 
 }  // namespace implementation

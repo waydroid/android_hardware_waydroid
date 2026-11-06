@@ -21,6 +21,8 @@
 #include <utils/String16.h>
 #include <utils/String8.h>
 
+#include <binder/Parcel.h>
+
 namespace vendor {
 namespace waydroid {
 namespace task {
@@ -71,7 +73,77 @@ Return<void> WaydroidTask::setFocusedTask(uint32_t taskID) {
     return Void();
 }
 
+sp<IBinder> WaydroidTask::getService(sp<IBinder>& cache, const char* name) {
+    if (cache != nullptr && !cache->isBinderAlive()) cache = nullptr;
+    if (cache == nullptr)
+        cache = android::defaultServiceManager()->checkService(android::String16(name));
+    return cache;
+}
+
+/* Private transactions, see SurfaceFlinger::onTransact and
+ * InputManager::onTransact in frameworks/native. */
+static constexpr uint32_t kInjectTaskTouch = 0x57440001;
+static constexpr uint32_t kGetTaskInputToken = 0x57440002;
+static constexpr int32_t kActionMask = 0xff; /* AMOTION_EVENT_ACTION_MASK */
+static constexpr int32_t kActionDown = 0;    /* AMOTION_EVENT_ACTION_DOWN */
+
+Return<bool> WaydroidTask::injectTaskTouch(uint32_t taskID, int32_t action, int64_t downTime,
+                                           int64_t eventTime,
+                                           const hidl_vec<TouchPoint>& pointers) {
+    std::scoped_lock lock(mInputMutex);
+    sp<IBinder> input = getService(mInputFlinger, "inputflinger");
+    if (input == nullptr || pointers.size() == 0)
+        return false;
+
+    /* The token changes when another activity comes on top; a gesture
+     * stays with the window it started on. */
+    sp<IBinder>& token = mInputTokens[taskID];
+    if ((action & kActionMask) == kActionDown) {
+        token = nullptr;
+        sp<IBinder> sf = getService(mSurfaceFlinger, "SurfaceFlinger");
+        android::Parcel data, reply;
+        data.writeInterfaceToken(android::String16("android.ui.ISurfaceComposer"));
+        data.writeInt32(static_cast<int32_t>(taskID));
+        if (sf != nullptr && sf->transact(kGetTaskInputToken, data, &reply) == android::OK)
+            reply.readNullableStrongBinder(&token);
+    }
+    if (token == nullptr) {
+        if ((action & kActionMask) == kActionDown)
+            ALOGW("task %u: no input token, using the shared touchscreen", taskID);
+        return false;
+    }
+
+    android::Parcel data, reply;
+    data.writeInterfaceToken(android::String16("android.os.IInputFlinger"));
+    data.writeStrongBinder(token);
+    data.writeInt32(action);
+    data.writeInt64(downTime);
+    data.writeInt64(eventTime);
+    data.writeInt32(static_cast<int32_t>(pointers.size()));
+    for (const auto& p : pointers) {
+        data.writeInt32(p.id);
+        data.writeFloat(p.x);
+        data.writeFloat(p.y);
+        data.writeFloat(p.pressure);
+    }
+    int32_t result = -1;
+    if (input->transact(kInjectTaskTouch, data, &reply) != android::OK ||
+        reply.readInt32(&result) != android::OK)
+        return false;
+    if ((action & kActionMask) == kActionDown && result != 0)
+        ALOGW("task %u: touch refused (%d), using the shared touchscreen", taskID, result);
+    else if ((action & kActionMask) == kActionDown && mLoggedTasks.insert(taskID).second)
+        ALOGI("task %u: touch goes straight to its window", taskID);
+    /* InputEventInjectionResult::SUCCEEDED */
+    return result == 0;
+}
+
 Return<void> WaydroidTask::removeTask(uint32_t taskID) {
+    {
+        std::scoped_lock lock(mInputMutex);
+        mInputTokens.erase(taskID);
+    }
+
     bool ret = false;
     sp<IActivityTaskManager> atm = getActivityTaskManager();
     if (atm != nullptr) {

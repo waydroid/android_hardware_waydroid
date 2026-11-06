@@ -25,7 +25,7 @@
 using android::hardware::configureRpcThreadpool;
 using android::hardware::joinRpcThreadpool;
 
-using vendor::waydroid::task::V1_0::IWaydroidTask;
+using vendor::waydroid::task::V1_1::IWaydroidTask;
 using vendor::waydroid::task::V1_0::implementation::WaydroidTask;
 
 using android::OK;
