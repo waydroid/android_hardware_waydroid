@@ -2004,6 +2004,11 @@ keyboard_handle_key(void *data, struct wl_keyboard *,
     if (key == KEY_POWER)
         return;
     struct wl_conn *conn = (struct wl_conn *)data;
+    /* The key belongs to the card the host keyboard is on, whatever Android
+     * has focused. Set before writing it: the HAL call returns once the
+     * dispatcher knows. */
+    if (state == WL_KEYBOARD_KEY_STATE_PRESSED && conn->dpy->task_input != nullptr)
+        conn->dpy->task_input->setKeyTarget(conn->is_ctl ? 0 : conn->task_id);
     send_key_event(conn->dpy, key, (enum wl_keyboard_key_state)state);
 }
 
