@@ -52,6 +52,7 @@
 #include <hardware/hwcomposer.h>
 #include <cutils/properties.h>
 #include <vendor/waydroid/task/1.0/IWaydroidTask.h>
+#include <vendor/waydroid/task/1.1/IWaydroidTask.h>
 #include <wayland-util.h>
 #include <wayland-client.h>
 
@@ -247,6 +248,18 @@ struct wl_conn {
     /* Surfaces and seat objects of this connection. */
     std::map<struct wl_surface *, struct layerFrame> layers;
     std::map<int, struct wl_surface *> touch_surfaces;
+    /* A gesture delivered straight to this connection's task (task@1.1)
+     * instead of through the shared touchscreen. */
+    struct task_touch {
+        enum { IDLE, TASK, PIPE } state = IDLE;
+        uint32_t task = 0;
+        int64_t down_time = 0;
+        bool moved = false;
+        int pipe_points = 0;
+        /* wl_touch id -> Android pointer, in Android pointer order */
+        std::vector<std::pair<int32_t, ::vendor::waydroid::task::V1_1::IWaydroidTask::TouchPoint>>
+            points;
+    } task_touch;
     struct wl_surface *pointer_surface;
     struct wl_surface *tablet_surface;
     std::list<struct zwp_tablet_tool_v2 *> tablet_tools;
@@ -843,6 +856,8 @@ struct display {
 
     bool isMaximized;
     sp<IWaydroidTask> task;
+    /* Set when task@1.1 is there and persist.waydroid.targeted_input allows. */
+    sp<::vendor::waydroid::task::V1_1::IWaydroidTask> task_input;
 
     const hwc_procs_t *procs;
     bool needHotplug;

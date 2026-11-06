@@ -63,6 +63,7 @@
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
 #include <cutils/trace.h>
 #include <cutils/properties.h>
+#include <utils/Timers.h>
 #include <sys/system_properties.h>
 
 #include <xkbcommon/xkbcommon.h>
@@ -2347,6 +2348,104 @@ clear_touch_ids(const struct wl_conn *conn)
     }
 }
 
+/* MotionEvent actions, see android/input.h */
+static constexpr int32_t kActionDown = 0;
+static constexpr int32_t kActionUp = 1;
+static constexpr int32_t kActionMove = 2;
+static constexpr int32_t kActionCancel = 3;
+static constexpr int32_t kActionPointerDown = 5;
+static constexpr int32_t kActionPointerUp = 6;
+static constexpr int kActionPointerIndexShift = 8;
+
+static void
+touch_position(struct wl_conn *conn, struct wl_surface *surface, wl_fixed_t x_w, wl_fixed_t y_w,
+               float *x, float *y)
+{
+    const struct layerFrame off = layer_offset(conn, surface);
+    *x = static_cast<float>(wl_fixed_to_double(x_w) * conn->dpy->scale + off.x);
+    *y = static_cast<float>(wl_fixed_to_double(y_w) * conn->dpy->scale + off.y);
+}
+
+/* Send the gesture's pointers to its task; false when nothing took it. */
+static bool
+send_task_touch(struct wl_conn *conn, int32_t action)
+{
+    auto &t = conn->task_touch;
+    ::android::hardware::hidl_vec<::vendor::waydroid::task::V1_1::IWaydroidTask::TouchPoint>
+        points(t.points.size());
+    for (size_t i = 0; i < t.points.size(); i++)
+        points[i] = t.points[i].second;
+    auto ret = conn->dpy->task_input->injectTaskTouch(t.task, action, t.down_time,
+                                                     systemTime(SYSTEM_TIME_MONOTONIC), points);
+    return ret.isOk() && ret;
+}
+
+static void
+flush_task_touch_motion(struct wl_conn *conn)
+{
+    if (conn->task_touch.moved) {
+        conn->task_touch.moved = false;
+        send_task_touch(conn, kActionMove);
+    }
+}
+
+/* A touch on a task window goes to that task's own window, whatever Android
+ * has in front. Returns false to use the shared touchscreen instead. */
+static bool
+task_touch_down(struct wl_conn *conn, struct wl_surface *surface, int32_t id,
+                wl_fixed_t x_w, wl_fixed_t y_w)
+{
+    struct display *display = conn->dpy;
+    auto &t = conn->task_touch;
+    if (display->task_input == nullptr || t.state == wl_conn::task_touch::PIPE) {
+        t.pipe_points++;
+        return false;
+    }
+    if (!pthread_equal(pthread_self(), conn->wayland_thread))
+        return false;
+
+    float x, y;
+    touch_position(conn, surface, x_w, y_w, &x, &y);
+    if (t.state == wl_conn::task_touch::IDLE) {
+        uint32_t task = 0;
+        {
+            std::scoped_lock lock(display->windowsMutex);
+            struct window *window = window_for_surface(conn, surface);
+            if (window && window->taskID != "none" && window->taskID != "0")
+                task = static_cast<uint32_t>(strtoul(window->taskID.c_str(), nullptr, 10));
+        }
+        if (!task) {
+            t.state = wl_conn::task_touch::PIPE;
+            t.pipe_points = 1;
+            return false;
+        }
+        t.task = task;
+        t.down_time = systemTime(SYSTEM_TIME_MONOTONIC);
+        t.moved = false;
+        t.points = {{id, {.id = 0, .x = x, .y = y, .pressure = 1.0f}}};
+        if (!send_task_touch(conn, kActionDown)) {
+            t.points.clear();
+            t.state = wl_conn::task_touch::PIPE;
+            t.pipe_points = 1;
+            return false;
+        }
+        t.state = wl_conn::task_touch::TASK;
+        return true;
+    }
+
+    flush_task_touch_motion(conn);
+    int32_t pointer = 0;
+    for (bool taken = true; taken; pointer += taken) {
+        taken = false;
+        for (const auto &p : t.points)
+            taken |= p.second.id == pointer;
+    }
+    t.points.push_back({id, {.id = pointer, .x = x, .y = y, .pressure = 1.0f}});
+    send_task_touch(conn, kActionPointerDown |
+                    static_cast<int32_t>(t.points.size() - 1) << kActionPointerIndexShift);
+    return true;
+}
+
 static void
 touch_handle_down(void *data, struct wl_touch *,
           uint32_t, uint32_t, struct wl_surface *surface,
@@ -2372,8 +2471,11 @@ touch_handle_down(void *data, struct wl_touch *,
      * whatever is in front instead. */
     reassert_task_focus(conn, surface, "touch");
 
-    int touch_id = create_touch_id(conn, id);
     conn->touch_surfaces[id] = surface;
+    if (task_touch_down(conn, surface, id, x_w, y_w))
+        return;
+
+    int touch_id = create_touch_id(conn, id);
 
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
        ALOGE("%s:%d error in touch clock_gettime: %s",
@@ -2411,6 +2513,25 @@ touch_handle_up(void *data, struct wl_touch *,
     struct timespec rt;
     unsigned int res, n = 0;
 
+    auto &t = conn->task_touch;
+    if (t.state == wl_conn::task_touch::TASK) {
+        flush_task_touch_motion(conn);
+        for (size_t i = 0; i < t.points.size(); i++) {
+            if (t.points[i].first != id)
+                continue;
+            send_task_touch(conn, t.points.size() == 1 ? kActionUp
+                            : kActionPointerUp | static_cast<int32_t>(i) << kActionPointerIndexShift);
+            t.points.erase(t.points.begin() + i);
+            break;
+        }
+        conn->touch_surfaces[id] = NULL;
+        if (t.points.empty())
+            t.state = wl_conn::task_touch::IDLE;
+        return;
+    }
+    if (t.state == wl_conn::task_touch::PIPE && --t.pipe_points <= 0)
+        t = {};
+
     int touch_id = flush_touch_id(conn, id);
     // Might not exist if we discarded the down event due to a NULL surface
     if (touch_id != -1) {
@@ -2443,6 +2564,19 @@ touch_handle_motion(void *data, struct wl_touch *,
     struct timespec rt;
     int x, y;
     unsigned int res, n = 0;
+
+    auto &t = conn->task_touch;
+    if (t.state == wl_conn::task_touch::TASK) {
+        for (auto &p : t.points) {
+            if (p.first != id)
+                continue;
+            auto ts = conn->touch_surfaces.find(id);
+            touch_position(conn, ts == conn->touch_surfaces.end() ? nullptr : ts->second,
+                           x_w, y_w, &p.second.x, &p.second.y);
+            t.moved = true;
+        }
+        return;
+    }
 
     int touch_id = get_touch_id(conn, id);
     // Might not exist if we discarded the down event due to a NULL surface
@@ -2480,8 +2614,11 @@ touch_handle_motion(void *data, struct wl_touch *,
 }
 
 static void
-touch_handle_frame(void *, struct wl_touch *)
+touch_handle_frame(void *data, struct wl_touch *)
 {
+    struct wl_conn *conn = (struct wl_conn *)data;
+    if (conn->task_touch.state == wl_conn::task_touch::TASK)
+        flush_task_touch_motion(conn);
 }
 
 static void
@@ -2493,6 +2630,13 @@ touch_handle_cancel(void *data, struct wl_touch *)
     struct timespec rt;
     unsigned int res, n;
     int i, id;
+
+    if (conn->task_touch.state == wl_conn::task_touch::TASK) {
+        send_task_touch(conn, kActionCancel);
+        for (const auto &p : conn->task_touch.points)
+            conn->touch_surfaces[p.first] = NULL;
+    }
+    conn->task_touch = {};
 
     if (ensure_pipe(display, INPUT_TOUCH))
         return;
@@ -3752,6 +3896,7 @@ static void wl_conn_reconnect_backoff(struct wl_conn *conn) {
 static void wl_conn_reconnect(struct wl_conn *conn) {
     conn->layers.clear();
     conn->touch_surfaces.clear();
+    conn->task_touch = {};
     conn->tablet_tools.clear();
     conn->tablet_tools_evt.clear();
     conn->pointer_surface = nullptr;
@@ -4140,6 +4285,8 @@ create_display(const char *gralloc)
     }
 
     display->task = IWaydroidTask::getService();
+    if (display->task != nullptr && property_get_bool("persist.waydroid.targeted_input", true))
+        display->task_input = ::vendor::waydroid::task::V1_1::IWaydroidTask::castFrom(display->task);
     display->deactivate_thread = std::thread(deactivate_worker, display);
     display->resize_thread = std::thread(resize_worker, display);
     display->conn_worker_thread = std::thread(conn_worker, display);
