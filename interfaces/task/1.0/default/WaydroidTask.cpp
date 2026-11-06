@@ -84,8 +84,40 @@ sp<IBinder> WaydroidTask::getService(sp<IBinder>& cache, const char* name) {
  * InputManager::onTransact in frameworks/native. */
 static constexpr uint32_t kInjectTaskTouch = 0x57440001;
 static constexpr uint32_t kGetTaskInputToken = 0x57440002;
+static constexpr uint32_t kSetKeyTarget = 0x57440003;
 static constexpr int32_t kActionMask = 0xff; /* AMOTION_EVENT_ACTION_MASK */
 static constexpr int32_t kActionDown = 0;    /* AMOTION_EVENT_ACTION_DOWN */
+
+sp<IBinder> WaydroidTask::taskInputToken(uint32_t taskID) {
+    sp<IBinder> token;
+    sp<IBinder> sf = getService(mSurfaceFlinger, "SurfaceFlinger");
+    android::Parcel data, reply;
+    data.writeInterfaceToken(android::String16("android.ui.ISurfaceComposer"));
+    data.writeInt32(static_cast<int32_t>(taskID));
+    if (sf != nullptr && sf->transact(kGetTaskInputToken, data, &reply) == android::OK)
+        reply.readNullableStrongBinder(&token);
+    return token;
+}
+
+Return<void> WaydroidTask::setKeyTarget(uint32_t taskID) {
+    std::scoped_lock lock(mInputMutex);
+    sp<IBinder> input = getService(mInputFlinger, "inputflinger");
+    if (input == nullptr)
+        return Void();
+    /* Resolved per call: the card's top activity changes under the host's
+     * keyboard focus. Unknown tasks fall back to Android's focus. */
+    sp<IBinder> token = taskID ? taskInputToken(taskID) : nullptr;
+    if (taskID != mKeyTask || (token == nullptr) != (mKeyToken == nullptr) || token != mKeyToken)
+        ALOGI("keys go to task %u (%s)", taskID,
+              token != nullptr ? "its window" : "no window, Android's focus");
+    mKeyTask = taskID;
+    mKeyToken = token;
+    android::Parcel data, reply;
+    data.writeInterfaceToken(android::String16("android.os.IInputFlinger"));
+    data.writeStrongBinder(token);
+    input->transact(kSetKeyTarget, data, &reply);
+    return Void();
+}
 
 Return<bool> WaydroidTask::injectTaskTouch(uint32_t taskID, int32_t action, int64_t downTime,
                                            int64_t eventTime,
@@ -98,15 +130,8 @@ Return<bool> WaydroidTask::injectTaskTouch(uint32_t taskID, int32_t action, int6
     /* The token changes when another activity comes on top; a gesture
      * stays with the window it started on. */
     sp<IBinder>& token = mInputTokens[taskID];
-    if ((action & kActionMask) == kActionDown) {
-        token = nullptr;
-        sp<IBinder> sf = getService(mSurfaceFlinger, "SurfaceFlinger");
-        android::Parcel data, reply;
-        data.writeInterfaceToken(android::String16("android.ui.ISurfaceComposer"));
-        data.writeInt32(static_cast<int32_t>(taskID));
-        if (sf != nullptr && sf->transact(kGetTaskInputToken, data, &reply) == android::OK)
-            reply.readNullableStrongBinder(&token);
-    }
+    if ((action & kActionMask) == kActionDown)
+        token = taskInputToken(taskID);
     if (token == nullptr) {
         if ((action & kActionMask) == kActionDown)
             ALOGW("task %u: no input token, using the shared touchscreen", taskID);

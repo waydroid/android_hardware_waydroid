@@ -58,6 +58,7 @@ struct WaydroidTask : public ::vendor::waydroid::task::V1_1::IWaydroidTask {
     // Methods from ::vendor::waydroid::task::V1_1::IWaydroidTask follow.
     Return<bool> injectTaskTouch(uint32_t taskID, int32_t action, int64_t downTime,
                                  int64_t eventTime, const hidl_vec<TouchPoint>& pointers) override;
+    Return<void> setKeyTarget(uint32_t taskID) override;
   private:
     sp<IActivityTaskManager> getActivityTaskManager();
     sp<IPlatform> getPlatform();
@@ -66,12 +67,15 @@ struct WaydroidTask : public ::vendor::waydroid::task::V1_1::IWaydroidTask {
     sp<IPlatform> mPlatform;
 
     sp<IBinder> getService(sp<IBinder>& cache, const char* name);
+    sp<IBinder> taskInputToken(uint32_t taskID);
     std::mutex mInputMutex;
     sp<IBinder> mSurfaceFlinger;
     sp<IBinder> mInputFlinger;
     // Application token per task, refreshed on each gesture's first touch.
     std::unordered_map<uint32_t, sp<IBinder>> mInputTokens;
     std::unordered_set<uint32_t> mLoggedTasks;
+    uint32_t mKeyTask = 0;
+    sp<IBinder> mKeyToken;
 };
 
 }  // namespace implementation
