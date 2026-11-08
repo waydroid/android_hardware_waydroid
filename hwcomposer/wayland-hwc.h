@@ -42,9 +42,12 @@
 #include <fcntl.h>
 #include <getopt.h>
 #include <errno.h>
+#include <atomic>
 #include <map>
 #include <list>
+#include <mutex>
 #include <set>
+#include <vector>
 #include <pthread.h>
 #include <semaphore.h>
 #include <hardware/hwcomposer.h>
@@ -368,7 +371,11 @@ struct display {
     int full_height;
     int req_width;
     int req_height;
-    int refresh;
+    // The monitors' refresh rates in mHz, one display config each, the index being the config.
+    // The list only grows, so a switch between known rates is a mode change, not a hotplug.
+    std::mutex refreshMutex;
+    std::vector<int32_t> refreshRates;
+    std::atomic<int32_t> refresh; // the active config's rate
 
     std::unordered_set<uint32_t> formats;
 

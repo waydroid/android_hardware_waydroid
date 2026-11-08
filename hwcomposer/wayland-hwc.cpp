@@ -1446,11 +1446,25 @@ static const struct zwp_linux_dmabuf_v1_listener dmabuf_listener = {
 
 static void
 output_handle_mode(void *data, struct wl_output *,
-                   uint32_t, int32_t width, int32_t height,
+                   uint32_t flags, int32_t width, int32_t height,
                    int32_t refresh)
 {
     struct display *d = (struct display *)data;
-    d->refresh = std::max(d->refresh, refresh);
+    if ((flags & WL_OUTPUT_MODE_CURRENT) && refresh > 1000 && refresh < 1000000) {
+        bool added = false;
+        {
+            std::scoped_lock lock(d->refreshMutex);
+            if (std::find(d->refreshRates.begin(), d->refreshRates.end(), refresh) == d->refreshRates.end()) {
+                d->refreshRates.push_back(refresh);
+                added = true;
+            }
+        }
+        // Before the procs are registered, hwc_open() reads the list
+        if (added && d->procs && d->procs->invalidate) {
+            d->needHotplug = true;
+            d->procs->invalidate(d->procs);
+        }
+    }
 
     // Fallback size
     // We can't do anything meaningful if there's more than one display, just pick one at random

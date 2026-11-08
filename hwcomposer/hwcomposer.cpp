@@ -29,6 +29,7 @@
 #include <sys/un.h>
 #include <string>
 #include <sstream>
+#include <algorithm>
 #include <functional>
 
 #include <log/log.h>
@@ -227,6 +228,10 @@ static long time_to_sleep_to_next_vsync(struct timespec *rt, uint64_t last_vsync
     return next_vsync - now;
 }
 
+static int32_t vsync_period_ns(int32_t refresh) {
+    return int32_t(1000000000000LL / refresh);
+}
+
 static void* hwc_vsync_thread(void* data) {
     auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(data);
     setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
@@ -240,7 +245,7 @@ static void* hwc_vsync_thread(void* data) {
 
     struct timespec wait_time;
     wait_time.tv_sec = 0;
-    wait_time.tv_nsec = time_to_sleep_to_next_vsync(&rt, pdev->last_vsync_ns, pdev->vsync_period_ns);
+    wait_time.tv_nsec = time_to_sleep_to_next_vsync(&rt, pdev->last_vsync_ns, vsync_period_ns(pdev->display->refresh));
 
     while (true) {
         ATRACE_BEGIN("hwc_vsync_thread");
@@ -261,7 +266,7 @@ static void* hwc_vsync_thread(void* data) {
                   __FILE__, __LINE__, strerror(errno));
         }
 
-        wait_time.tv_nsec = time_to_sleep_to_next_vsync(&rt, pdev->last_vsync_ns, pdev->vsync_period_ns);
+        wait_time.tv_nsec = time_to_sleep_to_next_vsync(&rt, pdev->last_vsync_ns, vsync_period_ns(pdev->display->refresh));
 
         if (!vsync_enabled || !pdev->procs || !pdev->procs->vsync) {
             ATRACE_END();
@@ -545,22 +550,25 @@ static void hwc_register_procs(struct hwc_composer_device_1* dev,
     pdev->display->procs = procs;
 }
 
-static int hwc_get_display_configs(struct hwc_composer_device_1* dev __unused,
+static int hwc_get_display_configs(struct hwc_composer_device_1* dev,
                                    int disp, uint32_t* configs, size_t* numConfigs) {
+    auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(dev);
     if (*numConfigs == 0) {
         return 0;
     }
 
     if (disp == HWC_DISPLAY_PRIMARY) {
-        configs[0] = 0;
-        *numConfigs = 1;
+        std::scoped_lock lock(pdev->display->refreshMutex);
+        *numConfigs = std::min(*numConfigs, pdev->display->refreshRates.size());
+        for (size_t i = 0; i < *numConfigs; i++)
+            configs[i] = i;
         return 0;
     }
 
     return -EINVAL;
 }
 
-static int32_t hwc_attribute(struct waydroid_hwc_composer_device_1* pdev,
+static int32_t hwc_attribute(struct waydroid_hwc_composer_device_1* pdev, uint32_t config,
                              const uint32_t attribute) {
     char property[PROPERTY_VALUE_MAX];
     int width = floor(pdev->display->width * pdev->display->scale);
@@ -568,8 +576,12 @@ static int32_t hwc_attribute(struct waydroid_hwc_composer_device_1* pdev,
     int density = 180;
 
     switch(attribute) {
-        case HWC_DISPLAY_VSYNC_PERIOD:
-            return pdev->vsync_period_ns;
+        case HWC_DISPLAY_VSYNC_PERIOD: {
+            std::scoped_lock lock(pdev->display->refreshMutex);
+            if (config >= pdev->display->refreshRates.size())
+                return -EINVAL;
+            return vsync_period_ns(pdev->display->refreshRates[config]);
+        }
         case HWC_DISPLAY_WIDTH: {
             if (property_get("persist.waydroid.width_padding", property, nullptr) > 0)
                 width -= atoi(property);
@@ -598,12 +610,12 @@ static int32_t hwc_attribute(struct waydroid_hwc_composer_device_1* pdev,
 }
 
 static int hwc_get_display_attributes(struct hwc_composer_device_1* dev,
-                                      int disp, uint32_t config __unused,
+                                      int disp, uint32_t config,
                                       const uint32_t* attributes, int32_t* values) {
     auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(dev);
     for (int i = 0; attributes[i] != HWC_DISPLAY_NO_ATTRIBUTE; i++) {
         if (disp == HWC_DISPLAY_PRIMARY) {
-            values[i] = hwc_attribute(pdev, attributes[i]);
+            values[i] = hwc_attribute(pdev, config, attributes[i]);
             if (values[i] == -EINVAL) {
                 return -EINVAL;
             }
@@ -616,16 +628,22 @@ static int hwc_get_display_attributes(struct hwc_composer_device_1* dev,
     return 0;
 }
 
-static int hwc_get_active_config(struct hwc_composer_device_1* dev __unused, int disp) {
-    if (disp == HWC_DISPLAY_PRIMARY)
-        return 0;
-    return -EINVAL;
+static int hwc_get_active_config(struct hwc_composer_device_1* dev, int disp) {
+    auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(dev);
+    if (disp != HWC_DISPLAY_PRIMARY)
+        return -EINVAL;
+    std::scoped_lock lock(pdev->display->refreshMutex);
+    auto &rates = pdev->display->refreshRates;
+    return std::find(rates.begin(), rates.end(), pdev->display->refresh.load()) - rates.begin();
 }
 
-static int hwc_set_active_config(struct hwc_composer_device_1* dev __unused, int disp, int index) {
-    if (disp == HWC_DISPLAY_PRIMARY && index == 0)
-        return 0;
-    return -EINVAL;
+static int hwc_set_active_config(struct hwc_composer_device_1* dev, int disp, int index) {
+    auto *pdev = static_cast<waydroid_hwc_composer_device_1 *>(dev);
+    std::scoped_lock lock(pdev->display->refreshMutex);
+    if (disp != HWC_DISPLAY_PRIMARY || index < 0 || size_t(index) >= pdev->display->refreshRates.size())
+        return -EINVAL;
+    pdev->display->refresh = pdev->display->refreshRates[index];
+    return 0;
 }
 
 static int hwc_set_cursor_position_async(struct hwc_composer_device_1 *, int, int, int) {
@@ -731,8 +749,6 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     pdev->setActiveConfig = hwc_set_active_config;
     pdev->setCursorPositionAsync = hwc_set_cursor_position_async;
 
-    pdev->vsync_period_ns = 1000*1000*1000/60; // vsync is 60 hz
-
     pdev->timeline_fd = sw_sync_timeline_create();
     pdev->next_sync_point = 1;
 
@@ -791,8 +807,13 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     }
 
     pdev->vsync_callback_enabled = true;
-    if (pdev->display->refresh > 1000 && pdev->display->refresh < 1000000)
-        pdev->vsync_period_ns = 1000 * 1000 * 1000 / (pdev->display->refresh / 1000);
+    {
+        std::scoped_lock lock(pdev->display->refreshMutex);
+        auto &rates = pdev->display->refreshRates;
+        if (rates.empty())
+            rates.push_back(60000);
+        pdev->display->refresh = *std::max_element(rates.begin(), rates.end());
+    }
 
     struct timespec rt;
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
