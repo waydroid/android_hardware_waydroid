@@ -44,6 +44,8 @@
 #include <time.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <poll.h>
+#include <sys/timerfd.h>
 #include <errno.h>
 #include <linux/input.h>
 #include <linux/memfd.h>
@@ -155,6 +157,8 @@ void choose_width_height(struct display* display, int32_t hint_width, int32_t hi
     display->height = height;
 }
 
+static std::unique_lock<std::mutex> lock_resize(struct display *display);
+
 void
 finished_calibrating(struct display *d)
 {
@@ -167,11 +171,22 @@ finished_calibrating(struct display *d)
         property_set("ro.sf.lcd_density", lcd_density.c_str());
     }
 
+    // window::create() calibrates on the HWC thread while the Wayland thread handles configures
+    auto lock = lock_resize(d);
     choose_width_height(d, d->req_width, d->req_height);
+    d->hotplug_width = d->width;
+    d->hotplug_height = d->height;
 }
 
-void
-do_hotplug(struct display *display) {
+static void
+invalidate(struct display *display) {
+    if (display->procs && display->procs->invalidate)
+        display->procs->invalidate(display->procs);
+}
+
+// Sets up a hotplug for the next hwc_set(); the caller invalidates
+static void
+mark_hotplug(struct display *display) {
     if (display->touch) {
         char property[PROPERTY_VALUE_MAX];
         int width = floor(display->width * display->scale);
@@ -192,10 +207,71 @@ do_hotplug(struct display *display) {
         mkfifo(INPUT_PIPE_NAME[INPUT_TOUCH], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
         chown(INPUT_PIPE_NAME[INPUT_TOUCH], 1000, 1000);
     }
-    if (display->procs && display->procs->invalidate) {
+    display->hotplug_width = display->width;
+    display->hotplug_height = display->height;
+    if (display->procs && display->procs->invalidate)
         display->needHotplug = true;
-        display->procs->invalidate(display->procs);
+}
+
+// Configures also arrive on the HWC thread, through wl_display_roundtrip() in window::create(), so
+// size updates and the hotplug decision hold hotplug_mutex whenever the timer can run
+static std::unique_lock<std::mutex>
+lock_resize(struct display *display) {
+    std::unique_lock lock(display->hotplug_mutex, std::defer_lock);
+    if (display->hotplug_timer_fd >= 0)
+        lock.lock();
+    return lock;
+}
+
+// Within resize_interval_ms of the last hotplug, defer to one trailing hotplug with the latest size.
+// The caller holds lock_resize() and, once it has released it, invalidates if this returns true:
+// HWC2On1Adapter holds its state lock across hwc_set(), and hwc_set() can dispatch configures
+// through window::create(), so invalidating under hotplug_mutex can deadlock.
+static bool
+request_hotplug(struct display *display) {
+    if (display->hotplug_timer_fd < 0) {
+        mark_hotplug(display);
+        return true;
     }
+
+    const auto interval = std::chrono::milliseconds(display->resize_interval_ms);
+    const auto now = std::chrono::steady_clock::now();
+    if (!display->hotplug_pending && now - display->last_hotplug >= interval) {
+        display->last_hotplug = now;
+        mark_hotplug(display);
+        return true;
+    }
+    if (display->hotplug_pending)
+        return false;
+
+    const auto wait = std::chrono::duration_cast<std::chrono::nanoseconds>(display->last_hotplug + interval - now);
+    struct itimerspec spec = {};
+    spec.it_value.tv_sec = wait.count() / 1000000000;
+    spec.it_value.tv_nsec = std::max<long>(wait.count() % 1000000000, 1);
+    if (timerfd_settime(display->hotplug_timer_fd, 0, &spec, nullptr) == 0) {
+        display->hotplug_pending = true;
+        return false;
+    }
+    display->last_hotplug = now;
+    mark_hotplug(display);
+    return true;
+}
+
+static void
+handle_hotplug_timer(struct display *display) {
+    {
+        std::scoped_lock lock(display->hotplug_mutex);
+        uint64_t expirations;
+        if (read(display->hotplug_timer_fd, &expirations, sizeof(expirations)) < 0 || !display->hotplug_pending)
+            return;
+        display->hotplug_pending = false;
+        // The size went back to the one Android has
+        if (display->width == display->hotplug_width && display->height == display->hotplug_height)
+            return;
+        display->last_hotplug = std::chrono::steady_clock::now();
+        mark_hotplug(display);
+    }
+    invalidate(display);
 }
 
 static void
@@ -215,15 +291,22 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
     display->req_width = width;
     display->req_height = height;
 
-    if (display->height && display->width) {
-        int old_width = display->width;
-        int old_height = display->height;
-        choose_width_height(display, width, height);
-        if (display->wm_base)
-            xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width, display->height);
-        if (display->width != old_width || display->height != old_height)
-            do_hotplug(display);
+    bool refresh = false;
+    {
+        auto lock = lock_resize(display);
+        if (display->height && display->width) {
+            int old_width = display->width;
+            int old_height = display->height;
+            choose_width_height(display, width, height);
+            if (display->wm_base)
+                xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width, display->height);
+            if (display->width != old_width || display->height != old_height) {
+                refresh = request_hotplug(display);
+            }
+        }
     }
+    if (refresh)
+        invalidate(display);
 }
 
 static void
@@ -285,13 +368,20 @@ shell_surface_configure(void *data, struct wl_shell_surface *, uint32_t, int32_t
 
     window->configured = true;
 
-    if (display->height && display->width && width > 1 && height > 1) {
-        int old_width = display->width;
-        int old_height = display->height;
-        choose_width_height(display, width, height);
-        if (display->width != old_width || display->height != old_height)
-            do_hotplug(display);
+    bool refresh = false;
+    {
+        auto lock = lock_resize(display);
+        if (display->height && display->width && width > 1 && height > 1) {
+            int old_width = display->width;
+            int old_height = display->height;
+            choose_width_height(display, width, height);
+            if (display->width != old_width || display->height != old_height) {
+                refresh = request_hotplug(display);
+            }
+        }
     }
+    if (refresh)
+        invalidate(display);
 }
 
 void
@@ -2054,14 +2144,60 @@ void open_windows::erase(const key_type& key) {
     }
 }
 
+// wl_display_dispatch() that also wakes up for the deferred resize hotplug
+static int
+dispatch_with_hotplug_timer(struct display *display) {
+    struct wl_display *wl = display->display;
+    if (wl_display_prepare_read(wl) == -1)
+        return wl_display_dispatch_pending(wl);
+
+    int ret;
+    while ((ret = wl_display_flush(wl)) == -1 && errno == EAGAIN) {
+        struct pollfd out = { wl_display_get_fd(wl), POLLOUT, 0 };
+        if (poll(&out, 1, -1) == -1 && errno != EINTR) {
+            wl_display_cancel_read(wl);
+            return -1;
+        }
+    }
+    if (ret == -1 && errno != EPIPE) {
+        wl_display_cancel_read(wl);
+        return -1;
+    }
+
+    struct pollfd fds[2] = {
+        { wl_display_get_fd(wl), POLLIN, 0 },
+        { display->hotplug_timer_fd, POLLIN, 0 },
+    };
+    if (poll(fds, 2, -1) == -1) {
+        wl_display_cancel_read(wl);
+        return errno == EINTR ? 0 : -1;
+    }
+    if (fds[0].revents) {
+        if (wl_display_read_events(wl) == -1)
+            return -1;
+    } else {
+        wl_display_cancel_read(wl);
+    }
+    // Apply queued configures first, so the trailing hotplug uses the latest size
+    ret = wl_display_dispatch_pending(wl);
+    if (ret != -1 && (fds[1].revents & POLLIN))
+        handle_hotplug_timer(display);
+    return ret;
+}
+
 static void* hwc_wayland_thread(void* data) {
-    auto* display = static_cast<struct wl_display*>(data);
+    auto* hwc_display = static_cast<struct display*>(data);
+    struct wl_display *display = hwc_display->display;
     int ret = 0;
 
     setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
 
-    while (ret != -1)
-        ret = wl_display_dispatch(display);
+    while (ret != -1) {
+        if (hwc_display->hotplug_timer_fd >= 0)
+            ret = dispatch_with_hotplug_timer(hwc_display);
+        else
+            ret = wl_display_dispatch(display);
+    }
 
     /* Report why the connection died, not strerror(-1): for a protocol
      * error name the interface/object the compositor rejected, otherwise
@@ -2106,6 +2242,9 @@ create_display(const char *gralloc)
     display->isMaximized = true;
     display->supports_cursor_viewport = true;
     display->supports_cursor_hw_buffer = property_get_bool("persist.waydroid.cursor_force_shm", false);
+    display->resize_interval_ms = property_get_int32("persist.waydroid.resize_interval_ms", 150);
+    display->hotplug_timer_fd = -1;
+    display->hotplug_pending = false;
     display->display = wl_display_connect(NULL);
     ALOGI("WAYLAND_DISPLAY: %s", getenv("WAYLAND_DISPLAY"));
     ALOGI("XDG_RUNTIME_DIR: %s", getenv("XDG_RUNTIME_DIR"));
@@ -2125,8 +2264,18 @@ create_display(const char *gralloc)
                  &registry_listener, display);
     wl_display_roundtrip(display->display);
 
-    if (pthread_create(&display->wayland_thread, nullptr, hwc_wayland_thread, display->display) != 0) {
+    if (display->resize_interval_ms > 0) {
+        display->hotplug_timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+        if (display->hotplug_timer_fd < 0) {
+            ALOGE("persist.waydroid.resize_interval_ms is off: timerfd_create failed: %s",
+                  strerror(errno));
+            display->resize_interval_ms = 0;
+        }
+    }
+    if (pthread_create(&display->wayland_thread, nullptr, hwc_wayland_thread, display) != 0) {
         ALOGE("Couldn't create wayland thread");
+        if (display->hotplug_timer_fd >= 0)
+            close(display->hotplug_timer_fd);
         wl_display_disconnect(display->display);
         sem_destroy(&display->egl_go);
         sem_destroy(&display->egl_done);
@@ -2142,6 +2291,9 @@ destroy_display(struct display *display)
 {
     pthread_kill(display->wayland_thread, SIGTERM);
     pthread_join(display->wayland_thread, nullptr);
+
+    if (display->hotplug_timer_fd >= 0)
+        close(display->hotplug_timer_fd);
 
     if (display->wm_base)
         xdg_wm_base_destroy(display->wm_base);

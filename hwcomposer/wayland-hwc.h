@@ -57,6 +57,7 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 
+#include <chrono>
 #include <functional>
 #include <unordered_map>
 #include <unordered_set>
@@ -388,6 +389,16 @@ struct display {
 
     const hwc_procs_t *procs;
     bool needHotplug;
+
+    // persist.waydroid.resize_interval_ms: minimum time between resize hotplugs, 150 by default; 0 disables
+    int resize_interval_ms;
+    int hotplug_timer_fd;
+    std::mutex hotplug_mutex;
+    bool hotplug_pending;
+    std::chrono::steady_clock::time_point last_hotplug;
+    // The size Android was last given
+    int hotplug_width;
+    int hotplug_height;
 };
 
 void
