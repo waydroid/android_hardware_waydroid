@@ -15,12 +15,14 @@ class IPlatform : public ::android::IInterface {
 public:
   DECLARE_META_INTERFACE(Platform)
   virtual ::android::binder::Status getAppName(const ::android::String16& packageName, ::android::String16* _aidl_return) = 0;
+  virtual ::android::binder::Status settingsPutString(int32_t mode, const ::android::String16& key, const ::android::String16& value) = 0;
 };  // class IPlatform
 
 class IPlatformDefault : public IPlatform {
 public:
   ::android::IBinder* onAsBinder() override;
   ::android::binder::Status getAppName(const ::android::String16& packageName, ::android::String16* _aidl_return) override;
+  ::android::binder::Status settingsPutString(int32_t mode, const ::android::String16& key, const ::android::String16& value) override;
 
 };
 

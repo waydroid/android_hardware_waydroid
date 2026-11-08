@@ -16,6 +16,9 @@
 
 #include "WaydroidTask.h"
 
+#include <thread>
+#include <unistd.h>
+
 #include <android/api-level.h>
 #include <utils/String16.h>
 #include <utils/String8.h>
@@ -80,6 +83,53 @@ Return<void> WaydroidTask::getAppName(const hidl_string& packageName, getAppName
         OutAppName = packageName.c_str();
     _hidl_cb(OutAppName);
     return Void();
+}
+
+// Methods from ::vendor::waydroid::task::V1_1::IWaydroidTask follow.
+// The composer sends the first rate while Android boots, before system_server publishes
+// waydroidplatform, and doesn't send it again, so a thread keeps the latest rate until it is set.
+Return<void> WaydroidTask::setRefreshRate(uint32_t millihertz) {
+    std::scoped_lock lock(mRefreshMutex);
+    mRefreshRate = millihertz;
+    mRefreshChanged.notify_one();
+    if (!mRefreshThreadStarted) {
+        mRefreshThreadStarted = true;
+        std::thread(&WaydroidTask::applyRefreshRates, this).detach();
+    }
+    return Void();
+}
+
+void WaydroidTask::applyRefreshRates() {
+    constexpr int32_t kSettingsSystem = 1;
+    sp<IPlatform> platform;
+    uint32_t applied = 0;
+    for (;;) {
+        uint32_t millihertz;
+        {
+            std::unique_lock lock(mRefreshMutex);
+            mRefreshChanged.wait(lock, [&] { return mRefreshRate != applied; });
+            millihertz = mRefreshRate;
+        }
+        if (platform == nullptr) {
+            sp<IBinder> binderPlatform = android::defaultServiceManager()->getService(android::String16("waydroidplatform"));
+            if (binderPlatform == nullptr) {
+                sleep(1);
+                continue;
+            }
+            platform = android::interface_cast<IPlatform>(binderPlatform);
+        }
+        android::String16 rate(android::String8::format("%u.%03u", millihertz / 1000, millihertz % 1000));
+        // Lowering the minimum first keeps the range valid whichever way the rate moves
+        if (platform->settingsPutString(kSettingsSystem, android::String16("min_refresh_rate"), android::String16("0")).isOk() &&
+            platform->settingsPutString(kSettingsSystem, android::String16("peak_refresh_rate"), rate).isOk() &&
+            platform->settingsPutString(kSettingsSystem, android::String16("min_refresh_rate"), rate).isOk()) {
+            applied = millihertz;
+        } else {
+            // system_server restarted, or isn't ready yet
+            platform = nullptr;
+            sleep(1);
+        }
+    }
 }
 
 }  // namespace implementation

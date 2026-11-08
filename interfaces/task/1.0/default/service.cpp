@@ -25,21 +25,41 @@
 using android::hardware::configureRpcThreadpool;
 using android::hardware::joinRpcThreadpool;
 
-using vendor::waydroid::task::V1_0::IWaydroidTask;
+using android::hardware::hidl_string;
+using android::hardware::Return;
 using vendor::waydroid::task::V1_0::implementation::WaydroidTask;
 
 using android::OK;
 using android::status_t;
 
+// A vendor manifest that declares only task@1.0 refuses the 1.1 registration, and the composer
+// would wait for the service forever. This registers the same service as 1.0 there.
+struct WaydroidTask1_0 : public vendor::waydroid::task::V1_0::IWaydroidTask {
+    explicit WaydroidTask1_0(const android::sp<WaydroidTask>& task) : mTask(task) {}
+    Return<void> setFocusedTask(uint32_t taskID) override { return mTask->setFocusedTask(taskID); }
+    Return<void> removeTask(uint32_t taskID) override { return mTask->removeTask(taskID); }
+    Return<void> removeAllVisibleRecentTasks() override { return mTask->removeAllVisibleRecentTasks(); }
+    Return<void> getAppName(const hidl_string& packageName, getAppName_cb _hidl_cb) override {
+        return mTask->getAppName(packageName, _hidl_cb);
+    }
+  private:
+    android::sp<WaydroidTask> mTask;
+};
+
 int main() {
     // the conventional HAL might start binder services
     android::ProcessState::self()->setThreadPoolMaxThreadCount(4);
     android::ProcessState::self()->startThreadPool();
-    android::sp<IWaydroidTask> service = new WaydroidTask();
+    android::sp<WaydroidTask> service = new WaydroidTask();
 
     configureRpcThreadpool(4, true);
 
     status_t status = service->registerAsService();
+    if (status != OK) {
+        LOG(WARNING) << "Cannot register task@1.1, registering task@1.0.";
+        android::sp<vendor::waydroid::task::V1_0::IWaydroidTask> service1_0 = new WaydroidTask1_0(service);
+        status = service1_0->registerAsService();
+    }
     if (status != OK) {
         LOG(ERROR) << "Cannot register WaydroidTask HAL service.";
         return 1;

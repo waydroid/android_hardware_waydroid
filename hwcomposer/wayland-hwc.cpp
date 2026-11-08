@@ -434,7 +434,66 @@ void window::minimize() {
     }
 }
 
+// Runs Android at the rate of the fastest monitor that shows a window. The HWC and Wayland threads
+// both call this, so the oneway call goes out under refreshMutex to keep the rates in order.
+static void
+follow_refresh(struct display *display)
+{
+    std::scoped_lock lock(display->refreshMutex);
+    int32_t fastest = 0;
+    for (const auto &[surface, outputs] : display->surfaceOutputs)
+        for (struct wl_output *output : outputs)
+            fastest = std::max(fastest, display->outputRefresh[output]);
+    if (fastest == display->followedRefresh)
+        return;
+    // 0 when no window is left, so the next window sends its rate again
+    display->followedRefresh = fastest;
+    if (fastest && display->task1_1 && !display->task1_1->setRefreshRate(fastest).isOk())
+        ALOGE("could not send the refresh rate to the task HAL");
+}
+
+// ~window() can free the window while these run, so they don't take it from their data.
+// It clears the surface's user data under windowsMutex first.
+static struct display *surface_listener_display;
+
+static void
+surface_handle_enter(void *, struct wl_surface *surface, struct wl_output *output)
+{
+    struct display *display = surface_listener_display;
+    {
+        std::scoped_lock lock(display->windowsMutex, display->refreshMutex);
+        if (!wl_surface_get_user_data(surface))
+            return;
+        display->surfaceOutputs[surface].insert(output);
+    }
+    follow_refresh(display);
+}
+
+static void
+surface_handle_leave(void *, struct wl_surface *surface, struct wl_output *output)
+{
+    struct display *display = surface_listener_display;
+    {
+        std::scoped_lock lock(display->windowsMutex, display->refreshMutex);
+        if (!wl_surface_get_user_data(surface))
+            return;
+        display->surfaceOutputs[surface].erase(output);
+    }
+    follow_refresh(display);
+}
+
+static const struct wl_surface_listener surface_listener = {
+    surface_handle_enter,
+    surface_handle_leave,
+};
+
 window::~window() {
+    {
+        std::scoped_lock lock(display->windowsMutex, display->refreshMutex);
+        wl_surface_set_user_data(surface, nullptr);
+        display->surfaceOutputs.erase(surface);
+    }
+    follow_refresh(display);
     if (xdg_toplevel)
         xdg_toplevel_destroy(xdg_toplevel);
     if (xdg_surface)
@@ -487,7 +546,7 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
 
     window->display = display;
     window->surface = wl_compositor_create_surface(display->compositor);
-    wl_surface_set_user_data(window->surface, window.get());
+    wl_surface_add_listener(window->surface, &surface_listener, window.get());
     if (display->viewporter)
         window->viewport = wp_viewporter_get_viewport(display->viewporter, window->surface);
     window->taskID = std::move(taskID);
@@ -1445,7 +1504,7 @@ static const struct zwp_linux_dmabuf_v1_listener dmabuf_listener = {
 };
 
 static void
-output_handle_mode(void *data, struct wl_output *,
+output_handle_mode(void *data, struct wl_output *output,
                    uint32_t flags, int32_t width, int32_t height,
                    int32_t refresh)
 {
@@ -1454,6 +1513,7 @@ output_handle_mode(void *data, struct wl_output *,
         bool added = false;
         {
             std::scoped_lock lock(d->refreshMutex);
+            d->outputRefresh[output] = refresh;
             if (std::find(d->refreshRates.begin(), d->refreshRates.end(), refresh) == d->refreshRates.end()) {
                 d->refreshRates.push_back(refresh);
                 added = true;
@@ -1464,6 +1524,7 @@ output_handle_mode(void *data, struct wl_output *,
             d->needHotplug = true;
             d->procs->invalidate(d->procs);
         }
+        follow_refresh(d);
     }
 
     // Fallback size
@@ -2117,6 +2178,8 @@ create_display(const char *gralloc)
     display->system_version = property_get_int32("ro.system.build.version.sdk", 0);
     display->gtype = get_gralloc_type(gralloc);
     display->refresh = 0;
+    display->followedRefresh = 0;
+    surface_listener_display = display;
     display->isMaximized = true;
     display->supports_cursor_viewport = true;
     display->supports_cursor_hw_buffer = property_get_bool("persist.waydroid.cursor_force_shm", false);
@@ -2148,6 +2211,8 @@ create_display(const char *gralloc)
     }
 
     display->task = IWaydroidTask::getService();
+    if (display->task)
+        display->task1_1 = ::vendor::waydroid::task::V1_1::IWaydroidTask::castFrom(display->task);
     return display;
 }
 

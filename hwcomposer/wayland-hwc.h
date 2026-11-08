@@ -52,7 +52,7 @@
 #include <semaphore.h>
 #include <hardware/hwcomposer.h>
 #include <cutils/properties.h>
-#include <vendor/waydroid/task/1.0/IWaydroidTask.h>
+#include <vendor/waydroid/task/1.1/IWaydroidTask.h>
 #include <wayland-util.h>
 #include <wayland-client.h>
 
@@ -376,6 +376,10 @@ struct display {
     std::mutex refreshMutex;
     std::vector<int32_t> refreshRates;
     std::atomic<int32_t> refresh; // the active config's rate
+    // Each monitor's current rate and the monitors each window is on, for setRefreshRate()
+    std::map<struct wl_output *, int32_t> outputRefresh;
+    std::map<struct wl_surface *, std::set<struct wl_output *>> surfaceOutputs;
+    int32_t followedRefresh;
 
     std::unordered_set<uint32_t> formats;
 
@@ -392,6 +396,7 @@ struct display {
 
     bool isMaximized;
     sp<IWaydroidTask> task;
+    sp<::vendor::waydroid::task::V1_1::IWaydroidTask> task1_1;
 
     const hwc_procs_t *procs;
     bool needHotplug;

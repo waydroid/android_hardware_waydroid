@@ -15,6 +15,10 @@ IMPLEMENT_META_INTERFACE(Platform, "lineageos.waydroid.IPlatform")
   return ::android::binder::Status::fromStatusT(::android::UNKNOWN_TRANSACTION);
 }
 
+::android::binder::Status IPlatformDefault::settingsPutString(int32_t, const ::android::String16&, const ::android::String16&) {
+  return ::android::binder::Status::fromStatusT(::android::UNKNOWN_TRANSACTION);
+}
+
 }  // namespace waydroid
 
 }  // namespace lineageos
@@ -57,6 +61,43 @@ BpPlatform::BpPlatform(const ::android::sp<::android::IBinder>& _aidl_impl)
   _aidl_ret_status = _aidl_reply.readString16(_aidl_return);
   if (((_aidl_ret_status) != (::android::OK))) {
     goto _aidl_error;
+  }
+  _aidl_error:
+  _aidl_status.setFromStatusT(_aidl_ret_status);
+  return _aidl_status;
+}
+
+::android::binder::Status BpPlatform::settingsPutString(int32_t mode, const ::android::String16& key, const ::android::String16& value) {
+  ::android::Parcel _aidl_data;
+  ::android::Parcel _aidl_reply;
+  ::android::status_t _aidl_ret_status = ::android::OK;
+  ::android::binder::Status _aidl_status;
+  _aidl_ret_status = _aidl_data.writeInterfaceToken(getInterfaceDescriptor());
+  if (((_aidl_ret_status) != (::android::OK))) {
+    goto _aidl_error;
+  }
+  _aidl_ret_status = _aidl_data.writeInt32(mode);
+  if (((_aidl_ret_status) != (::android::OK))) {
+    goto _aidl_error;
+  }
+  _aidl_ret_status = _aidl_data.writeString16(key);
+  if (((_aidl_ret_status) != (::android::OK))) {
+    goto _aidl_error;
+  }
+  _aidl_ret_status = _aidl_data.writeString16(value);
+  if (((_aidl_ret_status) != (::android::OK))) {
+    goto _aidl_error;
+  }
+  _aidl_ret_status = remote()->transact(::android::IBinder::FIRST_CALL_TRANSACTION + 8 /* settingsPutString */, _aidl_data, &_aidl_reply);
+  if (((_aidl_ret_status) != (::android::OK))) {
+    goto _aidl_error;
+  }
+  _aidl_ret_status = _aidl_status.readFromParcel(_aidl_reply);
+  if (((_aidl_ret_status) != (::android::OK))) {
+    goto _aidl_error;
+  }
+  if (!_aidl_status.isOk()) {
+    return _aidl_status;
   }
   _aidl_error:
   _aidl_status.setFromStatusT(_aidl_ret_status);
