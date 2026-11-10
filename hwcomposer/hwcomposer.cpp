@@ -125,8 +125,15 @@ namespace {
             buf = emplace_result.first->second.get();
         }
 
-        if (buf->isShm)
+        if (buf->isShm) {
+            // The copy reads the layer, so it waits for the GPU to finish drawing it.
+            // The wait before the commit comes too late for this. Skipping a late layer
+            // would leave its subsurface slot to the next layer and lose the frame, so
+            // only a fence that never signals ends the wait.
+            if (layer->acquireFenceFd != -1 && sync_wait(layer->acquireFenceFd, 1000) < 0)
+                ALOGE("layer not ready after 1000 ms; copying it anyway");
             gralloc_handler.update_shm_buffer(pdev->display, buf);
+        }
         return buf;
     }
 
