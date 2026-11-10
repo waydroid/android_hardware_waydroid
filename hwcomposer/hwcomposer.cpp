@@ -27,6 +27,7 @@
 #include <wayland-client.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <algorithm>
 #include <string>
 #include <sstream>
 #include <functional>
@@ -196,6 +197,21 @@ static int hwc_prepare(hwc_composer_device_1_t* dev,
     assert(contents);
 
     pdev->selected_mode = select_mode(pdev, contents);
+
+    // Every task the full UI showed since its window opened, also one left behind Home
+    if (property_get_string("waydroid.active_apps", "none") == "Waydroid") {
+        std::scoped_lock lock(pdev->display->primary_tasks_mutex);
+        auto &tasks = pdev->display->primary_tasks;
+        for (size_t i = 0; i < contents->numHwLayers; i++) {
+            if (contents->hwLayers[i].compositionType == HWC_FRAMEBUFFER_TARGET)
+                continue;
+            const std::string &name = pdev->display->layer_names[i];
+            int task = name.compare(0, 4, "TID:") == 0 ? parse_task_id(name.substr(4, name.find('#') - 4)) : 0;
+            if (task > 0 && std::find(tasks.begin(), tasks.end(), task) == tasks.end())
+                tasks.push_back(task);
+        }
+    }
+
     if (pdev->selected_mode->setup_prepare(pdev, contents) != 0) {
         return -1;
     }
@@ -769,6 +785,7 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     if (pdev->multi_windows && !pdev->display->subcompositor) {
         ALOGW("multi window mode requested but wl_subcompositor is not supported. Disabling it.");
         pdev->multi_windows = false;
+        pdev->display->multi_windows = false;
     }
     pdev->should_compose = property_get_bool("persist.waydroid.use_subsurface", false) || pdev->multi_windows;
     if (pdev->should_compose && !pdev->display->subcompositor) {
@@ -782,12 +799,16 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
         pdev->display->cursor_handler.reset(new subsurface_cursor_handler());
     }
 
-    auto first_window = window::create(pdev->display, pdev->should_compose, "Waydroid", "0", {0, 0, 0, 255});
-    if (!property_get_bool("waydroid.background_start", true)) {
-        pdev->display->windows.add("Waydroid", std::move(first_window));
-        property_set("waydroid.active_apps", "Waydroid");
-    } else {
-        first_window.reset();
+    {
+        // The Wayland thread is already running
+        std::scoped_lock lock(pdev->display->windowsMutex);
+        auto first_window = window::create(pdev->display, pdev->should_compose, "Waydroid", "0", {0, 0, 0, 255});
+        if (!property_get_bool("waydroid.background_start", true)) {
+            pdev->display->windows.add("Waydroid", std::move(first_window));
+            property_set("waydroid.active_apps", "Waydroid");
+        } else {
+            first_window.reset();
+        }
     }
 
     pdev->vsync_callback_enabled = true;
@@ -913,6 +934,8 @@ std::unique_ptr<buffer> wl_cursor_cursor_handler::create_buffer(waydroid_hwc_com
 
 void wl_cursor_cursor_handler::set_cursor(display* display) const {
     assert(display->pointer);
+    if (display->pointer_on_decor)
+        return;
     wl_pointer_set_cursor (display->pointer, display->pointer_enter_serial,
                           cursor_surface_context.surface,
                           round(display->cursor_hotspot.x / display->scale),
@@ -934,7 +957,7 @@ int wl_cursor_cursor_handler::apply_cursor(waydroid_hwc_composer_device_1* pdev,
 }
 
 int wl_cursor_cursor_handler::reset_cursor(waydroid_hwc_composer_device_1* pdev) {
-    if (pdev->display->pointer) {
+    if (pdev->display->pointer && !pdev->display->pointer_on_decor) {
         wl_pointer_set_cursor(pdev->display->pointer, pdev->display->pointer_enter_serial,
                               nullptr,
                               0,

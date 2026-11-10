@@ -43,8 +43,10 @@ cc_library_shared {
         "libffi",
         "libwayland_extension_client_protocols",
         "libxkbcommon",
+        "libft2.nodep",
     ],
     srcs: [
+        "decor.cpp",
         "extension.cpp",
         "gralloc_handler.cpp",
         "hwcomposer.cpp",
@@ -72,8 +74,30 @@ cc_library_shared {
         "-Wall",
         "-Werror",
     ],
-    generated_sources: ["wayland_android_client_protocol_sources"],
-    generated_headers: ["wayland_android_client_protocol_headers"],
+    generated_sources: [
+        "wayland_android_client_protocol_sources",
+        "cursor_shape_v1_client_protocol_sources",
+    ],
+    generated_headers: [
+        "wayland_android_client_protocol_headers",
+        "cursor_shape_v1_client_protocol_headers",
+    ],
+}
+
+// cursor-shape-v1 from wayland-protocols 1.50 (staging), newer than external/wayland-protocols
+genrule {
+    name: "cursor_shape_v1_client_protocol_sources",
+    srcs: ["cursor-shape-v1.xml"],
+    tools: ["wayland_scanner"],
+    cmd: "$(location wayland_scanner) private-code < $(in) > $(out)",
+    out: ["cursor-shape-v1-protocol.c"],
+}
+genrule {
+    name: "cursor_shape_v1_client_protocol_headers",
+    srcs: ["cursor-shape-v1.xml"],
+    tools: ["wayland_scanner"],
+    cmd: "$(location wayland_scanner) client-header < $(in) > $(out)",
+    out: ["cursor-shape-v1-client-protocol.h"],
 }
 
 // Generate wayland-android protocol source file

@@ -33,8 +33,12 @@ class single_window_mode_base : public virtual waydroid_mode {
 
     std::string target_layer_tid;
     std::string target_layer_aid;
+    // Whether this frame of the app in front is shown, see target_has_focus()
+    bool target_shown = true;
 
     bool should_show() const;
+    bool target_has_focus(waydroid_hwc_composer_device_1 *pdev);
+    void close_left_task_window(waydroid_hwc_composer_device_1 *pdev);
     window *get_window(waydroid_hwc_composer_device_1 *pdev) const;
 
     int setup_set(waydroid_hwc_composer_device_1 *pdev, hwc_display_contents_1_t *contents) override;
