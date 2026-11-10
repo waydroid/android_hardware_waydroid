@@ -57,7 +57,10 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 
+#include <atomic>
+#include <chrono>
 #include <functional>
+#include <mutex>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -165,7 +168,7 @@ struct surface_context {
     // Requires the transformed rectangle
     void set_crop(hwc_frect_t crop);
     // TODO: This should not require scale. Scaling handling is broken
-    void set_display_frame(hwc_rect_t rect, double scale);
+    void set_display_frame(hwc_rect_t rect, double scale_x, double scale_y);
 };
 
 struct window {
@@ -388,7 +391,27 @@ struct display {
 
     const hwc_procs_t *procs;
     bool needHotplug;
+
+    // persist.waydroid.resize_interval_ms: minimum time between resize hotplugs, 150 by default; 0 disables
+    int resize_interval_ms;
+    int hotplug_timer_fd;
+    std::mutex hotplug_mutex;
+    bool hotplug_pending;
+    std::chrono::steady_clock::time_point last_hotplug;
+    // The size Android was last given
+    int hotplug_width;
+    int hotplug_height;
+
+    // Android pixels per surface unit while the last frame is stretched over a resized window
+    std::mutex content_scale_mutex;
+    double content_scale_x;
+    double content_scale_y;
+    int window_pixel_width;
+    int window_pixel_height;
 };
+
+void
+effective_scale(struct display *display, double *scale_x, double *scale_y);
 
 void
 handle_relative_motion(void *data, struct zwp_relative_pointer_v1*,
