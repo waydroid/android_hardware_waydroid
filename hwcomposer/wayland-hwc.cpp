@@ -74,6 +74,7 @@
 #include "viewporter-client-protocol.h"
 #include "presentation-time-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
+#include "xdg-decoration-unstable-v1-client-protocol.h"
 #include "tablet-unstable-v2-client-protocol.h"
 #include "pointer-constraints-unstable-v1-client-protocol.h"
 #include "relative-pointer-unstable-v1-client-protocol.h"
@@ -516,6 +517,8 @@ window::~window() {
         struct window *self = this;
         display->size_window.compare_exchange_strong(self, nullptr);
     }
+    if (decoration)
+        zxdg_toplevel_decoration_v1_destroy(decoration);
     if (xdg_toplevel)
         xdg_toplevel_destroy(xdg_toplevel);
     if (xdg_surface)
@@ -604,6 +607,14 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
         window->xdg_toplevel = xdg_surface_get_toplevel(window->xdg_surface);
         assert(window->xdg_toplevel);
         xdg_toplevel_add_listener(window->xdg_toplevel, &xdg_toplevel_listener, window_listener_data(window.get()));
+
+        // Each window shows a whole display, so the desktop can frame it. In multi-window mode,
+        // Android draws the frames itself.
+        if (display->decoration_manager && !display->multi_windows) {
+            window->decoration = zxdg_decoration_manager_v1_get_toplevel_decoration(
+                    display->decoration_manager, window->xdg_toplevel);
+            zxdg_toplevel_decoration_v1_set_mode(window->decoration, ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+        }
     } else if (display->shell) {
         window->shell_surface =
             wl_shell_get_shell_surface(display->shell, window->surface);
@@ -2000,6 +2011,9 @@ registry_handle_global(void *data, struct wl_registry *registry,
         d->wm_base = (struct xdg_wm_base*)wl_registry_bind(registry,
                 id, &xdg_wm_base_interface, 1);
         xdg_wm_base_add_listener(d->wm_base, &xdg_wm_base_listener, d);
+    } else if (strcmp(interface, "zxdg_decoration_manager_v1") == 0) {
+        d->decoration_manager = (struct zxdg_decoration_manager_v1 *)wl_registry_bind(
+                registry, id, &zxdg_decoration_manager_v1_interface, 1);
     } else if(strcmp(interface, "wl_shell") == 0) {
         d->shell = (struct wl_shell *)wl_registry_bind(
                 registry, id, &wl_shell_interface, 1);

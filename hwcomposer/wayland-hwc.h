@@ -192,6 +192,7 @@ struct window {
     struct wl_shell_surface *shell_surface;
     struct xdg_surface *xdg_surface;
     struct xdg_toplevel *xdg_toplevel;
+    struct zxdg_toplevel_decoration_v1 *decoration;
 
     /* Used for the background color */
     bool dedicated_background_surface;
@@ -322,6 +323,7 @@ struct display {
     struct android_wlegl *android_wlegl;
     struct zwp_linux_dmabuf_v1 *dmabuf;
     struct xdg_wm_base *wm_base;
+    struct zxdg_decoration_manager_v1 *decoration_manager;
     struct zwp_tablet_manager_v2* tablet_manager;
     struct zwp_tablet_seat_v2 *tablet_seat;
     struct zwp_pointer_constraints_v1 *pointer_constraints;
