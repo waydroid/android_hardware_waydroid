@@ -170,6 +170,8 @@ struct surface_context {
     void set_display_frame(hwc_rect_t rect, double scale);
 };
 
+struct decor;
+
 struct window {
     struct layer : public surface_context {
         struct wl_subsurface *subsurface;
@@ -193,6 +195,9 @@ struct window {
     struct xdg_surface *xdg_surface;
     struct xdg_toplevel *xdg_toplevel;
     struct zxdg_toplevel_decoration_v1 *decoration;
+    // The title bar the window draws itself, where the compositor draws none
+    struct decor *decor;
+    std::string title;
 
     /* Used for the background color */
     bool dedicated_background_surface;
@@ -233,6 +238,34 @@ struct window {
   private:
     window() = default;
 };
+
+// decor.cpp: a title bar with Back and window controls, and resize edges, for windows outside
+// multi-window mode where the compositor draws no title bar. The caller holds liveWindowsMutex,
+// except for the input functions, which take it and return whether the event was a title bar's.
+void decor_create(struct window *window, bool client_side);
+void decor_destroy(struct window *window);
+void decor_set_client_side(struct window *window, bool client_side);
+void decor_states(struct window *window, struct wl_array *states);
+int decor_title_height(const struct window *window);
+// Sets the window geometry for content of width x height, with the title bar above it
+void decor_set_size(struct window *window, int width, int height);
+bool decor_pointer_enter(struct wl_surface *surface, uint32_t serial, double x, double y);
+bool decor_pointer_motion(double x, double y);
+bool decor_pointer_leave();
+bool decor_pointer_button(uint32_t serial, uint32_t button, bool pressed);
+bool decor_touch_down(struct wl_surface *surface, uint32_t serial, int32_t id, double x, double y);
+bool decor_touch_up(int32_t id);
+// For wl_touch.cancel and a removed touch device
+void decor_touch_cancel();
+bool decor_owns_surface(struct wl_surface *surface);
+
+// For decor.cpp
+std::unique_lock<std::mutex> lock_live_windows();
+// Requires liveWindowsMutex
+struct window *find_live_window(uintptr_t id);
+// Without liveWindowsMutex: closes the window as the compositor's close request does
+void close_window(uintptr_t id);
+void send_back(struct display *display);
 
 class open_windows {
     using Collection = std::map<std::string, std::unique_ptr<window>>;
@@ -324,6 +357,11 @@ struct display {
     struct zwp_linux_dmabuf_v1 *dmabuf;
     struct xdg_wm_base *wm_base;
     struct zxdg_decoration_manager_v1 *decoration_manager;
+    // Theme cursors over the title bars and resize borders a window draws itself
+    struct wp_cursor_shape_manager_v1 *cursor_shape_manager;
+    struct wp_cursor_shape_device_v1 *cursor_shape_device;
+    // The pointer is on such a title bar or border, which sets its own cursor
+    std::atomic<bool> pointer_on_decor;
     struct zwp_tablet_manager_v2* tablet_manager;
     struct zwp_tablet_seat_v2 *tablet_seat;
     struct zwp_pointer_constraints_v1 *pointer_constraints;

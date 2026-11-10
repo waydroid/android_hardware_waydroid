@@ -75,6 +75,7 @@
 #include "presentation-time-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
 #include "xdg-decoration-unstable-v1-client-protocol.h"
+#include "cursor-shape-v1-client-protocol.h"
 #include "tablet-unstable-v2-client-protocol.h"
 #include "pointer-constraints-unstable-v1-client-protocol.h"
 #include "relative-pointer-unstable-v1-client-protocol.h"
@@ -137,6 +138,14 @@ static void *window_listener_data(const struct window *window) {
 static struct window *live_window(void *data) {
     auto it = liveWindows.find(reinterpret_cast<uintptr_t>(data));
     return it != liveWindows.end() ? it->second : nullptr;
+}
+
+std::unique_lock<std::mutex> lock_live_windows() {
+    return std::unique_lock(liveWindowsMutex);
+}
+
+struct window *find_live_window(uintptr_t id) {
+    return live_window(reinterpret_cast<void *>(id));
 }
 
 static void
@@ -231,6 +240,8 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
         return;
     struct display *display = window->display;
 
+    decor_states(window, states);
+
     // A 0x0 configure still carries the activated state
     if (!display->multi_windows) {
         const auto *state = static_cast<const uint32_t *>(states->data);
@@ -248,6 +259,8 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
 		return;
 	}
 
+    // The configured size includes a title bar the window draws itself
+    height = std::max(1, height - decor_title_height(window));
     display->req_width = width;
     display->req_height = height;
 
@@ -256,7 +269,7 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
         int old_height = display->height;
         choose_width_height(display, width, height);
         if (display->wm_base)
-            xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width, display->height);
+            decor_set_size(window, display->width, display->height);
         lock.unlock();
         if (display->width != old_width || display->height != old_height)
             do_hotplug(display);
@@ -334,6 +347,37 @@ xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
 static const struct xdg_toplevel_listener xdg_toplevel_listener = {
     xdg_toplevel_handle_configure,
     xdg_toplevel_handle_close,
+};
+
+void close_window(uintptr_t id) {
+    xdg_toplevel_handle_close(reinterpret_cast<void *>(id), nullptr);
+}
+
+void send_back(struct display *display) {
+    send_key_event(display, KEY_BACK, WL_KEYBOARD_KEY_STATE_PRESSED);
+    send_key_event(display, KEY_BACK, WL_KEYBOARD_KEY_STATE_RELEASED);
+}
+
+// persist.waydroid.app_titlebar: `always` gives every window its own title bar, with Back, even
+// where the compositor would draw one; `auto`, the default, only where it draws none.
+static bool own_titlebar_always() {
+    char value[PROPERTY_VALUE_MAX];
+    property_get("persist.waydroid.app_titlebar", value, "auto");
+    return !strcmp(value, "always");
+}
+
+static void
+decoration_handle_configure(void *data, struct zxdg_toplevel_decoration_v1 *, uint32_t mode)
+{
+    // Hyprland answers server-side to every request and draws no title bar, so `always` keeps the
+    // window's own whatever the answer
+    std::scoped_lock lock(liveWindowsMutex);
+    if (struct window *window = live_window(data))
+        decor_set_client_side(window, mode == ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE || own_titlebar_always());
+}
+
+static const struct zxdg_toplevel_decoration_v1_listener decoration_listener = {
+    decoration_handle_configure,
 };
 
 void
@@ -480,6 +524,10 @@ void window::set_maximize(bool enabled) {
 }
 
 void window::set_title(const char* title) {
+    {
+        std::scoped_lock lock(liveWindowsMutex);
+        this->title = title;
+    }
     if (xdg_toplevel) {
         xdg_toplevel_set_title(xdg_toplevel, title);
     } else {
@@ -514,6 +562,7 @@ window::~window() {
     if (display) {
         std::scoped_lock lock(liveWindowsMutex);
         liveWindows.erase(id);
+        decor_destroy(this);
         struct window *self = this;
         display->size_window.compare_exchange_strong(self, nullptr);
     }
@@ -610,10 +659,18 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
 
         // Each window shows a whole display, so the desktop can frame it. In multi-window mode,
         // Android draws the frames itself.
-        if (display->decoration_manager && !display->multi_windows) {
-            window->decoration = zxdg_decoration_manager_v1_get_toplevel_decoration(
-                    display->decoration_manager, window->xdg_toplevel);
-            zxdg_toplevel_decoration_v1_set_mode(window->decoration, ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+        if (!display->multi_windows) {
+            bool own = own_titlebar_always() || !display->decoration_manager;
+            if (display->decoration_manager) {
+                window->decoration = zxdg_decoration_manager_v1_get_toplevel_decoration(
+                        display->decoration_manager, window->xdg_toplevel);
+                zxdg_toplevel_decoration_v1_add_listener(window->decoration, &decoration_listener,
+                                                         window_listener_data(window.get()));
+                zxdg_toplevel_decoration_v1_set_mode(window->decoration, own
+                        ? ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE : ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+            }
+            std::scoped_lock lock(liveWindowsMutex);
+            decor_create(window.get(), own);
         }
     } else if (display->shell) {
         window->shell_surface =
@@ -673,8 +730,10 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
         // If after all of this we still did not receive a proper configure event,
         // fallback to using the full output size.
         // NOTICE: full_width and full_heigth should be in compositor logical size!
-        if (!display->req_height)
-            display->req_height = display->full_height / display->scale;
+        if (!display->req_height) {
+            std::scoped_lock lock(liveWindowsMutex);
+            display->req_height = std::max(1, int(display->full_height / display->scale) - decor_title_height(window.get()));
+        }
         if (!display->req_width)
             display->req_width = display->full_width / display->scale;
 
@@ -683,8 +742,10 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
             window->set_maximize(false);
     }
 
-    if (display->wm_base)
-        xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, display->width, display->height);
+    if (display->wm_base) {
+        std::scoped_lock lock(liveWindowsMutex);
+        decor_set_size(window.get(), display->width, display->height);
+    }
 
     struct wl_region *region = wl_compositor_create_region(display->compositor);
     if (color.a == 0) {
@@ -978,7 +1039,7 @@ static const struct wl_keyboard_listener keyboard_listener = {
 static void
 pointer_handle_enter(void *data, struct wl_pointer *,
                      uint32_t serial, struct wl_surface *surface,
-                     wl_fixed_t, wl_fixed_t)
+                     wl_fixed_t sx, wl_fixed_t sy)
 {
     if (!surface) {
         // The surface this enter event corresponds to was already destroyed
@@ -986,6 +1047,16 @@ pointer_handle_enter(void *data, struct wl_pointer *,
     }
 
     struct display *display = (struct display *)data;
+    if (decor_pointer_enter(surface, serial, wl_fixed_to_double(sx), wl_fixed_to_double(sy))) {
+        display->pointer_surface = NULL;
+        display->pointer_enter_serial = serial;
+        // decor_pointer_enter() set a theme cursor; without cursor-shape-v1, Android's stays
+        display->pointer_on_decor = display->cursor_shape_device != NULL;
+        if (!display->pointer_on_decor)
+            display->cursor_handler->on_cursor_enter(display);
+        return;
+    }
+    display->pointer_on_decor = false;
     display->pointer_surface = surface;
     display->pointer_enter_serial = serial;
     display->cursor_handler->on_cursor_enter(display);
@@ -996,6 +1067,8 @@ pointer_handle_leave(void *data, struct wl_pointer *,
                      uint32_t, struct wl_surface *)
 {
     struct display *display = (struct display *)data;
+    decor_pointer_leave();
+    display->pointer_on_decor = false;
     display->pointer_surface = NULL;
 }
 
@@ -1008,6 +1081,9 @@ pointer_handle_motion(void *data, struct wl_pointer *,
     struct timespec rt;
     int x, y;
     unsigned int res, n = 0;
+
+    if (decor_pointer_motion(wl_fixed_to_double(sx), wl_fixed_to_double(sy)))
+        return;
 
     if (ensure_pipe(display, INPUT_POINTER))
         return;
@@ -1081,13 +1157,16 @@ handle_relative_motion(void *data, struct zwp_relative_pointer_v1*,
 
 static void
 pointer_handle_button(void *data, struct wl_pointer *,
-                      uint32_t, uint32_t, uint32_t button,
+                      uint32_t serial, uint32_t, uint32_t button,
                       uint32_t state)
 {
     struct display* display = (struct display*)data;
     struct input_event event[2];
     struct timespec rt;
     unsigned int res, n = 0;
+
+    if (decor_pointer_button(serial, button, state == WL_POINTER_BUTTON_STATE_PRESSED))
+        return;
 
     if (ensure_pipe(display, INPUT_POINTER))
         return;
@@ -1236,13 +1315,15 @@ flush_touch_id(struct display *display, int id)
 
 static void
 touch_handle_down(void *data, struct wl_touch *,
-          uint32_t, uint32_t, struct wl_surface *surface,
+          uint32_t serial, uint32_t, struct wl_surface *surface,
           int32_t id, wl_fixed_t x_w, wl_fixed_t y_w)
 {
     if (!surface) {
         // The surface this down event corresponds to was already destroyed
         return;
     }
+    if (decor_touch_down(surface, serial, id, wl_fixed_to_double(x_w), wl_fixed_to_double(y_w)))
+        return;
 
     struct display* display = (struct display*)data;
     struct input_event event[6];
@@ -1289,6 +1370,9 @@ touch_handle_up(void *data, struct wl_touch *,
     struct input_event event[3];
     struct timespec rt;
     unsigned int res, n = 0;
+
+    if (decor_touch_up(id))
+        return;
 
     int touch_id = flush_touch_id(display, id);
     // Might not exist if we discarded the down event due to a NULL surface
@@ -1367,6 +1451,8 @@ touch_handle_cancel(void *data, struct wl_touch *)
     struct timespec rt;
     unsigned int res, n;
     int i, id;
+
+    decor_touch_cancel();
 
     if (ensure_pipe(display, INPUT_TOUCH))
         return;
@@ -1470,8 +1556,16 @@ seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t wl_caps)
         mkfifo(INPUT_PIPE_NAME[INPUT_POINTER], S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
         chown(INPUT_PIPE_NAME[INPUT_POINTER], 1000, 1000);
         wl_pointer_add_listener(d->pointer, &pointer_listener, d);
+        if (d->cursor_shape_manager)
+            d->cursor_shape_device = wp_cursor_shape_manager_v1_get_pointer(d->cursor_shape_manager, d->pointer);
     } else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && d->pointer) {
+        // No leave comes for a title bar under the pointer
+        decor_pointer_leave();
+        d->pointer_on_decor = false;
         remove(INPUT_PIPE_NAME[INPUT_POINTER]);
+        if (d->cursor_shape_device)
+            wp_cursor_shape_device_v1_destroy(d->cursor_shape_device);
+        d->cursor_shape_device = NULL;
         wl_pointer_destroy(d->pointer);
         d->pointer = NULL;
     }
@@ -1498,6 +1592,7 @@ seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t wl_caps)
         wl_touch_set_user_data(d->touch, d);
         wl_touch_add_listener(d->touch, &touch_listener, d);
     } else if (!(caps & WL_SEAT_CAPABILITY_TOUCH) && d->touch) {
+        decor_touch_cancel();
         remove(INPUT_PIPE_NAME[INPUT_TOUCH]);
         wl_touch_destroy(d->touch);
         d->touch = NULL;
@@ -1690,6 +1785,12 @@ tablet_tool_proximity_in(void *data, struct zwp_tablet_tool_v2 *tool,
     struct timespec rt;
     unsigned int res, n = 0;
 
+    // A pen over a title bar or resize border stays out of Android
+    if (decor_owns_surface(surface)) {
+        display->tablet_surface = NULL;
+        return;
+    }
+
     if (ensure_pipe(display, INPUT_TABLET))
         return;
 
@@ -1742,7 +1843,7 @@ tablet_tool_down(void *data, struct zwp_tablet_tool_v2 *, uint32_t)
     struct timespec rt;
     unsigned int res, n = 0;
 
-    if (ensure_pipe(display, INPUT_TABLET))
+    if (!display->tablet_surface || ensure_pipe(display, INPUT_TABLET))
         return;
 
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
@@ -1922,7 +2023,7 @@ tablet_tool_button_state(void *data, struct zwp_tablet_tool_v2 *,
     struct timespec rt;
     unsigned int res, n = 0;
 
-    if (ensure_pipe(display, INPUT_TABLET))
+    if (!display->tablet_surface || ensure_pipe(display, INPUT_TABLET))
         return;
 
     if (clock_gettime(CLOCK_MONOTONIC, &rt) == -1) {
@@ -2008,12 +2109,16 @@ registry_handle_global(void *data, struct wl_registry *registry,
         (struct wl_subcompositor*)wl_registry_bind(registry,
                 id, &wl_subcompositor_interface, 1);
     } else if (strcmp(interface, "xdg_wm_base") == 0) {
+        // Version 2 adds the tiled states the title bar follows; version 4 adds events
         d->wm_base = (struct xdg_wm_base*)wl_registry_bind(registry,
-                id, &xdg_wm_base_interface, 1);
+                id, &xdg_wm_base_interface, std::min(version, 3U));
         xdg_wm_base_add_listener(d->wm_base, &xdg_wm_base_listener, d);
     } else if (strcmp(interface, "zxdg_decoration_manager_v1") == 0) {
         d->decoration_manager = (struct zxdg_decoration_manager_v1 *)wl_registry_bind(
                 registry, id, &zxdg_decoration_manager_v1_interface, 1);
+    } else if (strcmp(interface, wp_cursor_shape_manager_v1_interface.name) == 0) {
+        d->cursor_shape_manager = (struct wp_cursor_shape_manager_v1 *)wl_registry_bind(
+                registry, id, &wp_cursor_shape_manager_v1_interface, 1);
     } else if(strcmp(interface, "wl_shell") == 0) {
         d->shell = (struct wl_shell *)wl_registry_bind(
                 registry, id, &wl_shell_interface, 1);

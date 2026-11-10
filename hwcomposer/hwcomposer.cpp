@@ -934,6 +934,8 @@ std::unique_ptr<buffer> wl_cursor_cursor_handler::create_buffer(waydroid_hwc_com
 
 void wl_cursor_cursor_handler::set_cursor(display* display) const {
     assert(display->pointer);
+    if (display->pointer_on_decor)
+        return;
     wl_pointer_set_cursor (display->pointer, display->pointer_enter_serial,
                           cursor_surface_context.surface,
                           round(display->cursor_hotspot.x / display->scale),
@@ -955,7 +957,7 @@ int wl_cursor_cursor_handler::apply_cursor(waydroid_hwc_composer_device_1* pdev,
 }
 
 int wl_cursor_cursor_handler::reset_cursor(waydroid_hwc_composer_device_1* pdev) {
-    if (pdev->display->pointer) {
+    if (pdev->display->pointer && !pdev->display->pointer_on_decor) {
         wl_pointer_set_cursor(pdev->display->pointer, pdev->display->pointer_enter_serial,
                               nullptr,
                               0,
