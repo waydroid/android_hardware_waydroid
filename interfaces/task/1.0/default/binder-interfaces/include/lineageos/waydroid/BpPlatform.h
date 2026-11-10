@@ -15,6 +15,7 @@ public:
   explicit BpPlatform(const ::android::sp<::android::IBinder>& _aidl_impl);
   virtual ~BpPlatform() = default;
   ::android::binder::Status getAppName(const ::android::String16& packageName, ::android::String16* _aidl_return) override;
+  ::android::binder::Status settingsPutString(int32_t mode, const ::android::String16& key, const ::android::String16& value) override;
 };  // class BpPlatform
 
 }  // namespace waydroid

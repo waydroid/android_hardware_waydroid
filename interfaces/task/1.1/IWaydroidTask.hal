@@ -1,0 +1,26 @@
+/*
+ * Copyright (C) 2026 The Waydroid Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package vendor.waydroid.task@1.1;
+
+import vendor.waydroid.task@1.0;
+
+interface IWaydroidTask extends @1.0::IWaydroidTask {
+    /**
+     * Runs Android at a monitor's refresh rate, in mHz, by setting its min and peak refresh
+     * rate settings. The composer calls it with the fastest monitor that shows a window.
+     */
+    oneway setRefreshRate(uint32_t millihertz);
+};

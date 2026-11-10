@@ -42,14 +42,17 @@
 #include <fcntl.h>
 #include <getopt.h>
 #include <errno.h>
+#include <atomic>
 #include <map>
 #include <list>
+#include <mutex>
 #include <set>
+#include <vector>
 #include <pthread.h>
 #include <semaphore.h>
 #include <hardware/hwcomposer.h>
 #include <cutils/properties.h>
-#include <vendor/waydroid/task/1.0/IWaydroidTask.h>
+#include <vendor/waydroid/task/1.1/IWaydroidTask.h>
 #include <wayland-util.h>
 #include <wayland-client.h>
 
@@ -368,7 +371,15 @@ struct display {
     int full_height;
     int req_width;
     int req_height;
-    int refresh;
+    // The monitors' refresh rates in mHz, one display config each, the index being the config.
+    // The list only grows, so a switch between known rates is a mode change, not a hotplug.
+    std::mutex refreshMutex;
+    std::vector<int32_t> refreshRates;
+    std::atomic<int32_t> refresh; // the active config's rate
+    // Each monitor's current rate and the monitors each window is on, for setRefreshRate()
+    std::map<struct wl_output *, int32_t> outputRefresh;
+    std::map<struct wl_surface *, std::set<struct wl_output *>> surfaceOutputs;
+    int32_t followedRefresh;
 
     std::unordered_set<uint32_t> formats;
 
@@ -385,6 +396,7 @@ struct display {
 
     bool isMaximized;
     sp<IWaydroidTask> task;
+    sp<::vendor::waydroid::task::V1_1::IWaydroidTask> task1_1;
 
     const hwc_procs_t *procs;
     bool needHotplug;

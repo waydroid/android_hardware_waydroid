@@ -16,9 +16,12 @@
 
 #pragma once
 
+#include <condition_variable>
+#include <mutex>
+
 #include <binder/IBinder.h>
 #include <binder/IServiceManager.h>
-#include <vendor/waydroid/task/1.0/IWaydroidTask.h>
+#include <vendor/waydroid/task/1.1/IWaydroidTask.h>
 #include <hidl/MQDescriptor.h>
 #include <hidl/Status.h>
 
@@ -43,15 +46,24 @@ using ::android::IBinder;
 using ::android::app::IActivityTaskManager;
 using ::lineageos::waydroid::IPlatform;
 
-struct WaydroidTask : public IWaydroidTask {
+struct WaydroidTask : public ::vendor::waydroid::task::V1_1::IWaydroidTask {
     // Methods from ::vendor::waydroid::task::V1_0::IWaydroidTask follow.
     Return<void> setFocusedTask(uint32_t taskID) override;
     Return<void> removeTask(uint32_t taskID) override;
     Return<void> removeAllVisibleRecentTasks() override;
     Return<void> getAppName(const hidl_string& packageName, getAppName_cb _hidl_cb) override;
+    // Methods from ::vendor::waydroid::task::V1_1::IWaydroidTask follow.
+    Return<void> setRefreshRate(uint32_t millihertz) override;
   private:
+    void applyRefreshRates();
+
     sp<IActivityTaskManager> mActivityTaskManager;
     sp<IPlatform> mPlatform;
+
+    std::mutex mRefreshMutex;
+    std::condition_variable mRefreshChanged;
+    uint32_t mRefreshRate = 0;
+    bool mRefreshThreadStarted = false;
 };
 
 }  // namespace implementation

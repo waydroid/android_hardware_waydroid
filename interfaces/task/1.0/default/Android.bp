@@ -36,5 +36,6 @@ cc_binary {
         "liblog",
         "libutils",
         "vendor.waydroid.task@1.0",
+        "vendor.waydroid.task@1.1",
     ],
 }
