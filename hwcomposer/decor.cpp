@@ -457,8 +457,9 @@ void place(struct window *w) {
             wl_surface_commit(c->frame);
             c->mapped = false;
         }
-        xdg_surface_set_window_geometry(w->xdg_surface, 0, 0, std::max(1, w->display->width),
-                                        std::max(1, w->display->height));
+        int width = c && c->width ? c->width : w->display->width;
+        int height = c && c->height ? c->height : w->display->height;
+        xdg_surface_set_window_geometry(w->xdg_surface, 0, 0, std::max(1, width), std::max(1, height));
         return;
     }
     xdg_surface_set_window_geometry(w->xdg_surface, 0, -kTitleHeight, c->width, c->height + kTitleHeight);
@@ -704,6 +705,10 @@ void decor_set_size(struct window *w, int width, int height) {
         w->decor->height = height;
         w->decor->scale = w->display->scale > 0 ? w->display->scale : 1;
     }
+    place(w);
+}
+
+void decor_place(struct window *w) {
     place(w);
 }
 

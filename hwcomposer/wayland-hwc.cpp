@@ -148,18 +148,62 @@ struct window *find_live_window(uintptr_t id) {
     return live_window(reinterpret_cast<void *>(id));
 }
 
+void do_hotplug(struct display *display);
+void choose_width_height(struct display* display, int32_t hint_width, int32_t hint_height);
+
+// The toplevel's and the decoration's configures before this one take effect together here
 static void
 xdg_surface_handle_configure(void *data, struct xdg_surface *surface,
                  uint32_t serial)
 {
-    std::scoped_lock lock(liveWindowsMutex);
+    std::unique_lock lock(liveWindowsMutex);
     struct window *window = live_window(data);
     if (!window)
         return;
+    struct display *display = window->display;
 
     xdg_surface_ack_configure(surface, serial);
 
+    if (!display->multi_windows && window->configured_activated)
+        display->size_window = window;
+    // In single-window mode, only the focused window sizes the display, also with a size it got
+    // before it was focused
+    const bool sizes_display = display->multi_windows || !display->size_window || display->size_window == window;
+
+    bool hotplug = false;
+    int width = 0, height = 0;
+    if (window->configured_width > 1 && window->configured_height > 1) {
+        // The configured size includes a title bar the window draws itself
+        width = window->configured_width;
+        height = std::max(1, window->configured_height - decor_title_height(window));
+        if (sizes_display) {
+            display->req_width = width;
+            display->req_height = height;
+            if (display->width && display->height) {
+                int old_width = display->width;
+                int old_height = display->height;
+                choose_width_height(display, width, height);
+                width = display->width;
+                height = display->height;
+                hotplug = width != old_width || height != old_height;
+            }
+        }
+    }
+    // Before calibration ends, window::create() sizes the window
+    if (display->wm_base && display->width && display->height) {
+        if (width && height) {
+            decor_set_size(window, width, height);
+            if (window->dedicated_background_surface && window->viewport)
+                wp_viewport_set_destination(window->viewport, width, height);
+        } else {
+            decor_place(window);
+        }
+    }
+
     window->configured = true;
+    lock.unlock();
+    if (hotplug)
+        do_hotplug(display);
 }
 
 static const struct xdg_surface_listener xdg_surface_listener = {
@@ -234,45 +278,25 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
                               int32_t width, int32_t height,
                               struct wl_array *states)
 {
-    std::unique_lock lock(liveWindowsMutex);
+    std::scoped_lock lock(liveWindowsMutex);
     struct window *window = live_window(data);
     if (!window)
         return;
-    struct display *display = window->display;
 
     decor_states(window, states);
 
     // A 0x0 configure still carries the activated state
-    if (!display->multi_windows) {
-        const auto *state = static_cast<const uint32_t *>(states->data);
-        for (size_t i = 0; i < states->size / sizeof(*state); i++) {
-            if (state[i] == XDG_TOPLEVEL_STATE_ACTIVATED)
-                display->size_window = window;
-        }
-        if (display->size_window && display->size_window != window)
-            return;
+    window->configured_activated = false;
+    const auto *state = static_cast<const uint32_t *>(states->data);
+    for (size_t i = 0; i < states->size / sizeof(*state); i++) {
+        if (state[i] == XDG_TOPLEVEL_STATE_ACTIVATED)
+            window->configured_activated = true;
     }
 
-    if (width <= 1 || height <= 1) {
-		/* Compositor is deferring to us */
-        /* or invalid during calibration */
-		return;
-	}
-
-    // The configured size includes a title bar the window draws itself
-    height = std::max(1, height - decor_title_height(window));
-    display->req_width = width;
-    display->req_height = height;
-
-    if (display->height && display->width) {
-        int old_width = display->width;
-        int old_height = display->height;
-        choose_width_height(display, width, height);
-        if (display->wm_base)
-            decor_set_size(window, display->width, display->height);
-        lock.unlock();
-        if (display->width != old_width || display->height != old_height)
-            do_hotplug(display);
+    // A size of 0 leaves it to the window, and keeps the last one
+    if (width > 1 && height > 1) {
+        window->configured_width = width;
+        window->configured_height = height;
     }
 }
 

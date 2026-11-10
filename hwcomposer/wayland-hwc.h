@@ -216,6 +216,11 @@ struct window {
     std::string taskID;
 
     std::atomic<bool> configured;
+    // From the last xdg_toplevel.configure; they apply at the xdg_surface.configure after it.
+    // The size is the last one the compositor gave, title bar included.
+    int configured_width;
+    int configured_height;
+    bool configured_activated;
 
     // Reset every hwc_set cycle
     struct wl_region* input_region;
@@ -249,6 +254,8 @@ void decor_states(struct window *window, struct wl_array *states);
 int decor_title_height(const struct window *window);
 // Sets the window geometry for content of width x height, with the title bar above it
 void decor_set_size(struct window *window, int width, int height);
+// Applies new states or a new decoration mode at the current size
+void decor_place(struct window *window);
 bool decor_pointer_enter(struct wl_surface *surface, uint32_t serial, double x, double y);
 bool decor_pointer_motion(double x, double y);
 bool decor_pointer_leave();
