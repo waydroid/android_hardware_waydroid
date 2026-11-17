@@ -1480,7 +1480,18 @@ output_handle_scale(void *data, struct wl_output *,
             int32_t scale)
 {
     struct display *d = (struct display*)data;
-    d->scale = std::max((int)d->scale, scale);
+
+    /* wl_output.scale is an integer by definition: on a fractional output the compositor
+     * advertises the integer step (2 for a 1.35 scale) while the exact value arrives
+     * through wp_fractional_scale's preferred_scale. Taking the max here — and truncating
+     * the current, exact value to int on the way — replaced 1.35 with 2.0 on every output
+     * event (a monitor power cycle sends them all again). The presented buffer was then
+     * drawn at 1/2 of the window and the pointer coordinates multiplied by 2, so clicks
+     * landed away from the buttons. Keep the exact value once we have it. */
+    if (d->scale != floor(d->scale))
+        return;
+
+    d->scale = std::max(d->scale, (double)scale);
 }
 
 static const struct wl_output_listener output_listener = {
